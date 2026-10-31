@@ -10,3 +10,7 @@
 	path = corpus/phpstan-src
 	url = https://github.com/phpstan/phpstan-src
 	shallow = true
+[submodule "crates/stir_stubs/phpstorm-stubs"]
+	path = crates/stir_stubs/phpstorm-stubs
+	url = https://github.com/JetBrains/phpstorm-stubs
+	shallow = true

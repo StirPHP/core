@@ -1098,6 +1098,8 @@ name = "stir_db"
 version = "0.1.0"
 dependencies = [
  "salsa",
+ "smol_str",
+ "stir_syntax",
 ]
 
 [[package]]
@@ -1111,6 +1113,14 @@ dependencies = [
 [[package]]
 name = "stir_hir"
 version = "0.1.0"
+dependencies = [
+ "rowan",
+ "rustc-hash 2.1.3",
+ "salsa",
+ "smol_str",
+ "stir_db",
+ "stir_syntax",
+]
 
 [[package]]
 name = "stir_neon"
@@ -1148,6 +1158,9 @@ dependencies = [
 [[package]]
 name = "stir_stubs"
 version = "0.1.0"
+dependencies = [
+ "stir_syntax",
+]
 
 [[package]]
 name = "stir_syntax"
