@@ -1,0 +1,142 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(\"val f: (Int, String) -> Bool = { n, s -> s->length() == n }\\nval g: ((Int) -> Int)? = null\\nfunction <T, R> List<T>.map(transform: (T) -> R): List<R> { return [] }\\n\",\nDialect :: Stir)"
+---
+SOURCE_FILE
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "f"
+    COLON ":"
+    FUNCTION_TYPE
+      FUNCTION_TYPE_PARAMS
+        L_PAREN "("
+        NAMED_TYPE
+          NAME_REF
+            IDENT "Int"
+        COMMA ","
+        NAMED_TYPE
+          NAME_REF
+            IDENT "String"
+        R_PAREN ")"
+      ARROW "->"
+      NAMED_TYPE
+        NAME_REF
+          IDENT "Bool"
+    EQ "="
+    LAMBDA_EXPR
+      L_CURLY "{"
+      LAMBDA_PARAM_LIST
+        PARAM
+          NAME
+            IDENT "n"
+        COMMA ","
+        PARAM
+          NAME
+            IDENT "s"
+      ARROW "->"
+      EXPR_STMT
+        BIN_EXPR
+          METHOD_CALL_EXPR
+            PROPERTY_FETCH_EXPR
+              NAME_EXPR
+                NAME_REF
+                  IDENT "s"
+              ARROW "->"
+              NAME
+                IDENT "length"
+            ARG_LIST
+              L_PAREN "("
+              R_PAREN ")"
+          EQ2 "=="
+          NAME_EXPR
+            NAME_REF
+              IDENT "n"
+      R_CURLY "}"
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "g"
+    COLON ":"
+    NULLABLE_TYPE
+      PAREN_TYPE
+        L_PAREN "("
+        FUNCTION_TYPE
+          FUNCTION_TYPE_PARAMS
+            L_PAREN "("
+            NAMED_TYPE
+              NAME_REF
+                IDENT "Int"
+            R_PAREN ")"
+          ARROW "->"
+          NAMED_TYPE
+            NAME_REF
+              IDENT "Int"
+        R_PAREN ")"
+      QUESTION "?"
+    EQ "="
+    NAME_EXPR
+      NAME_REF
+        IDENT "null"
+  FUNCTION_DECL
+    FUNCTION_KW "function"
+    TYPE_PARAM_LIST
+      L_ANGLE "<"
+      TYPE_PARAM
+        NAME
+          IDENT "T"
+      COMMA ","
+      TYPE_PARAM
+        NAME
+          IDENT "R"
+      R_ANGLE ">"
+    RECEIVER_TYPE
+      NAMED_TYPE
+        NAME_REF
+          IDENT "List"
+        GENERIC_ARG_LIST
+          L_ANGLE "<"
+          NAMED_TYPE
+            NAME_REF
+              IDENT "T"
+          R_ANGLE ">"
+      DOT "."
+    NAME
+      IDENT "map"
+    PARAM_LIST
+      L_PAREN "("
+      PARAM
+        NAME
+          IDENT "transform"
+        COLON ":"
+        FUNCTION_TYPE
+          FUNCTION_TYPE_PARAMS
+            L_PAREN "("
+            NAMED_TYPE
+              NAME_REF
+                IDENT "T"
+            R_PAREN ")"
+          ARROW "->"
+          NAMED_TYPE
+            NAME_REF
+              IDENT "R"
+      R_PAREN ")"
+    RETURN_TYPE
+      COLON ":"
+      NAMED_TYPE
+        NAME_REF
+          IDENT "List"
+        GENERIC_ARG_LIST
+          L_ANGLE "<"
+          NAMED_TYPE
+            NAME_REF
+              IDENT "R"
+          R_ANGLE ">"
+    BLOCK
+      L_CURLY "{"
+      RETURN_STMT
+        RETURN_KW "return"
+        ARRAY_EXPR
+          L_BRACK "["
+          R_BRACK "]"
+      R_CURLY "}"

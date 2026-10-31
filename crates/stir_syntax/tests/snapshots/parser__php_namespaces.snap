@@ -1,0 +1,79 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"namespace App\\\\Models;\\nuse Foo\\\\Bar, Baz as Q;\\nuse function strlen;\\nuse const Foo\\\\X;\\nuse Some\\\\{A, B as C, function d};\\nconst A = 1, B = 2;\\n\"),\nDialect :: Php)"
+---
+SOURCE_FILE
+  OPEN_TAG "<?php\n"
+  NAMESPACE_DECL
+    NAMESPACE_KW "namespace"
+    NAME_REF
+      NAME_QUALIFIED "App\\Models"
+    SEMI ";"
+  USE_DECL
+    USE_KW "use"
+    USE_CLAUSE
+      NAME_REF
+        NAME_QUALIFIED "Foo\\Bar"
+    COMMA ","
+    USE_CLAUSE
+      NAME_REF
+        IDENT "Baz"
+      AS_KW "as"
+      NAME
+        IDENT "Q"
+    SEMI ";"
+  USE_DECL
+    USE_KW "use"
+    FUNCTION_KW "function"
+    USE_CLAUSE
+      NAME_REF
+        IDENT "strlen"
+    SEMI ";"
+  USE_DECL
+    USE_KW "use"
+    CONST_KW "const"
+    USE_CLAUSE
+      NAME_REF
+        NAME_QUALIFIED "Foo\\X"
+    SEMI ";"
+  USE_DECL
+    USE_KW "use"
+    USE_CLAUSE
+      NAME_REF
+        IDENT "Some"
+      BACKSLASH "\\"
+      USE_GROUP
+        L_CURLY "{"
+        USE_CLAUSE
+          NAME_REF
+            IDENT "A"
+        COMMA ","
+        USE_CLAUSE
+          NAME_REF
+            IDENT "B"
+          AS_KW "as"
+          NAME
+            IDENT "C"
+        COMMA ","
+        USE_CLAUSE
+          FUNCTION_KW "function"
+          NAME_REF
+            IDENT "d"
+        R_CURLY "}"
+    SEMI ";"
+  CONST_DECL
+    CONST_KW "const"
+    CONST_ELEM
+      NAME
+        IDENT "A"
+      EQ "="
+      LITERAL
+        INT_NUMBER "1"
+    COMMA ","
+    CONST_ELEM
+      NAME
+        IDENT "B"
+      EQ "="
+      LITERAL
+        INT_NUMBER "2"
+    SEMI ";"

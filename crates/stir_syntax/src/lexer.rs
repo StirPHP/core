@@ -59,6 +59,8 @@ enum Raw {
     ObjectCast,
     #[regex(r"\([ \t]*unset[ \t]*\)", ignore(case))]
     UnsetCast,
+    #[regex(r"\([ \t]*void[ \t]*\)", ignore(case))]
+    VoidCast,
 
     #[token(";")]
     Semi,
@@ -167,6 +169,8 @@ enum Raw {
     Amp2,
     #[token("||")]
     Pipe2,
+    #[token("|>")]
+    PipeGt,
     #[token("!")]
     Bang,
     #[token("@")]
@@ -192,6 +196,7 @@ impl Raw {
             Raw::ArrayCast => ARRAY_CAST,
             Raw::ObjectCast => OBJECT_CAST,
             Raw::UnsetCast => UNSET_CAST,
+            Raw::VoidCast => VOID_CAST,
             Raw::Semi => SEMI,
             Raw::Comma => COMMA,
             Raw::LParen => L_PAREN,
@@ -245,6 +250,7 @@ impl Raw {
             Raw::ShlEq => SHL_EQ,
             Raw::Amp2 => AMP2,
             Raw::Pipe2 => PIPE2,
+            Raw::PipeGt => PIPE_GT,
             Raw::Bang => BANG,
             Raw::At => AT,
             Raw::AttrOpen => ATTR_OPEN,
@@ -533,8 +539,26 @@ impl<'a> Lexer<'a> {
         let mut raw = Raw::lexer(self.rest());
         match raw.next() {
             Some(Ok(tok)) => {
-                let len = raw.span().end;
+                let mut len = raw.span().end;
                 let mut kind = tok.kind();
+                // StirPHP has no C-style casts (`as` instead), so `(Int) -> Int`
+                // must lex as a parenthesis.
+                if self.dialect == Dialect::Stir
+                    && matches!(
+                        kind,
+                        INT_CAST
+                            | FLOAT_CAST
+                            | STRING_CAST
+                            | BOOL_CAST
+                            | ARRAY_CAST
+                            | OBJECT_CAST
+                            | UNSET_CAST
+                            | VOID_CAST
+                    )
+                {
+                    kind = L_PAREN;
+                    len = 1;
+                }
                 if kind == IDENT {
                     let text = &self.rest()[..len];
                     if let Some(kw) = SyntaxKind::from_keyword(text) {

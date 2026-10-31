@@ -63,6 +63,8 @@ pub enum SyntaxKind {
     ARRAY_CAST,
     OBJECT_CAST,
     UNSET_CAST,
+    /// PHP 8.5 `(void)`
+    VOID_CAST,
 
     // ---- punctuation ----
     SEMI,
@@ -120,6 +122,8 @@ pub enum SyntaxKind {
     SHL_EQ,
     AMP2,
     PIPE2,
+    /// PHP 8.5 pipe `|>`
+    PIPE_GT,
     BANG,
     AT,
     /// `#[`

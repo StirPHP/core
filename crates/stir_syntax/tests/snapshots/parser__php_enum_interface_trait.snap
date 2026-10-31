@@ -1,0 +1,135 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"enum Suit: string implements HasLabel { case Hearts = 'H'; case Spades = 'S'; const Wild = self::Spades; public function label(): string { return ucfirst($this->name); } }\\ninterface I extends J, K { public function f(); }\\ntrait T { abstract public function g(): void; }\"),\nDialect :: Php)"
+---
+SOURCE_FILE
+  OPEN_TAG "<?php\n"
+  ENUM_DECL
+    IDENT "enum"
+    NAME
+      IDENT "Suit"
+    COLON ":"
+    NAMED_TYPE
+      NAME_REF
+        IDENT "string"
+    IMPLEMENTS_CLAUSE
+      IMPLEMENTS_KW "implements"
+      NAMED_TYPE
+        NAME_REF
+          IDENT "HasLabel"
+    CLASS_BODY
+      L_CURLY "{"
+      ENUM_CASE
+        CASE_KW "case"
+        NAME
+          IDENT "Hearts"
+        EQ "="
+        STRING_LITERAL
+          STRING_SINGLE "'H'"
+        SEMI ";"
+      ENUM_CASE
+        CASE_KW "case"
+        NAME
+          IDENT "Spades"
+        EQ "="
+        STRING_LITERAL
+          STRING_SINGLE "'S'"
+        SEMI ";"
+      CLASS_CONST_DECL
+        CONST_KW "const"
+        CONST_ELEM
+          NAME
+            IDENT "Wild"
+          EQ "="
+          CLASS_CONST_FETCH_EXPR
+            NAME_EXPR
+              NAME_REF
+                IDENT "self"
+            COLON2 "::"
+            NAME
+              IDENT "Spades"
+        SEMI ";"
+      METHOD_DECL
+        MODIFIERS
+          PUBLIC_KW "public"
+        FUNCTION_KW "function"
+        NAME
+          IDENT "label"
+        PARAM_LIST
+          L_PAREN "("
+          R_PAREN ")"
+        RETURN_TYPE
+          COLON ":"
+          NAMED_TYPE
+            NAME_REF
+              IDENT "string"
+        BLOCK
+          L_CURLY "{"
+          RETURN_STMT
+            RETURN_KW "return"
+            CALL_EXPR
+              NAME_EXPR
+                NAME_REF
+                  IDENT "ucfirst"
+              ARG_LIST
+                L_PAREN "("
+                ARG
+                  PROPERTY_FETCH_EXPR
+                    VARIABLE_EXPR
+                      VARIABLE "$this"
+                    ARROW "->"
+                    NAME
+                      IDENT "name"
+                R_PAREN ")"
+            SEMI ";"
+          R_CURLY "}"
+      R_CURLY "}"
+  INTERFACE_DECL
+    INTERFACE_KW "interface"
+    NAME
+      IDENT "I"
+    EXTENDS_CLAUSE
+      EXTENDS_KW "extends"
+      NAMED_TYPE
+        NAME_REF
+          IDENT "J"
+      COMMA ","
+      NAMED_TYPE
+        NAME_REF
+          IDENT "K"
+    CLASS_BODY
+      L_CURLY "{"
+      METHOD_DECL
+        MODIFIERS
+          PUBLIC_KW "public"
+        FUNCTION_KW "function"
+        NAME
+          IDENT "f"
+        PARAM_LIST
+          L_PAREN "("
+          R_PAREN ")"
+        SEMI ";"
+      R_CURLY "}"
+  TRAIT_DECL
+    TRAIT_KW "trait"
+    NAME
+      IDENT "T"
+    CLASS_BODY
+      L_CURLY "{"
+      METHOD_DECL
+        MODIFIERS
+          ABSTRACT_KW "abstract"
+          PUBLIC_KW "public"
+        FUNCTION_KW "function"
+        NAME
+          IDENT "g"
+        PARAM_LIST
+          L_PAREN "("
+          R_PAREN ")"
+        RETURN_TYPE
+          COLON ":"
+          NAMED_TYPE
+            NAME_REF
+              IDENT "void"
+        SEMI ";"
+      R_CURLY "}"

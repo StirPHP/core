@@ -1,0 +1,84 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"$a->list(); A::class; $a->default; Foo::new(); function list2() {} class X { function print() {} const FOREACH = 1; }\"),\nDialect :: Php)"
+---
+SOURCE_FILE
+  OPEN_TAG "<?php\n"
+  EXPR_STMT
+    METHOD_CALL_EXPR
+      PROPERTY_FETCH_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$a"
+        ARROW "->"
+        NAME
+          IDENT "list"
+      ARG_LIST
+        L_PAREN "("
+        R_PAREN ")"
+    SEMI ";"
+  EXPR_STMT
+    CLASS_CONST_FETCH_EXPR
+      NAME_EXPR
+        NAME_REF
+          IDENT "A"
+      COLON2 "::"
+      NAME
+        IDENT "class"
+    SEMI ";"
+  EXPR_STMT
+    PROPERTY_FETCH_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$a"
+      ARROW "->"
+      NAME
+        IDENT "default"
+    SEMI ";"
+  EXPR_STMT
+    STATIC_CALL_EXPR
+      CLASS_CONST_FETCH_EXPR
+        NAME_EXPR
+          NAME_REF
+            IDENT "Foo"
+        COLON2 "::"
+        NAME
+          IDENT "new"
+      ARG_LIST
+        L_PAREN "("
+        R_PAREN ")"
+    SEMI ";"
+  FUNCTION_DECL
+    FUNCTION_KW "function"
+    NAME
+      IDENT "list2"
+    PARAM_LIST
+      L_PAREN "("
+      R_PAREN ")"
+    BLOCK
+      L_CURLY "{"
+      R_CURLY "}"
+  CLASS_DECL
+    CLASS_KW "class"
+    NAME
+      IDENT "X"
+    CLASS_BODY
+      L_CURLY "{"
+      METHOD_DECL
+        FUNCTION_KW "function"
+        NAME
+          IDENT "print"
+        PARAM_LIST
+          L_PAREN "("
+          R_PAREN ")"
+        BLOCK
+          L_CURLY "{"
+          R_CURLY "}"
+      CLASS_CONST_DECL
+        CONST_KW "const"
+        CONST_ELEM
+          NAME
+            IDENT "FOREACH"
+          EQ "="
+          LITERAL
+            INT_NUMBER "1"
+        SEMI ";"
+      R_CURLY "}"

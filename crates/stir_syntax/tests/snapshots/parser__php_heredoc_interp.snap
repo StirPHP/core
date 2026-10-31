@@ -1,0 +1,24 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(concat! (\"<?php\\n\", \"echo <<<HTML\\n<div>{$a['b']}</div>\\nHTML;\\n\"),\nDialect :: Php)"
+---
+SOURCE_FILE
+  OPEN_TAG "<?php\n"
+  ECHO_STMT
+    ECHO_KW "echo"
+    HEREDOC
+      HEREDOC_START "<<<HTML\n"
+      STRING_CONTENT "<div>"
+      INTERP_EXPR
+        CURLY_OPEN "{"
+        INDEX_EXPR
+          VARIABLE_EXPR
+            VARIABLE "$a"
+          L_BRACK "["
+          STRING_LITERAL
+            STRING_SINGLE "'b'"
+          R_BRACK "]"
+        R_CURLY "}"
+      STRING_CONTENT "</div>\n"
+      HEREDOC_END "HTML"
+    SEMI ";"

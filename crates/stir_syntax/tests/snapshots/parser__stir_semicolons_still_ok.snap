@@ -1,0 +1,32 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(\"val a = 1; val b = 2;\\necho a + b;\\n\", Dialect :: Stir)"
+---
+SOURCE_FILE
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "a"
+    EQ "="
+    LITERAL
+      INT_NUMBER "1"
+    SEMI ";"
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "b"
+    EQ "="
+    LITERAL
+      INT_NUMBER "2"
+    SEMI ";"
+  ECHO_STMT
+    ECHO_KW "echo"
+    BIN_EXPR
+      NAME_EXPR
+        NAME_REF
+          IDENT "a"
+      PLUS "+"
+      NAME_EXPR
+        NAME_REF
+          IDENT "b"
+    SEMI ";"

@@ -1,0 +1,233 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(\"function <T> first(xs: List<T>): T? = xs->firstOrNull()\\nclass Box<out T of Comparable<T>>(val value: T)\\ninterface Sink<in T> { function put(item: T): Unit }\\nfunction <K, V> merge(a: Map<K, V>, b: Map<K, V>): Map<K, V> where K of Stringable { return a }\\nval m: Map<String, List<Int>> = mapOf()\\n\",\nDialect :: Stir)"
+---
+SOURCE_FILE
+  FUNCTION_DECL
+    FUNCTION_KW "function"
+    TYPE_PARAM_LIST
+      L_ANGLE "<"
+      TYPE_PARAM
+        NAME
+          IDENT "T"
+      R_ANGLE ">"
+    NAME
+      IDENT "first"
+    PARAM_LIST
+      L_PAREN "("
+      PARAM
+        NAME
+          IDENT "xs"
+        COLON ":"
+        NAMED_TYPE
+          NAME_REF
+            IDENT "List"
+          GENERIC_ARG_LIST
+            L_ANGLE "<"
+            NAMED_TYPE
+              NAME_REF
+                IDENT "T"
+            R_ANGLE ">"
+      R_PAREN ")"
+    RETURN_TYPE
+      COLON ":"
+      NULLABLE_TYPE
+        NAMED_TYPE
+          NAME_REF
+            IDENT "T"
+        QUESTION "?"
+    FUNCTION_BODY
+      EQ "="
+      METHOD_CALL_EXPR
+        PROPERTY_FETCH_EXPR
+          NAME_EXPR
+            NAME_REF
+              IDENT "xs"
+          ARROW "->"
+          NAME
+            IDENT "firstOrNull"
+        ARG_LIST
+          L_PAREN "("
+          R_PAREN ")"
+  CLASS_DECL
+    CLASS_KW "class"
+    NAME
+      IDENT "Box"
+    TYPE_PARAM_LIST
+      L_ANGLE "<"
+      TYPE_PARAM
+        IDENT "out"
+        NAME
+          IDENT "T"
+        IDENT "of"
+        NAMED_TYPE
+          NAME_REF
+            IDENT "Comparable"
+          GENERIC_ARG_LIST
+            L_ANGLE "<"
+            NAMED_TYPE
+              NAME_REF
+                IDENT "T"
+            R_ANGLE ">"
+      R_ANGLE ">"
+    PRIMARY_CTOR
+      PARAM_LIST
+        L_PAREN "("
+        PARAM
+          IDENT "val"
+          NAME
+            IDENT "value"
+          COLON ":"
+          NAMED_TYPE
+            NAME_REF
+              IDENT "T"
+        R_PAREN ")"
+  INTERFACE_DECL
+    INTERFACE_KW "interface"
+    NAME
+      IDENT "Sink"
+    TYPE_PARAM_LIST
+      L_ANGLE "<"
+      TYPE_PARAM
+        IDENT "in"
+        NAME
+          IDENT "T"
+      R_ANGLE ">"
+    CLASS_BODY
+      L_CURLY "{"
+      METHOD_DECL
+        FUNCTION_KW "function"
+        NAME
+          IDENT "put"
+        PARAM_LIST
+          L_PAREN "("
+          PARAM
+            NAME
+              IDENT "item"
+            COLON ":"
+            NAMED_TYPE
+              NAME_REF
+                IDENT "T"
+          R_PAREN ")"
+        RETURN_TYPE
+          COLON ":"
+          NAMED_TYPE
+            NAME_REF
+              IDENT "Unit"
+      R_CURLY "}"
+  FUNCTION_DECL
+    FUNCTION_KW "function"
+    TYPE_PARAM_LIST
+      L_ANGLE "<"
+      TYPE_PARAM
+        NAME
+          IDENT "K"
+      COMMA ","
+      TYPE_PARAM
+        NAME
+          IDENT "V"
+      R_ANGLE ">"
+    NAME
+      IDENT "merge"
+    PARAM_LIST
+      L_PAREN "("
+      PARAM
+        NAME
+          IDENT "a"
+        COLON ":"
+        NAMED_TYPE
+          NAME_REF
+            IDENT "Map"
+          GENERIC_ARG_LIST
+            L_ANGLE "<"
+            NAMED_TYPE
+              NAME_REF
+                IDENT "K"
+            COMMA ","
+            NAMED_TYPE
+              NAME_REF
+                IDENT "V"
+            R_ANGLE ">"
+      COMMA ","
+      PARAM
+        NAME
+          IDENT "b"
+        COLON ":"
+        NAMED_TYPE
+          NAME_REF
+            IDENT "Map"
+          GENERIC_ARG_LIST
+            L_ANGLE "<"
+            NAMED_TYPE
+              NAME_REF
+                IDENT "K"
+            COMMA ","
+            NAMED_TYPE
+              NAME_REF
+                IDENT "V"
+            R_ANGLE ">"
+      R_PAREN ")"
+    RETURN_TYPE
+      COLON ":"
+      NAMED_TYPE
+        NAME_REF
+          IDENT "Map"
+        GENERIC_ARG_LIST
+          L_ANGLE "<"
+          NAMED_TYPE
+            NAME_REF
+              IDENT "K"
+          COMMA ","
+          NAMED_TYPE
+            NAME_REF
+              IDENT "V"
+          R_ANGLE ">"
+    WHERE_CLAUSE
+      IDENT "where"
+      WHERE_PREDICATE
+        NAME
+          IDENT "K"
+        IDENT "of"
+        NAMED_TYPE
+          NAME_REF
+            IDENT "Stringable"
+    BLOCK
+      L_CURLY "{"
+      RETURN_STMT
+        RETURN_KW "return"
+        NAME_EXPR
+          NAME_REF
+            IDENT "a"
+      R_CURLY "}"
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "m"
+    COLON ":"
+    NAMED_TYPE
+      NAME_REF
+        IDENT "Map"
+      GENERIC_ARG_LIST
+        L_ANGLE "<"
+        NAMED_TYPE
+          NAME_REF
+            IDENT "String"
+        COMMA ","
+        NAMED_TYPE
+          NAME_REF
+            IDENT "List"
+          GENERIC_ARG_LIST
+            L_ANGLE "<"
+            NAMED_TYPE
+              NAME_REF
+                IDENT "Int"
+            R_ANGLE ">"
+        R_ANGLE ">"
+    EQ "="
+    CALL_EXPR
+      NAME_EXPR
+        NAME_REF
+          IDENT "mapOf"
+      ARG_LIST
+        L_PAREN "("
+        R_PAREN ")"

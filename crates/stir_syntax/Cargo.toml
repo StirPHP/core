@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+drop_bomb = "0.1.5"
 logos = "0.16.1"
 rowan = "0.17.0"
 strum = { version = "0.28.0", features = ["derive"] }
@@ -15,3 +16,4 @@ workspace = true
 
 [dev-dependencies]
 insta = "1.49.0"
+walkdir = "2.5.0"

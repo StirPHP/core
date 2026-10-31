@@ -1,0 +1,219 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"if ($a) { echo 1; } elseif ($b) echo 2; else { echo 3; }\\nwhile ($i--) continue;\\ndo { $i++; } while ($i < 10);\\nfor ($i = 0, $j = 1; $i < 3; $i++) {}\\nforeach ($xs as $k => &$v) {}\\nforeach ($xs as [$a, $b]) {}\\nswitch ($x) { case 1: case 2: echo 'a'; break; default: echo 'b'; }\\ntry { f(); } catch (A|B $e) { } catch (C) { } finally { }\\n\"),\nDialect :: Php)"
+---
+SOURCE_FILE
+  OPEN_TAG "<?php\n"
+  IF_STMT
+    IF_KW "if"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$a"
+    R_PAREN ")"
+    BLOCK
+      L_CURLY "{"
+      ECHO_STMT
+        ECHO_KW "echo"
+        LITERAL
+          INT_NUMBER "1"
+        SEMI ";"
+      R_CURLY "}"
+    ELSEIF_CLAUSE
+      ELSEIF_KW "elseif"
+      L_PAREN "("
+      VARIABLE_EXPR
+        VARIABLE "$b"
+      R_PAREN ")"
+      ECHO_STMT
+        ECHO_KW "echo"
+        LITERAL
+          INT_NUMBER "2"
+        SEMI ";"
+    ELSE_CLAUSE
+      ELSE_KW "else"
+      BLOCK
+        L_CURLY "{"
+        ECHO_STMT
+          ECHO_KW "echo"
+          LITERAL
+            INT_NUMBER "3"
+          SEMI ";"
+        R_CURLY "}"
+  WHILE_STMT
+    WHILE_KW "while"
+    L_PAREN "("
+    POSTFIX_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$i"
+      DEC "--"
+    R_PAREN ")"
+    CONTINUE_STMT
+      CONTINUE_KW "continue"
+      SEMI ";"
+  DO_WHILE_STMT
+    DO_KW "do"
+    BLOCK
+      L_CURLY "{"
+      EXPR_STMT
+        POSTFIX_EXPR
+          VARIABLE_EXPR
+            VARIABLE "$i"
+          INC "++"
+        SEMI ";"
+      R_CURLY "}"
+    WHILE_KW "while"
+    L_PAREN "("
+    BIN_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$i"
+      L_ANGLE "<"
+      LITERAL
+        INT_NUMBER "10"
+    R_PAREN ")"
+    SEMI ";"
+  FOR_STMT
+    FOR_KW "for"
+    L_PAREN "("
+    FOR_INIT
+      ASSIGN_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$i"
+        EQ "="
+        LITERAL
+          INT_NUMBER "0"
+      COMMA ","
+      ASSIGN_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$j"
+        EQ "="
+        LITERAL
+          INT_NUMBER "1"
+    SEMI ";"
+    FOR_COND
+      BIN_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$i"
+        L_ANGLE "<"
+        LITERAL
+          INT_NUMBER "3"
+    SEMI ";"
+    FOR_STEP
+      POSTFIX_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$i"
+        INC "++"
+    R_PAREN ")"
+    BLOCK
+      L_CURLY "{"
+      R_CURLY "}"
+  FOREACH_STMT
+    FOREACH_KW "foreach"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$xs"
+    AS_KW "as"
+    VARIABLE_EXPR
+      VARIABLE "$k"
+    FAT_ARROW "=>"
+    AMP "&"
+    VARIABLE_EXPR
+      VARIABLE "$v"
+    R_PAREN ")"
+    BLOCK
+      L_CURLY "{"
+      R_CURLY "}"
+  FOREACH_STMT
+    FOREACH_KW "foreach"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$xs"
+    AS_KW "as"
+    ARRAY_EXPR
+      L_BRACK "["
+      ARRAY_ELEM
+        VARIABLE_EXPR
+          VARIABLE "$a"
+      COMMA ","
+      ARRAY_ELEM
+        VARIABLE_EXPR
+          VARIABLE "$b"
+      R_BRACK "]"
+    R_PAREN ")"
+    BLOCK
+      L_CURLY "{"
+      R_CURLY "}"
+  SWITCH_STMT
+    SWITCH_KW "switch"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$x"
+    R_PAREN ")"
+    L_CURLY "{"
+    SWITCH_CASE
+      CASE_KW "case"
+      LITERAL
+        INT_NUMBER "1"
+      COLON ":"
+    SWITCH_CASE
+      CASE_KW "case"
+      LITERAL
+        INT_NUMBER "2"
+      COLON ":"
+      ECHO_STMT
+        ECHO_KW "echo"
+        STRING_LITERAL
+          STRING_SINGLE "'a'"
+        SEMI ";"
+      BREAK_STMT
+        BREAK_KW "break"
+        SEMI ";"
+    SWITCH_CASE
+      DEFAULT_KW "default"
+      COLON ":"
+      ECHO_STMT
+        ECHO_KW "echo"
+        STRING_LITERAL
+          STRING_SINGLE "'b'"
+        SEMI ";"
+    R_CURLY "}"
+  TRY_STMT
+    TRY_KW "try"
+    BLOCK
+      L_CURLY "{"
+      EXPR_STMT
+        CALL_EXPR
+          NAME_EXPR
+            NAME_REF
+              IDENT "f"
+          ARG_LIST
+            L_PAREN "("
+            R_PAREN ")"
+        SEMI ";"
+      R_CURLY "}"
+    CATCH_CLAUSE
+      CATCH_KW "catch"
+      L_PAREN "("
+      NAME_REF
+        IDENT "A"
+      PIPE "|"
+      NAME_REF
+        IDENT "B"
+      VARIABLE "$e"
+      R_PAREN ")"
+      BLOCK
+        L_CURLY "{"
+        R_CURLY "}"
+    CATCH_CLAUSE
+      CATCH_KW "catch"
+      L_PAREN "("
+      NAME_REF
+        IDENT "C"
+      R_PAREN ")"
+      BLOCK
+        L_CURLY "{"
+        R_CURLY "}"
+    FINALLY_CLAUSE
+      FINALLY_KW "finally"
+      BLOCK
+        L_CURLY "{"
+        R_CURLY "}"

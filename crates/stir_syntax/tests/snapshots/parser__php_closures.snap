@@ -1,0 +1,93 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"$f = function &($a) use ($b, &$c): int { return 1; };\\n$g = static fn(int $x): int => $x * 2;\\n$h = #[Pure] fn() => 1;\\n\"),\nDialect :: Php)"
+---
+SOURCE_FILE
+  OPEN_TAG "<?php\n"
+  EXPR_STMT
+    ASSIGN_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$f"
+      EQ "="
+      CLOSURE_EXPR
+        FUNCTION_KW "function"
+        AMP "&"
+        PARAM_LIST
+          L_PAREN "("
+          PARAM
+            VARIABLE "$a"
+          R_PAREN ")"
+        CLOSURE_USE
+          USE_KW "use"
+          L_PAREN "("
+          CLOSURE_USE_VAR
+            VARIABLE "$b"
+          COMMA ","
+          CLOSURE_USE_VAR
+            AMP "&"
+            VARIABLE "$c"
+          R_PAREN ")"
+        RETURN_TYPE
+          COLON ":"
+          NAMED_TYPE
+            NAME_REF
+              IDENT "int"
+        BLOCK
+          L_CURLY "{"
+          RETURN_STMT
+            RETURN_KW "return"
+            LITERAL
+              INT_NUMBER "1"
+            SEMI ";"
+          R_CURLY "}"
+    SEMI ";"
+  EXPR_STMT
+    ASSIGN_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$g"
+      EQ "="
+      ARROW_FN_EXPR
+        STATIC_KW "static"
+        FN_KW "fn"
+        PARAM_LIST
+          L_PAREN "("
+          PARAM
+            NAMED_TYPE
+              NAME_REF
+                IDENT "int"
+            VARIABLE "$x"
+          R_PAREN ")"
+        RETURN_TYPE
+          COLON ":"
+          NAMED_TYPE
+            NAME_REF
+              IDENT "int"
+        FAT_ARROW "=>"
+        BIN_EXPR
+          VARIABLE_EXPR
+            VARIABLE "$x"
+          STAR "*"
+          LITERAL
+            INT_NUMBER "2"
+    SEMI ";"
+  EXPR_STMT
+    ASSIGN_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$h"
+      EQ "="
+      ARROW_FN_EXPR
+        ATTRIBUTE_LIST
+          ATTRIBUTE_GROUP
+            ATTR_OPEN "#["
+            ATTRIBUTE
+              NAME_REF
+                IDENT "Pure"
+            R_BRACK "]"
+        FN_KW "fn"
+        PARAM_LIST
+          L_PAREN "("
+          R_PAREN ")"
+        FAT_ARROW "=>"
+        LITERAL
+          INT_NUMBER "1"
+    SEMI ";"

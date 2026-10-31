@@ -1,0 +1,136 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"foo(1, ...$a, name: 2); $o->m()?->n; A::b(); A::$c; A::C; $a::class; strlen(...); new Foo; new Foo()->bar(); new $cls->prop(1);\"),\nDialect :: Php)"
+---
+SOURCE_FILE
+  OPEN_TAG "<?php\n"
+  EXPR_STMT
+    CALL_EXPR
+      NAME_EXPR
+        NAME_REF
+          IDENT "foo"
+      ARG_LIST
+        L_PAREN "("
+        ARG
+          LITERAL
+            INT_NUMBER "1"
+        COMMA ","
+        ARG
+          ELLIPSIS "..."
+          VARIABLE_EXPR
+            VARIABLE "$a"
+        COMMA ","
+        NAMED_ARG
+          NAME
+            IDENT "name"
+          COLON ":"
+          LITERAL
+            INT_NUMBER "2"
+        R_PAREN ")"
+    SEMI ";"
+  EXPR_STMT
+    NULLSAFE_PROPERTY_FETCH_EXPR
+      METHOD_CALL_EXPR
+        PROPERTY_FETCH_EXPR
+          VARIABLE_EXPR
+            VARIABLE "$o"
+          ARROW "->"
+          NAME
+            IDENT "m"
+        ARG_LIST
+          L_PAREN "("
+          R_PAREN ")"
+      NULLSAFE_ARROW "?->"
+      NAME
+        IDENT "n"
+    SEMI ";"
+  EXPR_STMT
+    STATIC_CALL_EXPR
+      CLASS_CONST_FETCH_EXPR
+        NAME_EXPR
+          NAME_REF
+            IDENT "A"
+        COLON2 "::"
+        NAME
+          IDENT "b"
+      ARG_LIST
+        L_PAREN "("
+        R_PAREN ")"
+    SEMI ";"
+  EXPR_STMT
+    STATIC_PROPERTY_FETCH_EXPR
+      NAME_EXPR
+        NAME_REF
+          IDENT "A"
+      COLON2 "::"
+      VARIABLE "$c"
+    SEMI ";"
+  EXPR_STMT
+    CLASS_CONST_FETCH_EXPR
+      NAME_EXPR
+        NAME_REF
+          IDENT "A"
+      COLON2 "::"
+      NAME
+        IDENT "C"
+    SEMI ";"
+  EXPR_STMT
+    CLASS_CONST_FETCH_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$a"
+      COLON2 "::"
+      NAME
+        IDENT "class"
+    SEMI ";"
+  EXPR_STMT
+    CALL_EXPR
+      NAME_EXPR
+        NAME_REF
+          IDENT "strlen"
+      ARG_LIST
+        L_PAREN "("
+        CALLABLE_PLACEHOLDER
+          ELLIPSIS "..."
+        R_PAREN ")"
+    SEMI ";"
+  EXPR_STMT
+    NEW_EXPR
+      NEW_KW "new"
+      NAME_EXPR
+        NAME_REF
+          IDENT "Foo"
+    SEMI ";"
+  EXPR_STMT
+    METHOD_CALL_EXPR
+      PROPERTY_FETCH_EXPR
+        NEW_EXPR
+          NEW_KW "new"
+          NAME_EXPR
+            NAME_REF
+              IDENT "Foo"
+          ARG_LIST
+            L_PAREN "("
+            R_PAREN ")"
+        ARROW "->"
+        NAME
+          IDENT "bar"
+      ARG_LIST
+        L_PAREN "("
+        R_PAREN ")"
+    SEMI ";"
+  EXPR_STMT
+    NEW_EXPR
+      NEW_KW "new"
+      PROPERTY_FETCH_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$cls"
+        ARROW "->"
+        NAME
+          IDENT "prop"
+      ARG_LIST
+        L_PAREN "("
+        ARG
+          LITERAL
+            INT_NUMBER "1"
+        R_PAREN ")"
+    SEMI ";"

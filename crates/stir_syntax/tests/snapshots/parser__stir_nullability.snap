@@ -1,0 +1,77 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(\"val user = find(1)\\nval n = user?->name ?: \\\"anon\\\"\\nval m = user!!->name\\nval l = user?->name?->length() ?: 0\\n\",\nDialect :: Stir)"
+---
+SOURCE_FILE
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "user"
+    EQ "="
+    CALL_EXPR
+      NAME_EXPR
+        NAME_REF
+          IDENT "find"
+      ARG_LIST
+        L_PAREN "("
+        ARG
+          LITERAL
+            INT_NUMBER "1"
+        R_PAREN ")"
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "n"
+    EQ "="
+    ELVIS_EXPR
+      NULLSAFE_PROPERTY_FETCH_EXPR
+        NAME_EXPR
+          NAME_REF
+            IDENT "user"
+        NULLSAFE_ARROW "?->"
+        NAME
+          IDENT "name"
+      QUESTION "?"
+      COLON ":"
+      STRING_LITERAL
+        STRING_DOUBLE "\"anon\""
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "m"
+    EQ "="
+    PROPERTY_FETCH_EXPR
+      NOT_NULL_EXPR
+        NAME_EXPR
+          NAME_REF
+            IDENT "user"
+        BANG "!"
+        BANG "!"
+      ARROW "->"
+      NAME
+        IDENT "name"
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "l"
+    EQ "="
+    ELVIS_EXPR
+      NULLSAFE_METHOD_CALL_EXPR
+        NULLSAFE_PROPERTY_FETCH_EXPR
+          NULLSAFE_PROPERTY_FETCH_EXPR
+            NAME_EXPR
+              NAME_REF
+                IDENT "user"
+            NULLSAFE_ARROW "?->"
+            NAME
+              IDENT "name"
+          NULLSAFE_ARROW "?->"
+          NAME
+            IDENT "length"
+        ARG_LIST
+          L_PAREN "("
+          R_PAREN ")"
+      QUESTION "?"
+      COLON ":"
+      LITERAL
+        INT_NUMBER "0"

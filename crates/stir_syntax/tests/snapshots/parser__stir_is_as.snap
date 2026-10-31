@@ -1,0 +1,64 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(\"if (x is String && y !is Int) { val z = x as String }\\nval w = a as? Int ?: 0\\n\",\nDialect :: Stir)"
+---
+SOURCE_FILE
+  IF_STMT
+    IF_KW "if"
+    L_PAREN "("
+    BIN_EXPR
+      IS_EXPR
+        NAME_EXPR
+          NAME_REF
+            IDENT "x"
+        IDENT "is"
+        NAMED_TYPE
+          NAME_REF
+            IDENT "String"
+      AMP2 "&&"
+      IS_EXPR
+        NAME_EXPR
+          NAME_REF
+            IDENT "y"
+        BANG "!"
+        IDENT "is"
+        NAMED_TYPE
+          NAME_REF
+            IDENT "Int"
+    R_PAREN ")"
+    BLOCK
+      L_CURLY "{"
+      VAL_DECL
+        IDENT "val"
+        NAME
+          IDENT "z"
+        EQ "="
+        AS_EXPR
+          NAME_EXPR
+            NAME_REF
+              IDENT "x"
+          AS_KW "as"
+          NAMED_TYPE
+            NAME_REF
+              IDENT "String"
+      R_CURLY "}"
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "w"
+    EQ "="
+    ELVIS_EXPR
+      AS_EXPR
+        NAME_EXPR
+          NAME_REF
+            IDENT "a"
+        AS_KW "as"
+        NULLABLE_TYPE
+          QUESTION "?"
+          NAMED_TYPE
+            NAME_REF
+              IDENT "Int"
+      QUESTION "?"
+      COLON ":"
+      LITERAL
+        INT_NUMBER "0"

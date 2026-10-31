@@ -1,0 +1,240 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"$r = match ($x) { 1, 2 => 'a', default => throw new E() };\\nlist($a, , $b) = $arr; [$a, [$b]] = $c; ['k' => $v] = $d;\\nisset($a, $b['c']); empty($x); exit(1); die; print 'x';\\n$a = (int) $b; @f(); yield $k => $v; yield from g(); $x = yield;\\nglobal $a, $b; static $s = 1; unset($a[0]); goto end; end:\\n__halt_compiler();raw stuff\"),\nDialect :: Php)"
+---
+SOURCE_FILE
+  OPEN_TAG "<?php\n"
+  EXPR_STMT
+    ASSIGN_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$r"
+      EQ "="
+      MATCH_EXPR
+        MATCH_KW "match"
+        L_PAREN "("
+        VARIABLE_EXPR
+          VARIABLE "$x"
+        R_PAREN ")"
+        L_CURLY "{"
+        MATCH_ARM
+          MATCH_CONDITIONS
+            LITERAL
+              INT_NUMBER "1"
+            COMMA ","
+            LITERAL
+              INT_NUMBER "2"
+          FAT_ARROW "=>"
+          STRING_LITERAL
+            STRING_SINGLE "'a'"
+        COMMA ","
+        MATCH_ARM
+          DEFAULT_KW "default"
+          FAT_ARROW "=>"
+          THROW_EXPR
+            THROW_KW "throw"
+            NEW_EXPR
+              NEW_KW "new"
+              NAME_EXPR
+                NAME_REF
+                  IDENT "E"
+              ARG_LIST
+                L_PAREN "("
+                R_PAREN ")"
+        R_CURLY "}"
+    SEMI ";"
+  EXPR_STMT
+    ASSIGN_EXPR
+      LIST_EXPR
+        LIST_KW "list"
+        L_PAREN "("
+        ARRAY_ELEM
+          VARIABLE_EXPR
+            VARIABLE "$a"
+        COMMA ","
+        ARRAY_ELEM
+        COMMA ","
+        ARRAY_ELEM
+          VARIABLE_EXPR
+            VARIABLE "$b"
+        R_PAREN ")"
+      EQ "="
+      VARIABLE_EXPR
+        VARIABLE "$arr"
+    SEMI ";"
+  EXPR_STMT
+    ASSIGN_EXPR
+      ARRAY_EXPR
+        L_BRACK "["
+        ARRAY_ELEM
+          VARIABLE_EXPR
+            VARIABLE "$a"
+        COMMA ","
+        ARRAY_ELEM
+          ARRAY_EXPR
+            L_BRACK "["
+            ARRAY_ELEM
+              VARIABLE_EXPR
+                VARIABLE "$b"
+            R_BRACK "]"
+        R_BRACK "]"
+      EQ "="
+      VARIABLE_EXPR
+        VARIABLE "$c"
+    SEMI ";"
+  EXPR_STMT
+    ASSIGN_EXPR
+      ARRAY_EXPR
+        L_BRACK "["
+        ARRAY_ELEM
+          STRING_LITERAL
+            STRING_SINGLE "'k'"
+          FAT_ARROW "=>"
+          VARIABLE_EXPR
+            VARIABLE "$v"
+        R_BRACK "]"
+      EQ "="
+      VARIABLE_EXPR
+        VARIABLE "$d"
+    SEMI ";"
+  EXPR_STMT
+    ISSET_EXPR
+      ISSET_KW "isset"
+      ARG_LIST
+        L_PAREN "("
+        ARG
+          VARIABLE_EXPR
+            VARIABLE "$a"
+        COMMA ","
+        ARG
+          INDEX_EXPR
+            VARIABLE_EXPR
+              VARIABLE "$b"
+            L_BRACK "["
+            STRING_LITERAL
+              STRING_SINGLE "'c'"
+            R_BRACK "]"
+        R_PAREN ")"
+    SEMI ";"
+  EXPR_STMT
+    EMPTY_EXPR
+      EMPTY_KW "empty"
+      ARG_LIST
+        L_PAREN "("
+        ARG
+          VARIABLE_EXPR
+            VARIABLE "$x"
+        R_PAREN ")"
+    SEMI ";"
+  EXPR_STMT
+    EXIT_EXPR
+      EXIT_KW "exit"
+      ARG_LIST
+        L_PAREN "("
+        ARG
+          LITERAL
+            INT_NUMBER "1"
+        R_PAREN ")"
+    SEMI ";"
+  EXPR_STMT
+    EXIT_EXPR
+      EXIT_KW "die"
+    SEMI ";"
+  EXPR_STMT
+    PRINT_EXPR
+      PRINT_KW "print"
+      STRING_LITERAL
+        STRING_SINGLE "'x'"
+    SEMI ";"
+  EXPR_STMT
+    ASSIGN_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$a"
+      EQ "="
+      CAST_EXPR
+        INT_CAST "(int)"
+        VARIABLE_EXPR
+          VARIABLE "$b"
+    SEMI ";"
+  EXPR_STMT
+    ERROR_SUPPRESS_EXPR
+      AT "@"
+      CALL_EXPR
+        NAME_EXPR
+          NAME_REF
+            IDENT "f"
+        ARG_LIST
+          L_PAREN "("
+          R_PAREN ")"
+    SEMI ";"
+  EXPR_STMT
+    YIELD_EXPR
+      YIELD_KW "yield"
+      VARIABLE_EXPR
+        VARIABLE "$k"
+      FAT_ARROW "=>"
+      VARIABLE_EXPR
+        VARIABLE "$v"
+    SEMI ";"
+  EXPR_STMT
+    YIELD_FROM_EXPR
+      YIELD_KW "yield"
+      IDENT "from"
+      CALL_EXPR
+        NAME_EXPR
+          NAME_REF
+            IDENT "g"
+        ARG_LIST
+          L_PAREN "("
+          R_PAREN ")"
+    SEMI ";"
+  EXPR_STMT
+    ASSIGN_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$x"
+      EQ "="
+      YIELD_EXPR
+        YIELD_KW "yield"
+    SEMI ";"
+  GLOBAL_STMT
+    GLOBAL_KW "global"
+    VARIABLE_EXPR
+      VARIABLE "$a"
+    COMMA ","
+    VARIABLE_EXPR
+      VARIABLE "$b"
+    SEMI ";"
+  STATIC_VAR_STMT
+    STATIC_KW "static"
+    STATIC_VAR
+      VARIABLE "$s"
+      EQ "="
+      LITERAL
+        INT_NUMBER "1"
+    SEMI ";"
+  UNSET_STMT
+    UNSET_KW "unset"
+    L_PAREN "("
+    INDEX_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$a"
+      L_BRACK "["
+      LITERAL
+        INT_NUMBER "0"
+      R_BRACK "]"
+    R_PAREN ")"
+    SEMI ";"
+  GOTO_STMT
+    GOTO_KW "goto"
+    NAME
+      IDENT "end"
+    SEMI ";"
+  LABEL_STMT
+    NAME
+      IDENT "end"
+    COLON ":"
+  HALT_COMPILER_STMT
+    HALT_COMPILER_KW "__halt_compiler"
+    L_PAREN "("
+    R_PAREN ")"
+    SEMI ";"
+    HALT_DATA "raw stuff"

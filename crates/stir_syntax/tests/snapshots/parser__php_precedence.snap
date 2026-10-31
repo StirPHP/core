@@ -1,0 +1,81 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"$a = 1 + 2 * 3 . 'x' ?? $b ?: $c;\\n!$a instanceof B && -$c ** 2;\\n$x = $y = &$z;\\n$a >= $b >> 1;\\n\"),\nDialect :: Php)"
+---
+SOURCE_FILE
+  OPEN_TAG "<?php\n"
+  EXPR_STMT
+    ASSIGN_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$a"
+      EQ "="
+      ELVIS_EXPR
+        BIN_EXPR
+          BIN_EXPR
+            BIN_EXPR
+              LITERAL
+                INT_NUMBER "1"
+              PLUS "+"
+              BIN_EXPR
+                LITERAL
+                  INT_NUMBER "2"
+                STAR "*"
+                LITERAL
+                  INT_NUMBER "3"
+            DOT "."
+            STRING_LITERAL
+              STRING_SINGLE "'x'"
+          QUESTION2 "??"
+          VARIABLE_EXPR
+            VARIABLE "$b"
+        QUESTION "?"
+        COLON ":"
+        VARIABLE_EXPR
+          VARIABLE "$c"
+    SEMI ";"
+  EXPR_STMT
+    BIN_EXPR
+      PREFIX_EXPR
+        BANG "!"
+        INSTANCEOF_EXPR
+          VARIABLE_EXPR
+            VARIABLE "$a"
+          INSTANCEOF_KW "instanceof"
+          NAME_EXPR
+            NAME_REF
+              IDENT "B"
+      AMP2 "&&"
+      PREFIX_EXPR
+        MINUS "-"
+        BIN_EXPR
+          VARIABLE_EXPR
+            VARIABLE "$c"
+          POW "**"
+          LITERAL
+            INT_NUMBER "2"
+    SEMI ";"
+  EXPR_STMT
+    ASSIGN_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$x"
+      EQ "="
+      ASSIGN_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$y"
+        EQ "="
+        AMP "&"
+        VARIABLE_EXPR
+          VARIABLE "$z"
+    SEMI ";"
+  EXPR_STMT
+    BIN_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$a"
+      GTEQ ">="
+      BIN_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$b"
+        SHR ">>"
+        LITERAL
+          INT_NUMBER "1"
+    SEMI ";"

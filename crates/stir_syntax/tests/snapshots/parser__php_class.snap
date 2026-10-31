@@ -1,0 +1,245 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"#[Attr(1)]\\nfinal readonly class A extends B implements C, D {\\n    use T1, T2 { T1::m insteadof T2; m as protected n; }\\n    public const int X = 1, Y = 2;\\n    private static ?array $p = null, $q;\\n    public private(set) string $name { get => $this->name; set(string $v) { $this->name = $v; } }\\n    public function __construct(private readonly int $id = 0, protected ...$rest) {}\\n    abstract protected function &m(int|string $a, (A&B)|null $b, Foo &$c): static;\\n}\\n\"),\nDialect :: Php)"
+---
+SOURCE_FILE
+  OPEN_TAG "<?php\n"
+  CLASS_DECL
+    ATTRIBUTE_LIST
+      ATTRIBUTE_GROUP
+        ATTR_OPEN "#["
+        ATTRIBUTE
+          NAME_REF
+            IDENT "Attr"
+          ARG_LIST
+            L_PAREN "("
+            ARG
+              LITERAL
+                INT_NUMBER "1"
+            R_PAREN ")"
+        R_BRACK "]"
+    MODIFIERS
+      FINAL_KW "final"
+      READONLY_KW "readonly"
+    CLASS_KW "class"
+    NAME
+      IDENT "A"
+    EXTENDS_CLAUSE
+      EXTENDS_KW "extends"
+      NAMED_TYPE
+        NAME_REF
+          IDENT "B"
+    IMPLEMENTS_CLAUSE
+      IMPLEMENTS_KW "implements"
+      NAMED_TYPE
+        NAME_REF
+          IDENT "C"
+      COMMA ","
+      NAMED_TYPE
+        NAME_REF
+          IDENT "D"
+    CLASS_BODY
+      L_CURLY "{"
+      TRAIT_USE
+        USE_KW "use"
+        NAME_REF
+          IDENT "T1"
+        COMMA ","
+        NAME_REF
+          IDENT "T2"
+        TRAIT_ADAPTATIONS
+          L_CURLY "{"
+          TRAIT_PRECEDENCE
+            NAME_REF
+              IDENT "T1"
+            COLON2 "::"
+            NAME
+              IDENT "m"
+            INSTEADOF_KW "insteadof"
+            NAME_REF
+              IDENT "T2"
+            SEMI ";"
+          TRAIT_ALIAS
+            NAME
+              IDENT "m"
+            AS_KW "as"
+            PROTECTED_KW "protected"
+            NAME
+              IDENT "n"
+            SEMI ";"
+          R_CURLY "}"
+      CLASS_CONST_DECL
+        MODIFIERS
+          PUBLIC_KW "public"
+        CONST_KW "const"
+        CONST_ELEM
+          NAMED_TYPE
+            NAME_REF
+              IDENT "int"
+          NAME
+            IDENT "X"
+          EQ "="
+          LITERAL
+            INT_NUMBER "1"
+        COMMA ","
+        CONST_ELEM
+          NAME
+            IDENT "Y"
+          EQ "="
+          LITERAL
+            INT_NUMBER "2"
+        SEMI ";"
+      PROPERTY_DECL
+        MODIFIERS
+          PRIVATE_KW "private"
+          STATIC_KW "static"
+        NULLABLE_TYPE
+          QUESTION "?"
+          NAMED_TYPE
+            NAME_REF
+              IDENT "array"
+        PROPERTY_ELEM
+          VARIABLE "$p"
+          EQ "="
+          NAME_EXPR
+            NAME_REF
+              IDENT "null"
+        COMMA ","
+        PROPERTY_ELEM
+          VARIABLE "$q"
+        SEMI ";"
+      PROPERTY_DECL
+        MODIFIERS
+          PUBLIC_KW "public"
+          PRIVATE_KW "private"
+          L_PAREN "("
+          IDENT "set"
+          R_PAREN ")"
+        NAMED_TYPE
+          NAME_REF
+            IDENT "string"
+        PROPERTY_ELEM
+          VARIABLE "$name"
+          PROPERTY_HOOKS
+            L_CURLY "{"
+            PROPERTY_HOOK
+              NAME
+                IDENT "get"
+              FAT_ARROW "=>"
+              PROPERTY_FETCH_EXPR
+                VARIABLE_EXPR
+                  VARIABLE "$this"
+                ARROW "->"
+                NAME
+                  IDENT "name"
+              SEMI ";"
+            PROPERTY_HOOK
+              NAME
+                IDENT "set"
+              PARAM_LIST
+                L_PAREN "("
+                PARAM
+                  NAMED_TYPE
+                    NAME_REF
+                      IDENT "string"
+                  VARIABLE "$v"
+                R_PAREN ")"
+              BLOCK
+                L_CURLY "{"
+                EXPR_STMT
+                  ASSIGN_EXPR
+                    PROPERTY_FETCH_EXPR
+                      VARIABLE_EXPR
+                        VARIABLE "$this"
+                      ARROW "->"
+                      NAME
+                        IDENT "name"
+                    EQ "="
+                    VARIABLE_EXPR
+                      VARIABLE "$v"
+                  SEMI ";"
+                R_CURLY "}"
+            R_CURLY "}"
+      METHOD_DECL
+        MODIFIERS
+          PUBLIC_KW "public"
+        FUNCTION_KW "function"
+        NAME
+          IDENT "__construct"
+        PARAM_LIST
+          L_PAREN "("
+          PARAM
+            MODIFIERS
+              PRIVATE_KW "private"
+              READONLY_KW "readonly"
+            NAMED_TYPE
+              NAME_REF
+                IDENT "int"
+            VARIABLE "$id"
+            EQ "="
+            LITERAL
+              INT_NUMBER "0"
+          COMMA ","
+          PARAM
+            MODIFIERS
+              PROTECTED_KW "protected"
+            ELLIPSIS "..."
+            VARIABLE "$rest"
+          R_PAREN ")"
+        BLOCK
+          L_CURLY "{"
+          R_CURLY "}"
+      METHOD_DECL
+        MODIFIERS
+          ABSTRACT_KW "abstract"
+          PROTECTED_KW "protected"
+        FUNCTION_KW "function"
+        AMP "&"
+        NAME
+          IDENT "m"
+        PARAM_LIST
+          L_PAREN "("
+          PARAM
+            UNION_TYPE
+              NAMED_TYPE
+                NAME_REF
+                  IDENT "int"
+              PIPE "|"
+              NAMED_TYPE
+                NAME_REF
+                  IDENT "string"
+            VARIABLE "$a"
+          COMMA ","
+          PARAM
+            UNION_TYPE
+              PAREN_TYPE
+                L_PAREN "("
+                INTERSECTION_TYPE
+                  NAMED_TYPE
+                    NAME_REF
+                      IDENT "A"
+                  AMP "&"
+                  NAMED_TYPE
+                    NAME_REF
+                      IDENT "B"
+                R_PAREN ")"
+              PIPE "|"
+              NAMED_TYPE
+                NAME_REF
+                  IDENT "null"
+            VARIABLE "$b"
+          COMMA ","
+          PARAM
+            NAMED_TYPE
+              NAME_REF
+                IDENT "Foo"
+            AMP "&"
+            VARIABLE "$c"
+          R_PAREN ")"
+        RETURN_TYPE
+          COLON ":"
+          NAMED_TYPE
+            NAME_REF
+              IDENT "static"
+        SEMI ";"
+      R_CURLY "}"

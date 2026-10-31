@@ -1,0 +1,22 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(concat!\n(\"<?php\\n\", \"?>\\n<h1><?= $title ?></h1>\\n<?php echo 'x' ?>\\n\"), Dialect ::\nPhp)"
+---
+SOURCE_FILE
+  OPEN_TAG "<?php\n"
+  CLOSE_TAG "?>\n"
+  INLINE_HTML_STMT
+    INLINE_HTML "<h1>"
+  ECHO_TAG_STMT
+    OPEN_TAG_WITH_ECHO "<?="
+    VARIABLE_EXPR
+      VARIABLE "$title"
+  CLOSE_TAG "?>"
+  INLINE_HTML_STMT
+    INLINE_HTML "</h1>\n"
+  OPEN_TAG "<?php "
+  ECHO_STMT
+    ECHO_KW "echo"
+    STRING_LITERAL
+      STRING_SINGLE "'x'"
+  CLOSE_TAG "?>\n"

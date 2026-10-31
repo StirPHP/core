@@ -1,0 +1,79 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"$s = \\\"a $b {$c->d} ${e} $f[0]\\\";\\n$h = <<<EOT\\n  x $y\\n  EOT;\\n$n = <<<'N'\\nraw\\nN;\\n$sh = `ls`;\\n\"),\nDialect :: Php)"
+---
+SOURCE_FILE
+  OPEN_TAG "<?php\n"
+  EXPR_STMT
+    ASSIGN_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$s"
+      EQ "="
+      INTERP_STRING
+        DQUOTE "\""
+        STRING_CONTENT "a "
+        INTERP_VAR
+          VARIABLE_EXPR
+            VARIABLE "$b"
+        STRING_CONTENT " "
+        INTERP_EXPR
+          CURLY_OPEN "{"
+          PROPERTY_FETCH_EXPR
+            VARIABLE_EXPR
+              VARIABLE "$c"
+            ARROW "->"
+            NAME
+              IDENT "d"
+          R_CURLY "}"
+        STRING_CONTENT " "
+        INTERP_EXPR
+          DOLLAR_CURLY_OPEN "${"
+          NAME_EXPR
+            NAME_REF
+              IDENT "e"
+          R_CURLY "}"
+        STRING_CONTENT " "
+        INTERP_VAR
+          INDEX_EXPR
+            VARIABLE_EXPR
+              VARIABLE "$f"
+            L_BRACK "["
+            LITERAL
+              INT_NUMBER "0"
+            R_BRACK "]"
+        DQUOTE "\""
+    SEMI ";"
+  EXPR_STMT
+    ASSIGN_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$h"
+      EQ "="
+      HEREDOC
+        HEREDOC_START "<<<EOT\n"
+        STRING_CONTENT "  x "
+        INTERP_VAR
+          VARIABLE_EXPR
+            VARIABLE "$y"
+        STRING_CONTENT "\n"
+        HEREDOC_END "  EOT"
+    SEMI ";"
+  EXPR_STMT
+    ASSIGN_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$n"
+      EQ "="
+      HEREDOC
+        HEREDOC_START "<<<'N'\n"
+        STRING_CONTENT "raw\n"
+        HEREDOC_END "N"
+    SEMI ";"
+  EXPR_STMT
+    ASSIGN_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$sh"
+      EQ "="
+      SHELL_EXEC
+        BACKTICK "`"
+        STRING_CONTENT "ls"
+        BACKTICK "`"
+    SEMI ";"

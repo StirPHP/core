@@ -1,0 +1,43 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(\"typealias Status = \\\"active\\\" | \\\"banned\\\"\\nval s: Status = \\\"active\\\"\\nval x: Int | String = 1\\n\",\nDialect :: Stir)"
+---
+SOURCE_FILE
+  TYPEALIAS_DECL
+    IDENT "typealias"
+    NAME
+      IDENT "Status"
+    EQ "="
+    UNION_TYPE
+      LITERAL_TYPE
+        STRING_DOUBLE "\"active\""
+      PIPE "|"
+      LITERAL_TYPE
+        STRING_DOUBLE "\"banned\""
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "s"
+    COLON ":"
+    NAMED_TYPE
+      NAME_REF
+        IDENT "Status"
+    EQ "="
+    STRING_LITERAL
+      STRING_DOUBLE "\"active\""
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "x"
+    COLON ":"
+    UNION_TYPE
+      NAMED_TYPE
+        NAME_REF
+          IDENT "Int"
+      PIPE "|"
+      NAMED_TYPE
+        NAME_REF
+          IDENT "String"
+    EQ "="
+    LITERAL
+      INT_NUMBER "1"

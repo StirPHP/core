@@ -1,0 +1,91 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(\"function greet(name: String, mut times: Int = 1): String {\\n    var $out = \\\"\\\"\\n    while (times > 0) {\\n        $out = $out . \\\"Hello, ${name}! \\\"\\n        times -= 1\\n    }\\n    return $out\\n}\\n\",\nDialect :: Stir)"
+---
+SOURCE_FILE
+  FUNCTION_DECL
+    FUNCTION_KW "function"
+    NAME
+      IDENT "greet"
+    PARAM_LIST
+      L_PAREN "("
+      PARAM
+        NAME
+          IDENT "name"
+        COLON ":"
+        NAMED_TYPE
+          NAME_REF
+            IDENT "String"
+      COMMA ","
+      PARAM
+        IDENT "mut"
+        NAME
+          IDENT "times"
+        COLON ":"
+        NAMED_TYPE
+          NAME_REF
+            IDENT "Int"
+        EQ "="
+        LITERAL
+          INT_NUMBER "1"
+      R_PAREN ")"
+    RETURN_TYPE
+      COLON ":"
+      NAMED_TYPE
+        NAME_REF
+          IDENT "String"
+    BLOCK
+      L_CURLY "{"
+      VAR_DECL
+        VAR_KW "var"
+        VARIABLE "$out"
+        EQ "="
+        STRING_LITERAL
+          STRING_DOUBLE "\"\""
+      WHILE_STMT
+        WHILE_KW "while"
+        L_PAREN "("
+        BIN_EXPR
+          NAME_EXPR
+            NAME_REF
+              IDENT "times"
+          R_ANGLE ">"
+          LITERAL
+            INT_NUMBER "0"
+        R_PAREN ")"
+        BLOCK
+          L_CURLY "{"
+          EXPR_STMT
+            ASSIGN_EXPR
+              VARIABLE_EXPR
+                VARIABLE "$out"
+              EQ "="
+              BIN_EXPR
+                VARIABLE_EXPR
+                  VARIABLE "$out"
+                DOT "."
+                INTERP_STRING
+                  DQUOTE "\""
+                  STRING_CONTENT "Hello, "
+                  INTERP_EXPR
+                    DOLLAR_CURLY_OPEN "${"
+                    NAME_EXPR
+                      NAME_REF
+                        IDENT "name"
+                    R_CURLY "}"
+                  STRING_CONTENT "! "
+                  DQUOTE "\""
+          EXPR_STMT
+            ASSIGN_EXPR
+              NAME_EXPR
+                NAME_REF
+                  IDENT "times"
+              MINUS_EQ "-="
+              LITERAL
+                INT_NUMBER "1"
+          R_CURLY "}"
+      RETURN_STMT
+        RETURN_KW "return"
+        VARIABLE_EXPR
+          VARIABLE "$out"
+      R_CURLY "}"

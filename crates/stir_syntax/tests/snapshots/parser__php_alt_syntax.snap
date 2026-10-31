@@ -1,0 +1,98 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"if ($a): ?>yes<?php elseif ($b): echo 1; else: echo 2; endif;\\nforeach ($a as $b): endforeach;\\nwhile (0): endwhile;\\nfor (;;): break; endfor;\\nswitch ($a): case 1: break; endswitch;\\n\"),\nDialect :: Php)"
+---
+SOURCE_FILE
+  OPEN_TAG "<?php\n"
+  IF_STMT
+    IF_KW "if"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$a"
+    R_PAREN ")"
+    BLOCK
+      COLON ":"
+      CLOSE_TAG "?>"
+      INLINE_HTML_STMT
+        INLINE_HTML "yes"
+      OPEN_TAG "<?php "
+    ELSEIF_CLAUSE
+      ELSEIF_KW "elseif"
+      L_PAREN "("
+      VARIABLE_EXPR
+        VARIABLE "$b"
+      R_PAREN ")"
+      BLOCK
+        COLON ":"
+        ECHO_STMT
+          ECHO_KW "echo"
+          LITERAL
+            INT_NUMBER "1"
+          SEMI ";"
+    ELSE_CLAUSE
+      ELSE_KW "else"
+      BLOCK
+        COLON ":"
+        ECHO_STMT
+          ECHO_KW "echo"
+          LITERAL
+            INT_NUMBER "2"
+          SEMI ";"
+    ENDIF_KW "endif"
+    SEMI ";"
+  FOREACH_STMT
+    FOREACH_KW "foreach"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$a"
+    AS_KW "as"
+    VARIABLE_EXPR
+      VARIABLE "$b"
+    R_PAREN ")"
+    BLOCK
+      COLON ":"
+    ENDFOREACH_KW "endforeach"
+    SEMI ";"
+  WHILE_STMT
+    WHILE_KW "while"
+    L_PAREN "("
+    LITERAL
+      INT_NUMBER "0"
+    R_PAREN ")"
+    BLOCK
+      COLON ":"
+    ENDWHILE_KW "endwhile"
+    SEMI ";"
+  FOR_STMT
+    FOR_KW "for"
+    L_PAREN "("
+    FOR_INIT
+    SEMI ";"
+    FOR_COND
+    SEMI ";"
+    FOR_STEP
+    R_PAREN ")"
+    BLOCK
+      COLON ":"
+      BREAK_STMT
+        BREAK_KW "break"
+        SEMI ";"
+    ENDFOR_KW "endfor"
+    SEMI ";"
+  SWITCH_STMT
+    SWITCH_KW "switch"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$a"
+    R_PAREN ")"
+    COLON ":"
+    SWITCH_CASE
+      CASE_KW "case"
+      LITERAL
+        INT_NUMBER "1"
+      COLON ":"
+      BREAK_STMT
+        BREAK_KW "break"
+        SEMI ";"
+    ENDSWITCH_KW "endswitch"
+    SEMI ";"

@@ -1,0 +1,33 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(concat! (\"<?php\\n\", \"!$a = foo(); $a + $b = 3;\"), Dialect :: Php)"
+---
+SOURCE_FILE
+  OPEN_TAG "<?php\n"
+  EXPR_STMT
+    PREFIX_EXPR
+      BANG "!"
+      ASSIGN_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$a"
+        EQ "="
+        CALL_EXPR
+          NAME_EXPR
+            NAME_REF
+              IDENT "foo"
+          ARG_LIST
+            L_PAREN "("
+            R_PAREN ")"
+    SEMI ";"
+  EXPR_STMT
+    BIN_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$a"
+      PLUS "+"
+      ASSIGN_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$b"
+        EQ "="
+        LITERAL
+          INT_NUMBER "3"
+    SEMI ";"

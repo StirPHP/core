@@ -1,0 +1,22 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "parse(\"<?php $a = ; if ($b { }\", Dialect::Php).debug_tree()"
+---
+SOURCE_FILE
+  OPEN_TAG "<?php "
+  EXPR_STMT
+    ASSIGN_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$a"
+      EQ "="
+    SEMI ";"
+  IF_STMT
+    IF_KW "if"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$b"
+    BLOCK
+      L_CURLY "{"
+      R_CURLY "}"
+error 11..12: expected an expression
+error 20..21: expected `)`

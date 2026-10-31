@@ -1,0 +1,87 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(\"val d = when (x) {\\n    is Int -> \\\"int\\\"\\n    is String, null -> \\\"other\\\"\\n    !is Bool -> \\\"no\\\"\\n    else -> \\\"?\\\"\\n}\\nwhen {\\n    a > b -> echo 1\\n    else -> { echo 2 }\\n}\\n\",\nDialect :: Stir)"
+---
+SOURCE_FILE
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "d"
+    EQ "="
+    WHEN_EXPR
+      IDENT "when"
+      L_PAREN "("
+      NAME_EXPR
+        NAME_REF
+          IDENT "x"
+      R_PAREN ")"
+      L_CURLY "{"
+      WHEN_ARM
+        WHEN_CONDITION
+          IDENT "is"
+          NAMED_TYPE
+            NAME_REF
+              IDENT "Int"
+        ARROW "->"
+        STRING_LITERAL
+          STRING_DOUBLE "\"int\""
+      WHEN_ARM
+        WHEN_CONDITION
+          IDENT "is"
+          NAMED_TYPE
+            NAME_REF
+              IDENT "String"
+        COMMA ","
+        WHEN_CONDITION
+          NAME_EXPR
+            NAME_REF
+              IDENT "null"
+        ARROW "->"
+        STRING_LITERAL
+          STRING_DOUBLE "\"other\""
+      WHEN_ARM
+        WHEN_CONDITION
+          BANG "!"
+          IDENT "is"
+          NAMED_TYPE
+            NAME_REF
+              IDENT "Bool"
+        ARROW "->"
+        STRING_LITERAL
+          STRING_DOUBLE "\"no\""
+      WHEN_ARM
+        ELSE_KW "else"
+        ARROW "->"
+        STRING_LITERAL
+          STRING_DOUBLE "\"?\""
+      R_CURLY "}"
+  EXPR_STMT
+    WHEN_EXPR
+      IDENT "when"
+      L_CURLY "{"
+      WHEN_ARM
+        WHEN_CONDITION
+          BIN_EXPR
+            NAME_EXPR
+              NAME_REF
+                IDENT "a"
+            R_ANGLE ">"
+            NAME_EXPR
+              NAME_REF
+                IDENT "b"
+        ARROW "->"
+        ECHO_STMT
+          ECHO_KW "echo"
+          LITERAL
+            INT_NUMBER "1"
+      WHEN_ARM
+        ELSE_KW "else"
+        ARROW "->"
+        BLOCK
+          L_CURLY "{"
+          ECHO_STMT
+            ECHO_KW "echo"
+            LITERAL
+              INT_NUMBER "2"
+          R_CURLY "}"
+      R_CURLY "}"

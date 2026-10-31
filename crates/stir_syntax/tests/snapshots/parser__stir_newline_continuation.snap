@@ -1,0 +1,44 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(\"val s = $a\\n    ->trim()\\n    ?->upper()\\n    . \\\"x\\\"\\nval t = 1\\n-2\\n\",\nDialect :: Stir)"
+---
+SOURCE_FILE
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "s"
+    EQ "="
+    BIN_EXPR
+      NULLSAFE_METHOD_CALL_EXPR
+        NULLSAFE_PROPERTY_FETCH_EXPR
+          METHOD_CALL_EXPR
+            PROPERTY_FETCH_EXPR
+              VARIABLE_EXPR
+                VARIABLE "$a"
+              ARROW "->"
+              NAME
+                IDENT "trim"
+            ARG_LIST
+              L_PAREN "("
+              R_PAREN ")"
+          NULLSAFE_ARROW "?->"
+          NAME
+            IDENT "upper"
+        ARG_LIST
+          L_PAREN "("
+          R_PAREN ")"
+      DOT "."
+      STRING_LITERAL
+        STRING_DOUBLE "\"x\""
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "t"
+    EQ "="
+    LITERAL
+      INT_NUMBER "1"
+  EXPR_STMT
+    PREFIX_EXPR
+      MINUS "-"
+      LITERAL
+        INT_NUMBER "2"

@@ -1,0 +1,39 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(concat!\n(\"<?php\\n\", \"declare(strict_types=1);\\ndeclare(ticks=1) { f(); }\\n\"), Dialect\n:: Php)"
+---
+SOURCE_FILE
+  OPEN_TAG "<?php\n"
+  DECLARE_STMT
+    DECLARE_KW "declare"
+    L_PAREN "("
+    DECLARE_ITEM
+      NAME
+        IDENT "strict_types"
+      EQ "="
+      LITERAL
+        INT_NUMBER "1"
+    R_PAREN ")"
+    SEMI ";"
+  DECLARE_STMT
+    DECLARE_KW "declare"
+    L_PAREN "("
+    DECLARE_ITEM
+      NAME
+        IDENT "ticks"
+      EQ "="
+      LITERAL
+        INT_NUMBER "1"
+    R_PAREN ")"
+    BLOCK
+      L_CURLY "{"
+      EXPR_STMT
+        CALL_EXPR
+          NAME_EXPR
+            NAME_REF
+              IDENT "f"
+          ARG_LIST
+            L_PAREN "("
+            R_PAREN ")"
+        SEMI ";"
+      R_CURLY "}"

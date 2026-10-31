@@ -1,0 +1,102 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(\"users->filter { it->active }->map { u -> u->name }\\nrun { echo 1 }\\nxs->fold(0) { acc, x: Int -> acc + x }\\n\",\nDialect :: Stir)"
+---
+SOURCE_FILE
+  EXPR_STMT
+    METHOD_CALL_EXPR
+      PROPERTY_FETCH_EXPR
+        METHOD_CALL_EXPR
+          PROPERTY_FETCH_EXPR
+            NAME_EXPR
+              NAME_REF
+                IDENT "users"
+            ARROW "->"
+            NAME
+              IDENT "filter"
+          ARG_LIST
+            LAMBDA_EXPR
+              L_CURLY "{"
+              EXPR_STMT
+                PROPERTY_FETCH_EXPR
+                  NAME_EXPR
+                    NAME_REF
+                      IDENT "it"
+                  ARROW "->"
+                  NAME
+                    IDENT "active"
+              R_CURLY "}"
+        ARROW "->"
+        NAME
+          IDENT "map"
+      ARG_LIST
+        LAMBDA_EXPR
+          L_CURLY "{"
+          LAMBDA_PARAM_LIST
+            PARAM
+              NAME
+                IDENT "u"
+          ARROW "->"
+          EXPR_STMT
+            PROPERTY_FETCH_EXPR
+              NAME_EXPR
+                NAME_REF
+                  IDENT "u"
+              ARROW "->"
+              NAME
+                IDENT "name"
+          R_CURLY "}"
+  EXPR_STMT
+    CALL_EXPR
+      NAME_EXPR
+        NAME_REF
+          IDENT "run"
+      ARG_LIST
+        LAMBDA_EXPR
+          L_CURLY "{"
+          ECHO_STMT
+            ECHO_KW "echo"
+            LITERAL
+              INT_NUMBER "1"
+          R_CURLY "}"
+  EXPR_STMT
+    METHOD_CALL_EXPR
+      PROPERTY_FETCH_EXPR
+        NAME_EXPR
+          NAME_REF
+            IDENT "xs"
+        ARROW "->"
+        NAME
+          IDENT "fold"
+      ARG_LIST
+        L_PAREN "("
+        ARG
+          LITERAL
+            INT_NUMBER "0"
+        R_PAREN ")"
+      ARG
+        LAMBDA_EXPR
+          L_CURLY "{"
+          LAMBDA_PARAM_LIST
+            PARAM
+              NAME
+                IDENT "acc"
+            COMMA ","
+            PARAM
+              NAME
+                IDENT "x"
+              COLON ":"
+              NAMED_TYPE
+                NAME_REF
+                  IDENT "Int"
+          ARROW "->"
+          EXPR_STMT
+            BIN_EXPR
+              NAME_EXPR
+                NAME_REF
+                  IDENT "acc"
+              PLUS "+"
+              NAME_EXPR
+                NAME_REF
+                  IDENT "x"
+          R_CURLY "}"
