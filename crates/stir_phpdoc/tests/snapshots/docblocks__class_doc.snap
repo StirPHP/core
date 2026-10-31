@@ -1,0 +1,51 @@
+---
+source: crates/stir_phpdoc/tests/docblocks.rs
+expression: "format! (\"{src}\\n---\\n{}\", dump(src, 1000))"
+---
+/**
+ * @phpstan-type UserShape array{
+ *     id: int,
+ *     name?: non-empty-string,
+ * }
+ * @phpstan-type Id int
+ * @psalm-type Name = string
+ * @phpstan-import-type Foo from \Other\Klass as Bar
+ * @phpstan-import-type Baz from Klass
+ * @extends Base<int, string>
+ * @implements \IteratorAggregate<int, T>
+ * @use SomeTrait<T>
+ * @template-extends Legacy<int>
+ * @property int $id
+ * @property-read string $name read only
+ * @property-write ?Foo $foo
+ * @method static self create(int $a, string $b = 'x', ...$rest) Factory
+ * @method int count()
+ * @method foo()
+ * @method static bar(array $opts = [1, 2])
+ * @method static static make()
+ * @method T get<T of object>(class-string<T> $cls)
+ * @method void cb(callable(int): void $cb, &$out)
+ */
+---
+range: 1000..1748
+summary: -
+description: -
+@phpstan-type [Phpstan] 1007..1090: TypeAlias UserShape = (array{} (id: int) (name?: non-empty-string)) @1031..1090
+@phpstan-type [Phpstan] 1094..1114: TypeAlias Id = int @1111..1114
+@psalm-type [Psalm] 1118..1143: TypeAlias Name = string @1137..1143
+@phpstan-import-type [Phpstan] 1147..1196: TypeAliasImport Foo from \Other\Klass @1177..1189 as Bar
+@phpstan-import-type [Phpstan] 1200..1235: TypeAliasImport Baz from Klass @1230..1235 as -
+@extends [None] 1239..1265: Extends (<> Base int string) @1248..1265 desc=-
+@implements [None] 1269..1307: Implements (<> \IteratorAggregate int T) @1281..1307 desc=-
+@use [None] 1311..1328: Use (<> SomeTrait T) @1316..1328 desc=-
+@template-extends [None] 1332..1361: Extends (<> Legacy int) @1350..1361 desc=-
+@property [None] 1365..1382: Property ReadWrite int @1375..1378 $id desc=-
+@property-read [None] 1386..1423: Property Read string @1401..1407 $name desc="read only"@1414..1423
+@property-write [None] 1427..1452: Property Write (? Foo) @1443..1447 $foo desc=-
+@method [None] 1456..1525: Method static=true ret=self @1471..1475 name=create@1476..1482 templates=[] params=[(int $a default=-) (string $b default="'x'"@1503..1506) (- ...$rest default=-) ] desc="Factory"@1518..1525
+@method [None] 1529..1548: Method static=false ret=int @1537..1540 name=count@1541..1546 templates=[] params=[] desc=-
+@method [None] 1552..1565: Method static=false ret=- name=foo@1560..1563 templates=[] params=[] desc=-
+@method [None] 1569..1609: Method static=false ret=static @1577..1583 name=bar@1584..1587 templates=[] params=[(array $opts default="[1, 2]"@1602..1608) ] desc=-
+@method [None] 1613..1641: Method static=true ret=static @1628..1634 name=make@1635..1639 templates=[] params=[] desc=-
+@method [None] 1645..1693: Method static=false ret=T @1653..1654 name=get@1655..1658 templates=[T of=object @1664..1670 super=- default=-] params=[(class-string<T> $cls default=-) ] desc=-
+@method [None] 1697..1744: Method static=false ret=void @1705..1709 name=cb@1710..1712 templates=[] params=[(callable(int): void $cb default=-) (- &$out default=-) ] desc=-

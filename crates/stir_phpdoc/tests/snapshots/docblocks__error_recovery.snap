@@ -1,0 +1,27 @@
+---
+source: crates/stir_phpdoc/tests/docblocks.rs
+expression: "format! (\"{src}\\n---\\n{}\", dump(src, 1000))"
+---
+/**
+ * @param array<int $x description
+ * @param int|, $y
+ * @return array{a: int,
+ *   b: }
+ * @template
+ * @property int
+ * @var callable(int) $cb
+ * @method
+ * @throws
+ */
+---
+range: 1000..1174
+summary: -
+description: -
+@param [None] 1007..1038: Param ty=<error "Unexpected '$x', expected ',' or '>'" @1014..1023> ref=false variadic=false name=$x@1024..1026 desc="description"@1027..1038
+@param [None] 1042..1057: Param ty=<error "Unexpected ',', expected type" @1049..1054> ref=false variadic=false name=$y@1055..1057 desc=-
+@return [None] 1061..1092: Return <error "Unexpected '}', expected type" @1069..1092> desc=-
+@template [None] 1096..1105: Invalid "Unexpected end of input, expected template name" text=-
+@property [None] 1109..1122: Invalid "Unexpected end of input, expected property name" text=-
+@var [None] 1126..1148: Var <error "Unexpected '$cb', expected ':' and a return type" @1131..1144> name=$cb@1145..1148 desc=-
+@method [None] 1152..1159: Invalid "Unexpected end of input, expected method name" text=-
+@throws [None] 1163..1170: Throws <error "Unexpected end of line, expected type" @1170..1170> desc=-

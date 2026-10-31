@@ -1,0 +1,55 @@
+---
+source: crates/stir_phpdoc/tests/types.rs
+expression: "render(&[\"array{}\", \"array{a: int, 'b'?: string, 0: x, \\\"c d\\\": bool}\",\n\"array{int, string}\", \"array{a: int, ...}\", \"array{a: int, ...<string, int>}\",\n\"array{a: int, ...<int>}\", \"list{int, string, ...}\", \"list{int, ...<string>}\",\n\"non-empty-array{a: int}\", \"array{int: string, list: int}\",\n\"array{a?: array{b: list<int>}}\", \"array{\\n  a: int,\\n  b: string,\\n}\",\n\"array{Foo::BAR, int}\", \"object{a: int, b?: string}\", \"object{'a b': int}\",\n\"object{}\",])"
+---
+array{}
+  = array{}
+  = (array{})
+array{a: int, 'b'?: string, 0: x, "c d": bool}
+  = array{a: int, 'b'?: string, 0: x, "c d": bool}
+  = (array{} (a: int) ('b'?: string) (0: x) ("c d": bool))
+array{int, string}
+  = array{int, string}
+  = (array{} (int) (string))
+array{a: int, ...}
+  = array{a: int, ...}
+  = (array{} (a: int) (...))
+array{a: int, ...<string, int>}
+  = array{a: int, ...<string, int>}
+  = (array{} (a: int) (... string int))
+array{a: int, ...<int>}
+  = array{a: int, ...<int>}
+  = (array{} (a: int) (... int))
+list{int, string, ...}
+  = list{int, string, ...}
+  = (list{} (int) (string) (...))
+list{int, ...<string>}
+  = list{int, ...<string>}
+  = (list{} (int) (... string))
+non-empty-array{a: int}
+  = non-empty-array{a: int}
+  = (non-empty-array{} (a: int))
+array{int: string, list: int}
+  = array{int: string, list: int}
+  = (array{} (int: string) (list: int))
+array{a?: array{b: list<int>}}
+  = array{a?: array{b: list<int>}}
+  = (array{} (a?: (array{} (b: (<> list int)))))
+array{
+  a: int,
+  b: string,
+}
+  = array{a: int, b: string}
+  = (array{} (a: int) (b: string))
+array{Foo::BAR, int}
+  = array{Foo::BAR, int}
+  = (array{} ((const Foo::BAR)) (int))
+object{a: int, b?: string}
+  = object{a: int, b?: string}
+  = (object{} (a: int) (b?: string))
+object{'a b': int}
+  = object{'a b': int}
+  = (object{} ('a b': int))
+object{}
+  = object{}
+  = (object{})

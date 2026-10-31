@@ -1,0 +1,14 @@
+---
+source: crates/stir_neon/tests/syntax.rs
+expression: "render(&[\"a: '''\\n    line one\\n      indented\\n    line three\\n'''\",\n\"a: \\\"\\\"\\\"\\n  tab\\\\there\\n  second\\n  \\\"\\\"\\\"\", \"'''\\n'''\",\n\"x: '''\\n\\n    after blank\\n    '''\\nnext: 1\", \"'''\\nunterminated\",])"
+---
+"a: '''\n    line one\n      indented\n    line three\n'''"
+  => {"a": "line one\n  indented\nline three"}
+"a: \"\"\"\n  tab\\there\n  second\n  \"\"\""
+  => {"a": "tab\there\nsecond"}
+"'''\n'''"
+  => ""
+"x: '''\n\n    after blank\n    '''\nnext: 1"
+  => {"x": "\nafter blank", "next": 1}
+"'''\nunterminated"
+  => ERROR: Unterminated multi-line string on line 1 at column 1

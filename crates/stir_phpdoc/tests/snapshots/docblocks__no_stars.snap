@@ -1,0 +1,14 @@
+---
+source: crates/stir_phpdoc/tests/docblocks.rs
+expression: "format! (\"{src}\\n---\\n{}\", dump(src, 1000))"
+---
+/**
+    @param int $a
+    @return void
+*/
+---
+range: 1000..1041
+summary: -
+description: -
+@param [None] 1008..1021: Param ty=int @1015..1018 ref=false variadic=false name=$a@1019..1021 desc=-
+@return [None] 1026..1038: Return void @1034..1038 desc=-

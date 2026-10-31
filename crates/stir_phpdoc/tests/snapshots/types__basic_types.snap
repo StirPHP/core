@@ -1,0 +1,58 @@
+---
+source: crates/stir_phpdoc/tests/types.rs
+expression: "render(&[\"int\", \"\\\\Foo\\\\Bar\", \"Foo\\\\Bar\", \"non-empty-string\", \"$this\",\n\"static\", \"?int\", \"?int[]\", \"?Foo<int>\", \"int|string|null\", \"A&B&C\",\n\"(A&B)|C\", \"(A|B)&C\", \"(int|string)[]\", \"int[][]\", \"?(int|string)\",\n\"array-key\", \"  int  \",])"
+---
+int
+  = int
+  = int
+\Foo\Bar
+  = \Foo\Bar
+  = \Foo\Bar
+Foo\Bar
+  = Foo\Bar
+  = Foo\Bar
+non-empty-string
+  = non-empty-string
+  = non-empty-string
+$this
+  = $this
+  = $this
+static
+  = static
+  = static
+?int
+  = ?int
+  = (? int)
+?int[]
+  = ?int[]
+  = (? ([] int))
+?Foo<int>
+  = ?Foo<int>
+  = (? (<> Foo int))
+int|string|null
+  = int|string|null
+  = (| int string null)
+A&B&C
+  = A&B&C
+  = (& A B C)
+(A&B)|C
+  = (A&B)|C
+  = (| (& A B) C)
+(A|B)&C
+  = (A|B)&C
+  = (& (| A B) C)
+(int|string)[]
+  = (int|string)[]
+  = ([] (| int string))
+int[][]
+  = int[][]
+  = ([] ([] int))
+?(int|string)
+  = ?(int|string)
+  = (? (| int string))
+array-key
+  = array-key
+  = array-key
+  int  
+  = int
+  = int

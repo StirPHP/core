@@ -1,0 +1,13 @@
+---
+source: crates/stir_phpdoc/tests/docblocks.rs
+expression: "format! (\"{src}\\n---\\n{}\", dump(src, 1000))"
+---
+/**
+ * Just a summary.
+ *
+ * And a description {@see Foo} with inline tag.
+ */
+---
+range: 1000..1078
+summary: "Just a summary."@1007..1022
+description: "And a description {@see Foo} with inline tag."@1029..1074

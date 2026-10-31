@@ -1,0 +1,70 @@
+---
+source: crates/stir_phpdoc/tests/types.rs
+expression: "render(&[\"array<int, string>\", \"array<string, array<int, list<Foo>>>\",\n\"Collection<int, covariant Foo>\", \"Bar<contravariant T, *>\", \"Foo<covariant>\",\n\"list<int>\", \"non-empty-list<string>\", \"iterable<int, Foo>\",\n\"class-string<T>\", \"key-of<T>\", \"value-of<Foo::BAR>\", \"int<0, max>\",\n\"int<min, 5>\", \"int<-5, 0x10>\", \"array<int,>\", \"array<\\n  int,\\n  string\\n>\",\n\"Generator<int, string, mixed, void>\", \"T[K]\", \"T[K][]\", \"Foo<int>[]\",\n\"int-mask-of<Foo::BAR_*>\",])"
+---
+array<int, string>
+  = array<int, string>
+  = (<> array int string)
+array<string, array<int, list<Foo>>>
+  = array<string, array<int, list<Foo>>>
+  = (<> array string (<> array int (<> list Foo)))
+Collection<int, covariant Foo>
+  = Collection<int, covariant Foo>
+  = (<> Collection int (covariant Foo))
+Bar<contravariant T, *>
+  = Bar<contravariant T, *>
+  = (<> Bar (contravariant T) *)
+Foo<covariant>
+  = Foo<covariant>
+  = (<> Foo covariant)
+list<int>
+  = list<int>
+  = (<> list int)
+non-empty-list<string>
+  = non-empty-list<string>
+  = (<> non-empty-list string)
+iterable<int, Foo>
+  = iterable<int, Foo>
+  = (<> iterable int Foo)
+class-string<T>
+  = class-string<T>
+  = (<> class-string T)
+key-of<T>
+  = key-of<T>
+  = (<> key-of T)
+value-of<Foo::BAR>
+  = value-of<Foo::BAR>
+  = (<> value-of (const Foo::BAR))
+int<0, max>
+  = int<0, max>
+  = (<> int (const 0) max)
+int<min, 5>
+  = int<min, 5>
+  = (<> int min (const 5))
+int<-5, 0x10>
+  = int<-5, 0x10>
+  = (<> int (const -5) (const 0x10))
+array<int,>
+  = array<int>
+  = (<> array int)
+array<
+  int,
+  string
+>
+  = array<int, string>
+  = (<> array int string)
+Generator<int, string, mixed, void>
+  = Generator<int, string, mixed, void>
+  = (<> Generator int string mixed void)
+T[K]
+  = T[K]
+  = (offset T K)
+T[K][]
+  = T[K][]
+  = ([] (offset T K))
+Foo<int>[]
+  = Foo<int>[]
+  = ([] (<> Foo int))
+int-mask-of<Foo::BAR_*>
+  = int-mask-of<Foo::BAR_*>
+  = (<> int-mask-of (const Foo::BAR_*))

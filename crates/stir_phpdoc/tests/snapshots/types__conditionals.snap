@@ -1,0 +1,25 @@
+---
+source: crates/stir_phpdoc/tests/types.rs
+expression: "render(&[\"($x is int ? string : bool)\", \"($x is not null ? Foo : Bar)\",\n\"(T is int ? A : B)\", \"(T is not array<int> ? A|B : C)\",\n\"(T is int ? A : T is string ? B : C)\",\n\"($size is positive-int ? non-empty-list<T> : list<T>)\",\n\"(T is int ? (U is string ? A : B) : C)\",])"
+---
+($x is int ? string : bool)
+  = ($x is int ? string : bool)
+  = (cond $x is int string bool)
+($x is not null ? Foo : Bar)
+  = ($x is not null ? Foo : Bar)
+  = (cond $x is-not null Foo Bar)
+(T is int ? A : B)
+  = (T is int ? A : B)
+  = (cond T is int A B)
+(T is not array<int> ? A|B : C)
+  = (T is not array<int> ? A|B : C)
+  = (cond T is-not (<> array int) (| A B) C)
+(T is int ? A : T is string ? B : C)
+  = (T is int ? A : (T is string ? B : C))
+  = (cond T is int A (cond T is string B C))
+($size is positive-int ? non-empty-list<T> : list<T>)
+  = ($size is positive-int ? non-empty-list<T> : list<T>)
+  = (cond $size is positive-int (<> non-empty-list T) (<> list T))
+(T is int ? (U is string ? A : B) : C)
+  = (T is int ? (U is string ? A : B) : C)
+  = (cond T is int (cond U is string A B) C)

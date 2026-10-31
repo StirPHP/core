@@ -1,0 +1,18 @@
+---
+source: crates/stir_neon/tests/syntax.rs
+expression: "render(&[\"Foo()\", \"Foo(a, b: c)\", \"Foo(1)::bar(2)\", \"@foo::bar(1)::baz\",\n\"Column(type: string, length: 255)\", \"key: Foo(a)\",\n\"- Foo(\\n    bar: 1\\n  )\",])"
+---
+"Foo()"
+  => "Foo"()
+"Foo(a, b: c)"
+  => "Foo"(0: "a", "b": "c")
+"Foo(1)::bar(2)"
+  => "Foo"(1) "::bar"(2)
+"@foo::bar(1)::baz"
+  => "@foo::bar"(1) "::baz"()
+"Column(type: string, length: 255)"
+  => "Column"("type": "string", "length": 255)
+"key: Foo(a)"
+  => {"key": "Foo"("a")}
+"- Foo(\n    bar: 1\n  )"
+  => ["Foo"("bar": 1)]

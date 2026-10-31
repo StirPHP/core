@@ -1,0 +1,40 @@
+---
+source: crates/stir_phpdoc/tests/types.rs
+expression: "render(&[\"\", \"array<int\", \"array{a: }\", \"int|\", \"callable(int)\", \"Foo::\",\n\"int string\", \"?int|string\", \"A|B&C\", \"($x ? A : B)\", \"<int>\", \")\",])"
+---
+
+  = <error>
+  = (error "Unexpected end of input, expected type")
+array<int
+  = <error>
+  = (error "Unexpected end of input, expected ',' or '>'")
+array{a: }
+  = <error>
+  = (error "Unexpected '}', expected type")
+int|
+  = <error>
+  = (error "Unexpected end of input, expected type")
+callable(int)
+  = <error>
+  = (error "Unexpected end of input, expected ':' and a return type")
+Foo::
+  = <error>
+  = (error "Unexpected end of input, expected constant name")
+int string
+  = <error>
+  = (error "Unexpected 'string', expected end of type")
+?int|string
+  = <error>
+  = (error "Unexpected '|', expected end of type")
+A|B&C
+  = <error>
+  = (error "Unexpected '&', expected end of type")
+($x ? A : B)
+  = <error>
+  = (error "Unexpected '?', expected 'is'")
+<int>
+  = <error>
+  = (error "Unexpected '<', expected type")
+)
+  = <error>
+  = (error "Unexpected ')', expected type")

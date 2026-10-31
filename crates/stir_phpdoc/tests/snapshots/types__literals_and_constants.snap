@@ -1,0 +1,58 @@
+---
+source: crates/stir_phpdoc/tests/types.rs
+expression: "render(&[\"1\", \"-1\", \"0x1F\", \"0o17\", \"0b1010\", \"1_000_000\", \"1.5\", \".5\",\n\"1e10\", \"'foo'\", \"\\\"bar\\\\n\\\"\", \"'it\\\\'s'\", \"'a'|'b'|1|true|null\", \"Foo::BAR\",\n\"Foo::BAR_*\", \"Foo::*\", \"self::X\", \"\\\\Ns\\\\Foo::BAZ\",])"
+---
+1
+  = 1
+  = (const 1)
+-1
+  = -1
+  = (const -1)
+0x1F
+  = 0x1F
+  = (const 0x1F)
+0o17
+  = 0o17
+  = (const 0o17)
+0b1010
+  = 0b1010
+  = (const 0b1010)
+1_000_000
+  = 1_000_000
+  = (const 1_000_000)
+1.5
+  = 1.5
+  = (const 1.5)
+.5
+  = .5
+  = (const .5)
+1e10
+  = 1e10
+  = (const 1e10)
+'foo'
+  = 'foo'
+  = (const 'foo')
+"bar\n"
+  = "bar\n"
+  = (const "bar\n")
+'it\'s'
+  = 'it\'s'
+  = (const 'it\'s')
+'a'|'b'|1|true|null
+  = 'a'|'b'|1|true|null
+  = (| (const 'a') (const 'b') (const 1) true null)
+Foo::BAR
+  = Foo::BAR
+  = (const Foo::BAR)
+Foo::BAR_*
+  = Foo::BAR_*
+  = (const Foo::BAR_*)
+Foo::*
+  = Foo::*
+  = (const Foo::*)
+self::X
+  = self::X
+  = (const self::X)
+\Ns\Foo::BAZ
+  = \Ns\Foo::BAZ
+  = (const \Ns\Foo::BAZ)

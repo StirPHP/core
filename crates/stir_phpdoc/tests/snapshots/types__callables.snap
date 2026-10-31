@@ -1,0 +1,67 @@
+---
+source: crates/stir_phpdoc/tests/types.rs
+expression: "render(&[\"callable\", \"callable(): void\",\n\"callable(int, string=, ...mixed): void\",\n\"callable(int $x, string &$y, int ...$rest): bool\", \"callable(): int|string\",\n\"callable(): (int|string)\", \"callable(): ?int\", \"callable(): int[]\",\n\"(callable(): int)[]\", \"Closure(int $x): void\", \"\\\\Closure(): static\",\n\"pure-callable(int): int\", \"callable(callable(int): string): void\",\n\"Closure<T>(T $x): T\", \"Closure<T of object, U = int>(T, U): array{T, U}\",\n\"callable(): callable(): int\", \"callable(int,): void\",\n\"callable(\\n  int,\\n  string\\n): void\", \"callable(): array{a: int}\",\n\"callable(): $this\",])"
+---
+callable
+  = callable
+  = callable
+callable(): void
+  = callable(): void
+  = (callable callable (params) void)
+callable(int, string=, ...mixed): void
+  = callable(int, string=, mixed ...): void
+  = (callable callable (params (int) (string =) (mixed ...)) void)
+callable(int $x, string &$y, int ...$rest): bool
+  = callable(int $x, string &$y, int ...$rest): bool
+  = (callable callable (params (int $x) (string &$y) (int ...$rest)) bool)
+callable(): int|string
+  = callable(): int|string
+  = (| (callable callable (params) int) string)
+callable(): (int|string)
+  = callable(): (int|string)
+  = (callable callable (params) (| int string))
+callable(): ?int
+  = callable(): ?int
+  = (callable callable (params) (? int))
+callable(): int[]
+  = callable(): int[]
+  = (callable callable (params) ([] int))
+(callable(): int)[]
+  = (callable(): int)[]
+  = ([] (callable callable (params) int))
+Closure(int $x): void
+  = Closure(int $x): void
+  = (callable Closure (params (int $x)) void)
+\Closure(): static
+  = \Closure(): static
+  = (callable \Closure (params) static)
+pure-callable(int): int
+  = pure-callable(int): int
+  = (callable pure-callable (params (int)) int)
+callable(callable(int): string): void
+  = callable(callable(int): string): void
+  = (callable callable (params ((callable callable (params (int)) string))) void)
+Closure<T>(T $x): T
+  = Closure<T>(T $x): T
+  = (callable Closure (templates (T)) (params (T $x)) T)
+Closure<T of object, U = int>(T, U): array{T, U}
+  = Closure<T of object, U = int>(T, U): array{T, U}
+  = (callable Closure (templates (T of object) (U = int)) (params (T) (U)) (array{} (T) (U)))
+callable(): callable(): int
+  = callable(): callable(): int
+  = (callable callable (params) (callable callable (params) int))
+callable(int,): void
+  = callable(int): void
+  = (callable callable (params (int)) void)
+callable(
+  int,
+  string
+): void
+  = callable(int, string): void
+  = (callable callable (params (int) (string)) void)
+callable(): array{a: int}
+  = callable(): array{a: int}
+  = (callable callable (params) (array{} (a: int)))
+callable(): $this
+  = callable(): $this
+  = (callable callable (params) $this)

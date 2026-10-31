@@ -1,0 +1,56 @@
+---
+source: crates/stir_phpdoc/tests/docblocks.rs
+expression: "format! (\"{src}\\n---\\n{}\", dump(src, 1000))"
+---
+/**
+ * @param int $x
+ * @psalm-param positive-int $x
+ * @phpstan-param int<1, 10> $x
+ * @param string $y
+ * @return mixed
+ * @phpstan-return non-empty-string
+ * @phpstan-template T of int
+ * @phpstan-assert int $x
+ * @phpstan-assert-if-true !null $this->prop
+ * @psalm-assert-if-false =string $y
+ * @phpstan-assert non-empty-string $this->getName()
+ * @phpstan-param-out int $z
+ * @param-out string $w
+ * @phpstan-self-out static<int>
+ * @phpstan-this-out self
+ * @phpstan-pure
+ * @phpstan-impure
+ * @phpstan-ignore argument.type, return.type (because reasons)
+ * @phpstan-ignore-next-line
+ * @phpstan-ignore-line
+ * @see Something::else()
+ * @phpstan-unknown foo bar
+ * @ORM\Column(type="string")
+ */
+---
+range: 1000..1701
+summary: -
+description: -
+@param [None] 1007..1020: Param ty=int @1014..1017 ref=false variadic=false name=$x@1018..1020 desc=-
+@psalm-param [Psalm] 1024..1052: Param ty=positive-int @1037..1049 ref=false variadic=false name=$x@1050..1052 desc=-
+@phpstan-param [Phpstan] 1056..1084: Param ty=(<> int (const 1) (const 10)) @1071..1081 ref=false variadic=false name=$x@1082..1084 desc=-
+@param [None] 1088..1104: Param ty=string @1095..1101 ref=false variadic=false name=$y@1102..1104 desc=-
+@return [None] 1108..1121: Return mixed @1116..1121 desc=-
+@phpstan-return [Phpstan] 1125..1157: Return non-empty-string @1141..1157 desc=-
+@phpstan-template [Phpstan] 1161..1187: Template Invariant T of=int @1184..1187 super=- default=- desc=-
+@phpstan-assert [Phpstan] 1191..1213: Assert Assert negated=false equality=false int @1207..1210 target=$x@1211..1213 desc=-
+@phpstan-assert-if-true [Phpstan] 1217..1258: Assert IfTrue negated=true equality=false null @1242..1246 target=$this->prop@1247..1258 desc=-
+@psalm-assert-if-false [Psalm] 1262..1295: Assert IfFalse negated=false equality=true string @1286..1292 target=$y@1293..1295 desc=-
+@phpstan-assert [Phpstan] 1299..1348: Assert Assert negated=false equality=false non-empty-string @1315..1331 target=$this->getName()@1332..1348 desc=-
+@phpstan-param-out [Phpstan] 1352..1377: ParamOut int @1371..1374 name=$z@1375..1377 desc=-
+@param-out [None] 1381..1401: ParamOut string @1392..1398 name=$w@1399..1401 desc=-
+@phpstan-self-out [Phpstan] 1405..1434: SelfOut (<> static int) @1423..1434 desc=-
+@phpstan-this-out [Phpstan] 1438..1460: SelfOut self @1456..1460 desc=-
+@phpstan-pure [Phpstan] 1464..1477: Pure
+@phpstan-impure [Phpstan] 1481..1496: Impure
+@phpstan-ignore [Phpstan] 1500..1560: Ignore argument.type@1516..1529 comment=None, return.type@1531..1542 comment=Some("because reasons")
+@phpstan-ignore-next-line [Phpstan] 1564..1589: IgnoreNextLine
+@phpstan-ignore-line [Phpstan] 1593..1613: IgnoreLine
+@see [None] 1617..1639: Generic desc="Something::else()"@1622..1639
+@phpstan-unknown [Phpstan] 1643..1667: Generic desc="foo bar"@1660..1667
+@ORM\Column [None] 1671..1697: Generic desc="(type=\"string\")"@1682..1697

@@ -1,0 +1,39 @@
+---
+source: crates/stir_phpdoc/tests/docblocks.rs
+expression: "format! (\"{src}\\n---\\n{}\", dump(src, 1000))"
+---
+/**
+     * Maps the items.
+     * Second summary line.
+     *
+     * Longer description
+     *     with indented code.
+     *
+     * @template T
+     * @template-covariant U of object = \stdClass
+     * @param array<int, T> $items The items
+     *        spanning two lines.
+     * @param callable(T): U $fn
+     * @param int &$count by ref
+     * @param string ...$rest
+     * @param $untyped no type
+     * @return list<U>|null mapped values
+     * @throws \InvalidArgumentException when bad
+     * @deprecated use other()
+     * @internal
+     */
+---
+range: 1000..1549
+summary: "Maps the items.\nSecond summary line."@1011..1054
+description: "Longer description\n    with indented code."@1069..1118
+@template [None] 1133..1144: Template Invariant T of=- super=- default=- desc=-
+@template-covariant [None] 1152..1195: Template Covariant U of=object @1177..1183 super=- default=\stdClass @1186..1195 desc=-
+@param [None] 1203..1274: Param ty=(<> array int T) @1210..1223 ref=false variadic=false name=$items@1224..1230 desc="The items\nspanning two lines."@1231..1274
+@param [None] 1282..1307: Param ty=(callable callable (params (T)) U) @1289..1303 ref=false variadic=false name=$fn@1304..1307 desc=-
+@param [None] 1315..1340: Param ty=int @1322..1325 ref=true variadic=false name=$count@1327..1333 desc="by ref"@1334..1340
+@param [None] 1348..1370: Param ty=string @1355..1361 ref=false variadic=true name=$rest@1365..1370 desc=-
+@param [None] 1378..1401: Param ty=- ref=false variadic=false name=$untyped@1385..1393 desc="no type"@1394..1401
+@return [None] 1409..1443: Return (| (<> list U) null) @1417..1429 desc="mapped values"@1430..1443
+@throws [None] 1451..1493: Throws \InvalidArgumentException @1459..1484 desc="when bad"@1485..1493
+@deprecated [None] 1501..1524: Deprecated desc="use other()"@1513..1524
+@internal [None] 1532..1541: Internal desc=-

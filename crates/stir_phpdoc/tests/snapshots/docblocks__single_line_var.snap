@@ -1,0 +1,10 @@
+---
+source: crates/stir_phpdoc/tests/docblocks.rs
+expression: "format! (\"{src}\\n---\\n{}\", dump(src, 1000))"
+---
+/** @var array{a: int, 'b'?: string} $x */
+---
+range: 1000..1042
+summary: -
+description: -
+@var [None] 1004..1039: Var (array{} (a: int) ('b'?: string)) @1009..1036 name=$x@1037..1039 desc=-

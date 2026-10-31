@@ -1,0 +1,10 @@
+---
+source: crates/stir_phpdoc/tests/docblocks.rs
+expression: "format! (\"{src}\\n---\\n{}\", dump(src, 1000))"
+---
+/** @var int */
+---
+range: 1000..1015
+summary: -
+description: -
+@var [None] 1004..1012: Var int @1009..1012 name=- desc=-

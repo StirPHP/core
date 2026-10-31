@@ -1,0 +1,86 @@
+---
+source: crates/stir_neon/tests/syntax.rs
+expression: "render(&[\"\", \"# only a comment\", \"null\", \"NULL\", \"true\", \"yes\", \"On\", \"off\",\n\"No\", \"FALSE\", \"123\", \"-123\", \"+5\", \"1.5\", \"-1.5e3\", \".5\", \"1e3\", \"0x1F\",\n\"0o17\", \"0b101\", \"0777\", \"99999999999999999999\", \"hello\", \"hello world\",\n\"hello  # comment\", \"foo#bar\", \"a:b\", \"http://example.com/path?x=1\",\n\"%currentWorkingDirectory%/src\", \"*/tests/*\", \"@service\", \"2024-01-15\",\n\"2024-01-15 10:20:30\", \"-foo\", \"::bar\", \"'single'\", \"'it''s'\",\n\"\\\"double\\\\n\\\\t\\\\\\\"q\\\\\\\" \\\\u00e9 \\\\x41 \\\\uD83D\\\\uDE00 \\\\/ \\\\_\\\"\",\n\"'no \\\\n escapes'\", \"\\\"bad \\\\q escape\\\"\", \"'unterminated\",])"
+---
+""
+  => null
+"# only a comment"
+  => null
+"null"
+  => null
+"NULL"
+  => null
+"true"
+  => true
+"yes"
+  => true
+"On"
+  => true
+"off"
+  => false
+"No"
+  => false
+"FALSE"
+  => false
+"123"
+  => 123
+"-123"
+  => -123
+"+5"
+  => 5
+"1.5"
+  => 1.5
+"-1.5e3"
+  => -1500.0
+".5"
+  => 0.5
+"1e3"
+  => 1000.0
+"0x1F"
+  => 31
+"0o17"
+  => 15
+"0b101"
+  => 5
+"0777"
+  => 777
+"99999999999999999999"
+  => 1e20
+"hello"
+  => "hello"
+"hello world"
+  => "hello world"
+"hello  # comment"
+  => "hello"
+"foo#bar"
+  => "foo#bar"
+"a:b"
+  => "a:b"
+"http://example.com/path?x=1"
+  => {"http://example.com/path?x": 1}
+"%currentWorkingDirectory%/src"
+  => "%currentWorkingDirectory%/src"
+"*/tests/*"
+  => "*/tests/*"
+"@service"
+  => "@service"
+"2024-01-15"
+  => "2024-01-15"
+"2024-01-15 10:20:30"
+  => "2024-01-15 10:20:30"
+"-foo"
+  => "-foo"
+"::bar"
+  => "::bar"
+"'single'"
+  => "single"
+"'it''s'"
+  => "it's"
+"\"double\\n\\t\\\"q\\\" \\u00e9 \\x41 \\uD83D\\uDE00 \\/ \\_\""
+  => "double\n\t\"q\" é A 😀 /  "
+"'no \\n escapes'"
+  => "no \\n escapes"
+"\"bad \\q escape\""
+  => ERROR: Invalid escape sequence on line 1 at column 1
+"'unterminated"
+  => ERROR: Unterminated string on line 1 at column 1
