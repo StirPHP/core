@@ -6,6 +6,11 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+rustc-hash = "2.1.3"
+smol_str = "0.3.7"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"
