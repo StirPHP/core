@@ -1,0 +1,19 @@
+---
+source: crates/stir_syntax/src/lexer/tests.rs
+expression: "dump(\"<?php FUNCTION foo() { RETURN NULL; }\", Dialect :: Php)"
+---
+OPEN_TAG "<?php "
+FUNCTION_KW "FUNCTION"
+WHITESPACE " "
+IDENT "foo"
+L_PAREN "("
+R_PAREN ")"
+WHITESPACE " "
+L_CURLY "{"
+WHITESPACE " "
+RETURN_KW "RETURN"
+WHITESPACE " "
+IDENT "NULL"
+SEMI ";"
+WHITESPACE " "
+R_CURLY "}"

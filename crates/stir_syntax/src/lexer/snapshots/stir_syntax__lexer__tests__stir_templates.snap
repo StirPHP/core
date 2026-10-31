@@ -1,0 +1,16 @@
+---
+source: crates/stir_syntax/src/lexer/tests.rs
+expression: "dump(r#\"\"Hi ${name}, $count {$x} ${user->name}\"\"#, Dialect :: Stir)"
+---
+DQUOTE "\""
+STRING_CONTENT "Hi "
+DOLLAR_CURLY_OPEN "${"
+IDENT "name"
+R_CURLY "}"
+STRING_CONTENT ", $count {$x} "
+DOLLAR_CURLY_OPEN "${"
+IDENT "user"
+ARROW "->"
+IDENT "name"
+R_CURLY "}"
+DQUOTE "\""

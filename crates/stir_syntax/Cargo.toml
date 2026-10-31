@@ -6,6 +6,12 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+logos = "0.16.1"
+rowan = "0.17.0"
+strum = { version = "0.28.0", features = ["derive"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+insta = "1.49.0"

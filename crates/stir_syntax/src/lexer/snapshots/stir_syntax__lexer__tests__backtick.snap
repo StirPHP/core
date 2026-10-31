@@ -1,0 +1,10 @@
+---
+source: crates/stir_syntax/src/lexer/tests.rs
+expression: "dump(\"<?php `ls $dir`;\", Dialect :: Php)"
+---
+OPEN_TAG "<?php "
+BACKTICK "`"
+STRING_CONTENT "ls "
+VARIABLE "$dir"
+BACKTICK "`"
+SEMI ";"

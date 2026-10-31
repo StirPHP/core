@@ -1,0 +1,9 @@
+---
+source: crates/stir_syntax/src/lexer/tests.rs
+expression: "dump(\"<?php <<<\\\"X\\\"\\nhi\\nX;\", Dialect :: Php)"
+---
+OPEN_TAG "<?php "
+HEREDOC_START "<<<\"X\"\n"
+STRING_CONTENT "hi\n"
+HEREDOC_END "X"
+SEMI ";"

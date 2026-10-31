@@ -1,0 +1,14 @@
+---
+source: crates/stir_syntax/src/lexer/tests.rs
+expression: "dump(\"<?php $x = <<<'EOT'\\nraw $name\\nEOT;\\n\", Dialect :: Php)"
+---
+OPEN_TAG "<?php "
+VARIABLE "$x"
+WHITESPACE " "
+EQ "="
+WHITESPACE " "
+HEREDOC_START "<<<'EOT'\n"
+STRING_CONTENT "raw $name\n"
+HEREDOC_END "EOT"
+SEMI ";"
+WHITESPACE "\n"

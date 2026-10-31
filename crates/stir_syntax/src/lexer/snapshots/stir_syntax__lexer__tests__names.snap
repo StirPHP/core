@@ -1,0 +1,16 @@
+---
+source: crates/stir_syntax/src/lexer/tests.rs
+expression: "dump(\"<?php \\\\Foo\\\\Bar; Foo\\\\Bar; namespace\\\\Baz; foo;\", Dialect :: Php)"
+---
+OPEN_TAG "<?php "
+NAME_FULLY_QUALIFIED "\\Foo\\Bar"
+SEMI ";"
+WHITESPACE " "
+NAME_QUALIFIED "Foo\\Bar"
+SEMI ";"
+WHITESPACE " "
+NAME_RELATIVE "namespace\\Baz"
+SEMI ";"
+WHITESPACE " "
+IDENT "foo"
+SEMI ";"

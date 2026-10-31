@@ -1,0 +1,10 @@
+---
+source: crates/stir_syntax/src/lexer/tests.rs
+expression: "dump(\"<?php __halt_compiler(); raw <?php data\", Dialect :: Php)"
+---
+OPEN_TAG "<?php "
+HALT_COMPILER_KW "__halt_compiler"
+L_PAREN "("
+R_PAREN ")"
+SEMI ";"
+HALT_DATA " raw <?php data"

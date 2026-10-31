@@ -1,0 +1,19 @@
+---
+source: crates/stir_syntax/src/lexer/tests.rs
+expression: "dump(\"<html><?php echo 1; ?>\\n<b><?= $x ?></b>\", Dialect :: Php)"
+---
+INLINE_HTML "<html>"
+OPEN_TAG "<?php "
+ECHO_KW "echo"
+WHITESPACE " "
+INT_NUMBER "1"
+SEMI ";"
+WHITESPACE " "
+CLOSE_TAG "?>\n"
+INLINE_HTML "<b>"
+OPEN_TAG_WITH_ECHO "<?="
+WHITESPACE " "
+VARIABLE "$x"
+WHITESPACE " "
+CLOSE_TAG "?>"
+INLINE_HTML "</b>"

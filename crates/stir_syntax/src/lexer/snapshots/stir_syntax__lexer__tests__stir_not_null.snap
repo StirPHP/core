@@ -1,0 +1,14 @@
+---
+source: crates/stir_syntax/src/lexer/tests.rs
+expression: "dump(\"x!!->y ?: z\", Dialect :: Stir)"
+---
+IDENT "x"
+BANG "!"
+BANG "!"
+ARROW "->"
+IDENT "y"
+WHITESPACE " "
+QUESTION "?"
+COLON ":"
+WHITESPACE " "
+IDENT "z"

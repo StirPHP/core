@@ -1,0 +1,9 @@
+---
+source: crates/stir_syntax/src/lexer/tests.rs
+expression: "dump(r#\"<?php 'it\\'s' b'bin';\"#, Dialect :: Php)"
+---
+OPEN_TAG "<?php "
+STRING_SINGLE "'it\\'s'"
+WHITESPACE " "
+STRING_SINGLE "b'bin'"
+SEMI ";"

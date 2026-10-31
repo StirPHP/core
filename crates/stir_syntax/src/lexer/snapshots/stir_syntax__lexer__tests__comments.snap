@@ -1,0 +1,16 @@
+---
+source: crates/stir_syntax/src/lexer/tests.rs
+expression: "dump(\"<?php // line ?> html <?php # hash\\n/* block */ /** doc */ /**/\",\nDialect :: Php)"
+---
+OPEN_TAG "<?php "
+COMMENT "// line "
+CLOSE_TAG "?>"
+INLINE_HTML " html "
+OPEN_TAG "<?php "
+COMMENT "# hash"
+WHITESPACE "\n"
+COMMENT "/* block */"
+WHITESPACE " "
+DOC_COMMENT "/** doc */"
+WHITESPACE " "
+COMMENT "/**/"

@@ -1,0 +1,19 @@
+---
+source: crates/stir_syntax/src/lexer/tests.rs
+expression: "dump(r#\"\"a ${f(\"b ${c}\")} d\"\"#, Dialect :: Stir)"
+---
+DQUOTE "\""
+STRING_CONTENT "a "
+DOLLAR_CURLY_OPEN "${"
+IDENT "f"
+L_PAREN "("
+DQUOTE "\""
+STRING_CONTENT "b "
+DOLLAR_CURLY_OPEN "${"
+IDENT "c"
+R_CURLY "}"
+DQUOTE "\""
+R_PAREN ")"
+R_CURLY "}"
+STRING_CONTENT " d"
+DQUOTE "\""

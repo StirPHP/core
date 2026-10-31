@@ -1,0 +1,14 @@
+---
+source: crates/stir_syntax/src/lexer/tests.rs
+expression: "dump(\"<?php $$a; ${'b'};\", Dialect :: Php)"
+---
+OPEN_TAG "<?php "
+DOLLAR "$"
+VARIABLE "$a"
+SEMI ";"
+WHITESPACE " "
+DOLLAR "$"
+L_CURLY "{"
+STRING_SINGLE "'b'"
+R_CURLY "}"
+SEMI ";"
