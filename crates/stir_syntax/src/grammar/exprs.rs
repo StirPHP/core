@@ -297,7 +297,7 @@ pub(crate) fn expr_bp(p: &mut Parser<'_>, min_bp: u8) -> Option<CompletedMarker>
             if p.at(QUESTION) && p.nth_joint(0) {
                 p.bump(QUESTION); // `as?` safe cast
             }
-            types::type_no_union(p);
+            types::type_(p);
             lhs = m.complete(p, AS_EXPR);
             continue;
         }

@@ -1172,7 +1172,7 @@ impl<'db> PropertyInfo<'db> {
 }
 
 /// The StirPHP-family view of a PHP type (see [`Ctx::external_view`]).
-fn view(ty: &Ty) -> Ty {
+pub(crate) fn view(ty: &Ty) -> Ty {
     match ty.kind() {
         TyKind::PhpInt | TyKind::IntRange { .. } => Ty::int(),
         TyKind::PhpFloat => Ty::float(),

@@ -62,3 +62,12 @@ function still_undefined()
 {
     return $nope; // error: SPHP0006
 }
+
+function false_stays_in_unions(string $p): string
+{
+    $found = realpath($p);
+    if ($found === false) {
+        return '';
+    }
+    return $found;
+}

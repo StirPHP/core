@@ -64,3 +64,28 @@ function bare_arrays(a: array, m: array<string, array<int>>): Unit {
     echo strtr("a", ["a" => "b"])
     echo strtr("a", "a", "b")
 }
+
+function php_property_takes_php_values(key: string, n: int): Unit {
+    val entry = new Php_Entry()
+    entry->singular = key
+    entry->singular = n // error: SPHP0005
+}
+
+function iterate_union(): Unit {
+    foreach (array_keys(["a" => 1]) as $k) {
+        echo $k
+    }
+}
+
+function union_cast(v: string|int|array|null): Unit {
+    val c = v as string|int
+    echo strlen(c as string)
+}
+
+function false_stays_in_unions(p: string): string {
+    val found = realpath(p)
+    if (found === false) {
+        return ""
+    }
+    return found
+}

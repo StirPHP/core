@@ -272,7 +272,12 @@ pub fn widen_literals(ty: &Ty) -> Ty {
                 (LitValue::Bool(_), false) => Ty::php_bool(),
             }
         }
-        TyKind::Union(_) => Ty::union(ty.members().iter().map(widen_literals)),
+        // `string|false`: `false` here is a real part of the type, not a value that happens
+        // to be false, and checks for it must be able to rule it out
+        TyKind::Union(_) => Ty::union(ty.members().iter().map(|m| match m.kind() {
+            TyKind::Literal(l) if matches!(l.value, LitValue::Bool(_)) => m.clone(),
+            _ => widen_literals(m),
+        })),
         _ => ty.clone(),
     }
 }

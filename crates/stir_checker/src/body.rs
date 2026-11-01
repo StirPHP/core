@@ -1077,7 +1077,7 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     fn iter_types(&mut self, range: TextRange, ty: &Ty) -> (Ty, Ty) {
         let ty = strip_platform(ty);
-        if !self.stir() && ty.is_union() {
+        if ty.is_union() {
             let start = self.diags.len();
             let (mut keys, mut vals, mut missing) = (Vec::new(), Vec::new(), false);
             for m in ty.members().to_vec() {
@@ -3131,7 +3131,18 @@ impl<'a, 'db> Checker<'a, 'db> {
                         format!("`.=` appends strings, found `{vt}`"),
                     );
                 }
-                self.check_assign(rhs.text_range(), &result, &declared, "assignment");
+                // a property declared in PHP takes PHP values, however it reads from StirPHP
+                let result_for_target = if self.stir() && self.is_php_declared_property(lhs) {
+                    crate::model::view(&result)
+                } else {
+                    result.clone()
+                };
+                self.check_assign(
+                    rhs.text_range(),
+                    &result_for_target,
+                    &declared,
+                    "assignment",
+                );
                 if let Some(n) = self.local_name(lhs)
                     && let Some(l) = self.lookup_mut(&n)
                 {
@@ -3242,6 +3253,21 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             None => self.declare(name, Ty::any_platform(), LocalKind::Php, arg.text_range()),
         }
+    }
+
+    fn is_php_declared_property(&self, node: &SyntaxNode) -> bool {
+        if node.kind() != PROPERTY_FETCH_EXPR {
+            return false;
+        }
+        let Some(base) = exprs_of(node).into_iter().next() else {
+            return false;
+        };
+        let Some(base_ty) = self.types.get(&base.text_range()) else {
+            return false;
+        };
+        let class = class_of(&strip_platform(&stir_types::without_null(base_ty)));
+        matches!(class.kind(), TyKind::Class { name, .. }
+            if self.ctx.class(name).is_some_and(|c| !c.is_stir()))
     }
 
     fn local_name(&self, node: &SyntaxNode) -> Option<String> {

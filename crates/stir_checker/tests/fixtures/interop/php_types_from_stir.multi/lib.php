@@ -6,3 +6,9 @@ function doc_only() {
 
 /** @param array<string, mixed> $a */
 function wants_mixed($a) {}
+
+class Php_Entry
+{
+    /** @var string|null */
+    public $singular = null;
+}
