@@ -1,0 +1,82 @@
+# Runs install.sh and install.ps1 on every platform they support.
+name: Install scripts
+
+on:
+  push:
+    branches: [main]
+    paths: [install.sh, install.ps1, .github/workflows/install-scripts.yml]
+  pull_request:
+    paths: [install.sh, install.ps1, .github/workflows/install-scripts.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unix:
+    name: install.sh (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Latest release, piped
+        run: |
+          sh < install.sh
+          "$HOME/.local/bin/sphp" --version
+      - name: Nightly in a custom directory
+        env:
+          SPHP_VERSION: nightly
+          SPHP_INSTALL_DIR: ${{ runner.temp }}/sphp-nightly
+        run: |
+          sh < install.sh
+          "$SPHP_INSTALL_DIR/sphp" --version | grep -q nightly
+      - name: A pinned version
+        env:
+          SPHP_VERSION: 0.1.1
+          SPHP_INSTALL_DIR: ${{ runner.temp }}/sphp-pinned
+        run: |
+          sh < install.sh
+          test "$("$SPHP_INSTALL_DIR/sphp" --version)" = "sphp 0.1.1"
+
+  windows:
+    name: install.ps1 (${{ matrix.os }}, ${{ matrix.shell }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-11-arm]
+        shell: [powershell, pwsh]
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Latest release, through iex
+        run: |
+          Get-Content install.ps1 -Raw | Invoke-Expression
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\sphp\bin\sphp.exe'
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'sphp --version failed' }
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if (($userPath -split ';') -notcontains (Split-Path $exe)) { throw "not on the user PATH: $userPath" }
+      - name: Nightly in a custom directory
+        env:
+          SPHP_VERSION: nightly
+          SPHP_INSTALL_DIR: ${{ runner.temp }}\sphp-nightly
+          SPHP_NO_MODIFY_PATH: '1'
+        run: |
+          Get-Content install.ps1 -Raw | Invoke-Expression
+          $v = & "$env:SPHP_INSTALL_DIR\sphp.exe" --version
+          if ($v -notmatch 'nightly') { throw "unexpected version: $v" }
+      - name: A pinned version
+        env:
+          SPHP_VERSION: 0.1.1
+          SPHP_INSTALL_DIR: ${{ runner.temp }}\sphp-pinned
+          SPHP_NO_MODIFY_PATH: '1'
+        run: |
+          Get-Content install.ps1 -Raw | Invoke-Expression
+          $v = & "$env:SPHP_INSTALL_DIR\sphp.exe" --version
+          if ($v -ne 'sphp 0.1.1') { throw "unexpected version: $v" }
