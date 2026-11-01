@@ -702,6 +702,8 @@ impl<'db> Ctx<'db> {
             Some(n) if n.is_error() => Some((d, true)),
             // a template's bound is checked where it's used
             Some(_) if !stir_types::free_params(&d).is_empty() => Some((d, false)),
+            // a PHPDoc type this checker can't express (`self::BOUNDARY_*`)
+            Some(n) if matches!(d.kind(), TyKind::Mixed) => Some((n, false)),
             Some(n) if stir_types::is_assignable(self, &d, &n) => {
                 // PHPDoc refines a native type (`string[]` for `array`): the
                 // native type is enforced, so nullability is known and the

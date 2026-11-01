@@ -426,6 +426,13 @@ impl<'a, 'db> Checker<'a, 'db> {
             widened = widen_refinements(to);
             &widened
         };
+        // a template the call couldn't solve says nothing about the value
+        if !self.stir()
+            && (!stir_types::free_params(from).is_empty()
+                || !stir_types::free_params(to).is_empty())
+        {
+            return;
+        }
         // `$this` in a trait is whichever class uses it
         if !self.stir()
             && self
@@ -463,7 +470,10 @@ impl<'a, 'db> Checker<'a, 'db> {
             _ => None,
         });
         self.assignable(&bottom, to)
-            || (matches!(from.kind(), TyKind::Array { .. } | TyKind::PhpList { .. })
+            || (strip_platform(from)
+                .members()
+                .iter()
+                .all(|m| matches!(m.kind(), TyKind::Array { .. } | TyKind::PhpList { .. }))
                 && to
                     .members()
                     .iter()
@@ -2794,6 +2804,18 @@ impl<'a, 'db> Checker<'a, 'db> {
         let is_int = |t: &Ty| self.assignable(t, &Ty::int()) || self.assignable(t, &Ty::php_int());
         let unknown =
             |t: &Ty| t.is_any_platform() || matches!(t.kind(), TyKind::Mixed | TyKind::Error);
+        let is_array = |t: &Ty| {
+            t.members().iter().all(|m| {
+                matches!(
+                    strip_platform(m).kind(),
+                    TyKind::Array { .. } | TyKind::PhpList { .. } | TyKind::Shape(_)
+                )
+            })
+        };
+        // `$a + $b` on arrays is a union of their entries
+        if php && op == PLUS && is_array(l) && is_array(r) {
+            return Ty::array(Ty::array_key(), Ty::mixed());
+        }
         let (int, float) = if php {
             (Ty::php_int(), Ty::php_float())
         } else {
@@ -4109,6 +4131,16 @@ impl<'a, 'db> Checker<'a, 'db> {
             } else {
                 want
             };
+            // a PHP callback may ignore arguments it's passed
+            if !self.stir()
+                && matches!(t.kind(), TyKind::Fn(_))
+                && want
+                    .members()
+                    .iter()
+                    .any(|m| matches!(m.kind(), TyKind::Callable { .. }))
+            {
+                continue;
+            }
             if !self.stir() && !self.items.strict_types && accepts_php_scalars(&want) {
                 // without `strict_types`, PHP coerces scalar arguments
                 let rest: Vec<Ty> = t
@@ -4204,13 +4236,18 @@ impl<'a, 'db> Checker<'a, 'db> {
             let overloads = self.ctx.function_overloads(fqn.as_str());
             if !self.stir() && overloads.len() > 1 {
                 let start = self.diags.len();
-                for (i, candidate) in overloads.iter().enumerate() {
+                let mut best: Option<(Vec<Diagnostic>, Ty)> = None;
+                for candidate in &overloads {
                     let sig = self.ctx.function_sig(*candidate);
                     let t = self.check_args(node, &sig, &FxHashMap::default(), None, expected, &[]);
-                    if self.diags.len() == start || i + 1 == overloads.len() {
-                        return t;
+                    let found = self.diags.split_off(start);
+                    if best.as_ref().is_none_or(|(b, _)| found.len() < b.len()) {
+                        best = Some((found, t));
                     }
-                    self.diags.truncate(start);
+                }
+                if let Some((found, t)) = best {
+                    self.diags.extend(found);
+                    return t;
                 }
             }
             let sig = self.ctx.function_sig(loc);

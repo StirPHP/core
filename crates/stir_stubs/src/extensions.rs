@@ -49,6 +49,7 @@ pub const EXTENSIONS: &[&str] = &[
     "exif",
     "gd",
     "imagick",
+    "ssh2",
     "calendar",
     "ftp",
     "gettext",

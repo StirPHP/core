@@ -139,7 +139,12 @@ impl Inference {
                 | TyKind::Iterable { key: pk, value: pv },
                 TyKind::List(a) | TyKind::MutableList(a) | TyKind::PhpList { elem: a, .. },
             ) => {
-                self.unify_depth(env, pk, &Ty::int(), depth + 1);
+                let key = if matches!(arg.kind(), TyKind::PhpList { .. }) {
+                    Ty::php_int()
+                } else {
+                    Ty::int()
+                };
+                self.unify_depth(env, pk, &key, depth + 1);
                 self.unify_depth(env, pv, a, depth + 1);
             }
             (TyKind::Callable { sig: Some(pf), .. }, TyKind::Fn(af)) => {

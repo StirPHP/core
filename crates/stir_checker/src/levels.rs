@@ -112,6 +112,38 @@ pub fn filter_php(diags: &mut Vec<Diagnostic>, settings: &Settings) {
     });
 }
 
+/// Drops diagnostics on lines silenced by `@phpstan-ignore-line`,
+/// `@phpstan-ignore-next-line` or `@phpstan-ignore <identifier>` (the next line if the
+/// comment is alone on its line). The identifiers are PHPStan's, so any error counts.
+pub fn filter_phpstan_ignores(diags: &mut Vec<Diagnostic>, text: &str) {
+    let mut ignored = std::collections::HashSet::new();
+    for (i, line) in text.lines().enumerate() {
+        let Some(at) = line.find("@phpstan-ignore") else {
+            continue;
+        };
+        let rest = &line[at + "@phpstan-ignore".len()..];
+        let before = line[..at].trim_start();
+        let comment_only =
+            before.starts_with("//") || before.starts_with('#') || before.starts_with("/*");
+        if rest.starts_with("-next-line") || (!rest.starts_with("-line") && comment_only) {
+            ignored.insert(i + 1);
+        } else {
+            ignored.insert(i);
+        }
+    }
+    if ignored.is_empty() {
+        return;
+    }
+    diags.retain(|d| {
+        let start = usize::from(d.range.start()).min(text.len());
+        let line = text.as_bytes()[..start]
+            .iter()
+            .filter(|b| **b == b'\n')
+            .count();
+        !ignored.contains(&line)
+    });
+}
+
 struct CompiledRule<'a> {
     rule: &'a IgnoreRule,
     patterns: Vec<fancy_regex::Regex>,

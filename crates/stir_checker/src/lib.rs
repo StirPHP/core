@@ -46,6 +46,7 @@ pub fn check_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> Arc<Vec<Diagn
     }
     if php {
         levels::filter_php(&mut diags, settings);
+        levels::filter_phpstan_ignores(&mut diags, file.text(db));
     }
     diags.sort_by_key(|d| (d.range.start(), d.range.end()));
     diags.dedup();
