@@ -265,7 +265,10 @@ mod tests {
         // source, so it is not loaded twice.
         assert_eq!(count(FileOrigin::Vendor), 3);
         assert_eq!(loaded.vendor_count, 3);
-        assert_eq!(count(FileOrigin::Stub), loaded.stub_count);
+        assert_eq!(
+            count(FileOrigin::Stub),
+            loaded.stub_count + stir_stubs::stdlib_files().count()
+        );
         assert!(loaded.stub_count > 0);
         assert!(
             files
