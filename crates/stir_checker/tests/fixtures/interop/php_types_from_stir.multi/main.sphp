@@ -50,3 +50,17 @@ function replaced(s: string, l: array<string>): string {
 }
 
 function replaced_array(l: array<string>): string = str_replace("a", "b", l) // error: SPHP0005
+
+typealias AnyValue = string|int|float|bool|array|object|null
+
+function takes_any(v: AnyValue): Unit {}
+
+function bare_arrays(a: array, m: array<string, array<int>>): Unit {
+    takes_any(a["k"])
+    wants_mixed(a)
+    foreach (m["k"] ?? [] as $x) {
+        echo $x
+    }
+    echo strtr("a", ["a" => "b"])
+    echo strtr("a", "a", "b")
+}

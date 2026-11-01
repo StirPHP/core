@@ -426,6 +426,10 @@ impl<'a, 'db> Checker<'a, 'db> {
             widened = widen_refinements(to);
             &widened
         };
+        // a bare `array` is an `array<K, mixed>` of any keys, and `mixed` is the union of everything
+        if php_array_of_mixed(from, to) || covers_every_php_value(from, to) {
+            return;
+        }
         // a template the call couldn't solve says nothing about the value
         if !self.stir()
             && (!stir_types::free_params(from).is_empty()
@@ -2652,7 +2656,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                 self.probing += 1;
                 let l = self.expr(&es[0], expected.map(|e| e.clone().nullable()).as_ref());
                 self.probing -= 1;
-                let r = self.expr(&es[1], expected);
+                // `$m[$k] ?? []`: the fallback takes the left side's type
+                let fallback = stir_types::without_null(&l);
+                let r = self.expr(&es[1], expected.or((!l.is_error()).then_some(&fallback)));
                 (l, r)
             }
             _ => (self.expr(&es[0], None), self.expr(&es[1], None)),
@@ -3116,6 +3122,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 if op == DOT_EQ
                     && self.stir()
                     && !self.assignable(&vt, &Ty::string())
+                    && !(lt.is_php() && self.assignable(&vt, &Ty::php_string()))
                     && !vt.is_error()
                 {
                     self.error(
@@ -4279,7 +4286,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             );
             // several declarations: overloaded stubs, or a PHP conditional declaration
             let overloads = self.ctx.function_overloads(fqn.as_str());
-            if !self.stir() && overloads.len() > 1 {
+            if overloads.len() > 1 {
                 let start = self.diags.len();
                 let mut best: Option<(Vec<Diagnostic>, Ty)> = None;
                 for candidate in &overloads {
@@ -5863,6 +5870,32 @@ fn php_callable_value(ty: &Ty) -> bool {
                 | TyKind::Callable { .. }
         ) || matches!(m.kind(), TyKind::Literal(l) if matches!(l.value, LitValue::String(_)))
     })
+}
+
+fn php_array_of_mixed(from: &Ty, to: &Ty) -> bool {
+    let bare = matches!(
+        strip_platform(from).kind(),
+        TyKind::Array { key, value, .. }
+            if matches!(key.kind(), TyKind::ArrayKey) && matches!(value.kind(), TyKind::Mixed)
+    );
+    bare && to.members().iter().any(|m| {
+        matches!(m.kind(), TyKind::Array { value, non_empty: false, .. } if matches!(value.kind(), TyKind::Mixed))
+    })
+}
+
+/// Is `to` spelled out as every kind of PHP value (StirPHP has no `mixed` to write)?
+fn covers_every_php_value(from: &Ty, to: &Ty) -> bool {
+    if !from.is_any_platform() && !matches!(from.kind(), TyKind::Mixed) {
+        return false;
+    }
+    let has = |f: &dyn Fn(&TyKind) -> bool| to.members().iter().any(|m| f(m.kind()));
+    has(&|k| matches!(k, TyKind::PhpString))
+        && has(&|k| matches!(k, TyKind::PhpInt))
+        && has(&|k| matches!(k, TyKind::PhpFloat))
+        && has(&|k| matches!(k, TyKind::PhpBool))
+        && has(&|k| matches!(k, TyKind::Array { .. }))
+        && has(&|k| matches!(k, TyKind::Object))
+        && has(&|k| matches!(k, TyKind::Null))
 }
 
 fn is_php_scalar(ty: &Ty) -> bool {
