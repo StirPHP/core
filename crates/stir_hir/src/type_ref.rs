@@ -273,6 +273,20 @@ impl TypeCtx<'_> {
             } else {
                 PhpBuiltin::from_name(&text.to_ascii_lowercase())
             };
+            // `array<K, V>` / `array<V>`, as in PHPDoc
+            if php == Some(PhpBuiltin::Array) && !args.is_empty() {
+                let mut args = args.into_iter();
+                let (key, value) = match (args.next(), args.next()) {
+                    (Some(key), Some(value)) => (Some(Box::new(key)), value),
+                    (Some(value), None) => (None, value),
+                    (None, _) => unreachable!("args isn't empty"),
+                };
+                return TypeRefKind::PhpArray {
+                    key,
+                    value: Box::new(value),
+                    non_empty: false,
+                };
+            }
             if let Some(b) = php {
                 return TypeRefKind::Php(b);
             }

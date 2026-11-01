@@ -1,0 +1,17 @@
+function keys_and_values(m: array<string, string>, l: array<int>): Unit {
+    foreach (m as $k => $v) {
+        echo strlen($k) + strlen($v)
+    }
+    foreach (l as $i) {
+        echo $i + 1
+    }
+    echo strlen(l) // error: SPHP0005
+}
+
+function after_literal_check(): String {
+    val d = doc_only()
+    if (d === "") {
+        return ""
+    }
+    return "${d}!"
+}

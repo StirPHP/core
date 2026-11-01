@@ -208,6 +208,12 @@ fn narrow_away_inner(ck: &mut Checker<'_>, declared: &Ty, test: &Ty, depth: u32)
     if declared.is_error() || test.is_error() {
         return Ty::error();
     }
+    // ruling out a value says nothing new about a platform type's nullability
+    if let K::Platform(inner) = declared.kind()
+        && !matches!(test.kind(), K::Null)
+    {
+        return Ty::platform(narrow_away_inner(ck, inner, test, depth));
+    }
     let mut out = Vec::new();
     for m in expand(declared) {
         if ck.ok(&m, test) {
