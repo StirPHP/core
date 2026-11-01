@@ -1249,7 +1249,13 @@ name = "stir_emit"
 version = "0.1.0"
 dependencies = [
  "insta",
+ "rustc-hash 2.1.3",
  "smol_str",
+ "stir_checker",
+ "stir_db",
+ "stir_hir",
+ "stir_syntax",
+ "stir_types",
 ]
 
 [[package]]

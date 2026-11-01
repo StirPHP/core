@@ -100,6 +100,10 @@ pub struct Checker<'a, 'db> {
     pub types: FxHashMap<TextRange, Ty>,
     /// Names resolved as members of `$this` (`id` → `$this->id`), for the transpiler.
     pub implicit_this: rustc_hash::FxHashSet<TextRange>,
+    /// Method-call nodes resolved to an extension function.
+    pub extension_calls: FxHashMap<TextRange, stir_hir::ItemLoc>,
+    /// Types written in `is`/`as`/`when` patterns, by type-node range.
+    pub pattern_types: FxHashMap<TextRange, Ty>,
     /// The extension function whose body is being checked.
     current_ext: Option<stir_hir::ItemLoc>,
     /// Extension → extension calls (for the no-recursion rule).
@@ -242,6 +246,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             implicit_this: Default::default(),
             current_ext: None,
             ext_calls: Vec::new(),
+            extension_calls: FxHashMap::default(),
+            pattern_types: FxHashMap::default(),
         }
     }
 
@@ -1629,6 +1635,12 @@ impl<'a, 'db> Checker<'a, 'db> {
     /// generic class written without arguments (`is Ok`) takes them from the
     /// subject (`Result<Int>` → `Ok<Int>`).
     fn pattern_type(&mut self, node: &SyntaxNode, subject: Option<&Ty>) -> Ty {
+        let t = self.pattern_type_inner(node, subject);
+        self.pattern_types.insert(node.text_range(), t.clone());
+        t
+    }
+
+    fn pattern_type_inner(&mut self, node: &SyntaxNode, subject: Option<&Ty>) -> Ty {
         if node.kind() == NAMED_TYPE
             && node.child(GENERIC_ARG_LIST).is_none()
             && let Some(name_ref) = node.child(NAME_REF)
@@ -1897,6 +1909,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     return Ty::error();
                 };
                 let target = self.lower_type_node(&tn);
+                self.pattern_types.insert(tn.text_range(), target.clone());
                 let safe = node.has_token(QUESTION);
                 if !src.is_error()
                     && !target.is_error()
@@ -3957,6 +3970,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
         }
         let (sig, loc) = best?;
+        self.extension_calls.insert(node.text_range(), loc);
         if let Some(cur) = self.current_ext {
             self.ext_calls.push((cur, loc, node.text_range()));
         }

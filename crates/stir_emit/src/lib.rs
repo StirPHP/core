@@ -7,7 +7,11 @@ pub mod builders;
 pub mod escape;
 pub mod prec;
 pub mod print;
+mod lower;
+pub mod transpile;
 
 pub use print::{
     Mapping, Position, PrintOptions, print_expr, print_file, print_file_with_map, print_stmts,
 };
+
+pub use transpile::{EmitOptions, Emitted, runtime, transpile};
