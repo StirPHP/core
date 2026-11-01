@@ -405,6 +405,10 @@ pub enum SyntaxKind {
     RECORD_LITERAL_FIELD,
     /// First-class callable syntax `foo(...)`.
     CALLABLE_PLACEHOLDER,
+    /// StirPHP infix call `a to b` (`a->to(b)`).
+    INFIX_CALL_EXPR,
+    /// Explicit type arguments of a call: `listOf<Int>()`.
+    CALL_TYPE_ARGS,
 
     #[doc(hidden)]
     __LAST,

@@ -1,0 +1,31 @@
+---
+source: crates/stir_emit/tests/programs.rs
+expression: out.code
+---
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+function greet(string $name, int $times = 1): string
+{
+    $out = '';
+    while ($times > 0) {
+        $out = $out . "Hello, {$name}! ";
+        $times -= 1;
+    }
+    return $out;
+}
+
+function double(int $x): int
+{
+    return $x * 2;
+}
+
+$total = \App\double(21);
+echo \App\greet('world', 2) . "\n";
+echo "total={$total}\n";
+echo 'half=' . \intdiv(7, 2) . "\n";
+$same = true;
+echo $same ? "same\n" : "diff\n";

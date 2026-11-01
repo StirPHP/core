@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+rowan = "0.17.0"
 rustc-hash = "2.1.3"
 smol_str = "0.3.7"
 stir_checker = { version = "0.1.0", path = "../stir_checker" }
@@ -19,3 +20,10 @@ workspace = true
 
 [dev-dependencies]
 insta = "1.49.0"
+libtest-mimic = "0.8.2"
+stir_stubs = { path = "../stir_stubs" }
+tempfile = "3.27.0"
+
+[[test]]
+name = "programs"
+harness = false

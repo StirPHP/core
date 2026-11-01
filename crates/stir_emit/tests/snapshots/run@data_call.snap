@@ -1,0 +1,89 @@
+---
+source: crates/stir_emit/tests/programs.rs
+expression: out.code
+---
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+/** @template-covariant T */
+interface Result
+{
+}
+
+/**
+ * @template T
+ * @implements \App\Result<T>
+ */
+final readonly class Ok implements \App\Result
+{
+    /** @param T $value */
+    public function __construct(
+        public mixed $value,
+    ) {
+    }
+}
+
+/** @implements \App\Result<never> */
+final readonly class Err implements \App\Result
+{
+    public function __construct(
+        public string $msg,
+    ) {
+    }
+}
+
+/** @param \App\Result<int> $r */
+function show(\App\Result $r): string
+{
+    return match (true) {
+        $r instanceof \App\Ok => "ok {$r->value}",
+        $r instanceof \App\Err => "err {$r->msg}",
+    };
+}
+
+/** @return \App\Result<int> */
+function parse(string $s): \App\Result
+{
+    return \is_numeric($s) ? new \App\Ok(\intval($s)) : new \App\Err("bad {$s}");
+}
+
+echo \App\show(\App\parse('12')) . "\n";
+echo \App\show(\App\parse('x')) . "\n";
+
+final class Node
+{
+    public function __construct(
+        public readonly string $name,
+        public readonly ?\App\Node $next,
+    ) {
+    }
+}
+
+function lastName(?\App\Node $n): string
+{
+    return $n?->next?->name ?? 'none';
+}
+
+$n = new \App\Node('a', new \App\Node('b', null));
+echo \App\lastName($n) . "\n";
+echo \App\lastName(null) . "\n";
+$forced = ($n->next ?? throw new \TypeError('`n->next` was null'))->name;
+echo $forced . "\n";
+$pt = ['x' => 1, 'y' => 2];
+$pt['x'] = 10;
+$copy = $pt;
+echo "{$pt['x']} {$copy['y']}\n";
+
+/** @param 'active'|'banned' $s */
+function label(string $s): string
+{
+    return match (true) {
+        $s === 'active' => 'A',
+        $s === 'banned' => 'B',
+    };
+}
+
+echo \App\label('banned') . "\n";

@@ -5,9 +5,9 @@
 pub mod ast;
 pub mod builders;
 pub mod escape;
+mod lower;
 pub mod prec;
 pub mod print;
-mod lower;
 pub mod transpile;
 
 pub use print::{

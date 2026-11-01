@@ -1,0 +1,39 @@
+namespace App
+
+record Point { x: Int; y: Int }
+
+sealed interface Result<out T>
+data class Ok<T>(val value: T) : Result<T>
+data class Err(val msg: String) : Result<Nothing>
+
+function show(r: Result<Int>): String = when (r) {
+    is Ok -> "ok ${r->value}"
+    is Err -> "err ${r->msg}"
+}
+
+function parse(s: String): Result<Int> = if (is_numeric(s)) new Ok(intval(s)) else new Err("bad ${s}")
+
+echo show(parse("12")) . "\n"
+echo show(parse("x")) . "\n"
+
+class Node(val name: String, val next: Node?)
+
+function lastName(n: Node?): String = n?->next?->name ?: "none"
+
+val n = new Node("a", new Node("b", null))
+echo lastName(n) . "\n"
+echo lastName(null) . "\n"
+val forced = n->next!!->name
+echo forced . "\n"
+
+var $pt = Point { x = 1, y = 2 }
+$pt->x = 10
+val copy = $pt
+echo "${pt->x} ${copy->y}\n"
+
+typealias Status = "active" | "banned"
+function label(s: Status): String = when (s) {
+    "active" -> "A"
+    "banned" -> "B"
+}
+echo label("banned") . "\n"

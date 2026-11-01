@@ -1,0 +1,38 @@
+---
+source: crates/stir_emit/tests/programs.rs
+expression: out.code
+---
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+require_once __DIR__ . '/stir-runtime.php';
+$nums = \Stir\listOf(1, 2, 3, 4);
+$__i1 = fn (int $it): int => $it * 2;
+$doubled = \array_map($__i1, $nums);
+echo \implode(',', $doubled) . "\n";
+$__i2 = fn (int $it): bool => $it % 2 === 0;
+$__i3 = \array_values(\array_filter($nums, fn ($element): bool => $__i2($element)));
+$__i4 = fn (int $x): string => "n{$x}";
+$evens = \array_map($__i4, $__i3);
+echo \implode(' ', $evens) . "\n";
+$count = 0;
+\Stir\List_forEach($nums, function (int $it) use (&$count): void {
+    $count += $it;
+});
+echo "sum={$count}\n";
+$__i5 = fn (int $acc, int $x): int => $acc + $x;
+$total = \array_reduce($nums, $__i5, 0);
+echo "fold={$total}\n";
+$s = '  hi  ';
+$__i6 = \mb_trim($s);
+echo '[' . \mb_strtoupper($__i6) . "]\n";
+$kind = match (true) {
+    $total > 5 => 'big',
+    default => 'small',
+};
+echo $kind . "\n";
+$add = fn (int $a, int $b): int => $a + $b;
+echo "add={$add(2, 3)}\n";

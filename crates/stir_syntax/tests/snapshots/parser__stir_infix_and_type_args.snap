@@ -1,0 +1,101 @@
+---
+source: crates/stir_syntax/tests/parser.rs
+expression: "check_ok(\"val p = \\\"a\\\" to 1\\nval xs = mutableListOf<Int>()\\nval m = mapOf<String, List<Int>>()\\nval c = a < b\\nval d = x->get<Int>(1)\\n\",\nDialect :: Stir)"
+---
+SOURCE_FILE
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "p"
+    EQ "="
+    INFIX_CALL_EXPR
+      STRING_LITERAL
+        STRING_DOUBLE "\"a\""
+      NAME
+        IDENT "to"
+      LITERAL
+        INT_NUMBER "1"
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "xs"
+    EQ "="
+    CALL_EXPR
+      NAME_EXPR
+        NAME_REF
+          IDENT "mutableListOf"
+      CALL_TYPE_ARGS
+        L_ANGLE "<"
+        NAMED_TYPE
+          NAME_REF
+            IDENT "Int"
+        R_ANGLE ">"
+      ARG_LIST
+        L_PAREN "("
+        R_PAREN ")"
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "m"
+    EQ "="
+    CALL_EXPR
+      NAME_EXPR
+        NAME_REF
+          IDENT "mapOf"
+      CALL_TYPE_ARGS
+        L_ANGLE "<"
+        NAMED_TYPE
+          NAME_REF
+            IDENT "String"
+        COMMA ","
+        NAMED_TYPE
+          NAME_REF
+            IDENT "List"
+          GENERIC_ARG_LIST
+            L_ANGLE "<"
+            NAMED_TYPE
+              NAME_REF
+                IDENT "Int"
+            R_ANGLE ">"
+        R_ANGLE ">"
+      ARG_LIST
+        L_PAREN "("
+        R_PAREN ")"
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "c"
+    EQ "="
+    BIN_EXPR
+      NAME_EXPR
+        NAME_REF
+          IDENT "a"
+      L_ANGLE "<"
+      NAME_EXPR
+        NAME_REF
+          IDENT "b"
+  VAL_DECL
+    IDENT "val"
+    NAME
+      IDENT "d"
+    EQ "="
+    METHOD_CALL_EXPR
+      PROPERTY_FETCH_EXPR
+        NAME_EXPR
+          NAME_REF
+            IDENT "x"
+        ARROW "->"
+        NAME
+          IDENT "get"
+      CALL_TYPE_ARGS
+        L_ANGLE "<"
+        NAMED_TYPE
+          NAME_REF
+            IDENT "Int"
+        R_ANGLE ">"
+      ARG_LIST
+        L_PAREN "("
+        ARG
+          LITERAL
+            INT_NUMBER "1"
+        R_PAREN ")"

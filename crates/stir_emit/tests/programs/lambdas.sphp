@@ -1,0 +1,21 @@
+namespace App
+
+val nums = listOf(1, 2, 3, 4)
+val doubled = nums->map { it * 2 }
+echo doubled->joinToString(",") . "\n"
+val evens = nums->filter { it % 2 == 0 }->map { x -> "n${x}" }
+echo evens->joinToString(" ") . "\n"
+var $count = 0
+nums->forEach { $count += it }
+echo "sum=${count}\n"
+val total = nums->fold(0) { acc, x -> acc + x }
+echo "fold=${total}\n"
+val s: String = "  hi  "
+echo "[${s->trim()->uppercase()}]\n"
+val kind = when {
+    total > 5 -> "big"
+    else -> "small"
+}
+echo kind . "\n"
+val add: (Int, Int) -> Int = { a, b -> a + b }
+echo "add=${add(2, 3)}\n"

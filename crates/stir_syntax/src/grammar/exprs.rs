@@ -27,6 +27,8 @@ mod bp {
     /// PHP 8.5 pipe `|>`
     pub const PIPE: u8 = 29;
     pub const CONCAT: u8 = 30;
+    /// StirPHP infix calls `a to b`
+    pub const INFIX: u8 = 31;
     pub const SHIFT: u8 = 32;
     pub const ADDITIVE: u8 = 34;
     pub const MULTIPLICATIVE: u8 = 36;
@@ -136,6 +138,52 @@ fn infix_op(p: &Parser<'_>) -> Option<(SyntaxKind, u8, u8)> {
     Some(op)
 }
 
+
+/// `a name b` in StirPHP: an identifier on the same line between two expressions.
+fn at_infix_call(p: &Parser<'_>) -> bool {
+    if !p.stir() || p.current() != IDENT || p.newline_before() {
+        return false;
+    }
+    if matches!(p.nth_text(0), "is" | "in" | "out" | "of" | "where" | "else") {
+        return false;
+    }
+    // the right side must start an expression on the same line
+    !p.nth_newline_before(1)
+        && matches!(
+            p.nth(1),
+            IDENT | VARIABLE | INT_NUMBER | FLOAT_NUMBER | STRING_SINGLE | STRING_DOUBLE | DQUOTE | L_PAREN
+                | L_BRACK | NAME_QUALIFIED | NAME_FULLY_QUALIFIED | MINUS | BANG | NEW_KW | L_CURLY
+        )
+}
+
+/// `<A, B>(` directly after a name: explicit call type arguments (StirPHP).
+fn at_call_type_args(p: &Parser<'_>) -> bool {
+    if !p.stir() || !p.at(L_ANGLE) {
+        return false;
+    }
+    let mut depth = 0i32;
+    let mut n = 0;
+    loop {
+        match p.nth(n) {
+            L_ANGLE => depth += 1,
+            R_ANGLE => {
+                depth -= 1;
+                if depth == 0 {
+                    return p.nth(n + 1) == L_PAREN;
+                }
+            }
+            IDENT | COMMA | QUESTION | NAME_QUALIFIED | NAME_FULLY_QUALIFIED | PIPE | L_PAREN | R_PAREN | ARROW
+            | STRING_SINGLE | STRING_DOUBLE | INT_NUMBER => {}
+            k if k.is_keyword() => {}
+            _ => return false,
+        }
+        n += 1;
+        if n > 48 {
+            return false;
+        }
+    }
+}
+
 /// Tokens that may start a continuation line in StirPHP.
 const CONTINUATION: TokenSet = TokenSet::new(&[
     ARROW,
@@ -239,6 +287,19 @@ pub(crate) fn expr_bp(p: &mut Parser<'_>, min_bp: u8) -> Option<CompletedMarker>
             }
             types::type_no_union(p);
             lhs = m.complete(p, AS_EXPR);
+            continue;
+        }
+
+        if at_infix_call(p) {
+            if bp::INFIX < min_bp {
+                break;
+            }
+            let m = lhs.precede(p);
+            let n = p.start();
+            p.bump_remap(IDENT);
+            n.complete(p, NAME);
+            operand(p, bp::INFIX + 1);
+            lhs = m.complete(p, INFIX_CALL_EXPR);
             continue;
         }
 
@@ -366,6 +427,19 @@ fn postfix(p: &mut Parser<'_>) -> Option<CompletedMarker> {
     loop {
         if newline_breaks(p) {
             break;
+        }
+        if matches!(lhs.kind(), NAME_EXPR | PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR | CLASS_CONST_FETCH_EXPR) && at_call_type_args(p) {
+            let t = p.start();
+            p.bump(L_ANGLE);
+            while !p.at(R_ANGLE) && !p.at(EOF) {
+                types::type_(p);
+                if !p.eat(COMMA) {
+                    break;
+                }
+            }
+            p.bump_remap(R_ANGLE);
+            t.complete(p, CALL_TYPE_ARGS);
+            continue;
         }
         lhs = match p.current() {
             L_PAREN => {
@@ -750,7 +824,7 @@ fn primary(p: &mut Parser<'_>) -> Option<CompletedMarker> {
             name_ref(p);
             m.complete(p, NAME_EXPR)
         }
-        LIST_KW | ARRAY_KW | PRINT_KW | DEFAULT_KW | CLASS_KW | MATCH_KW | EMPTY_KW
+        LIST_KW | ARRAY_KW | PRINT_KW | DEFAULT_KW | CLASS_KW | MATCH_KW
             if stir && !matches!(p.nth(1), L_PAREN) =>
         {
             // reserved words can name StirPHP values (`val list = ...`)

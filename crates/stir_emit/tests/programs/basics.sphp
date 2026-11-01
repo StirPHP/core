@@ -1,0 +1,19 @@
+namespace App
+
+function greet(name: String, mut times: Int = 1): String {
+    var $out = ""
+    while (times > 0) {
+        $out = $out . "Hello, ${name}! "
+        times -= 1
+    }
+    return $out
+}
+
+function double(x: Int): Int = x * 2
+
+val total = double(21)
+echo greet("world", 2) . "\n"
+echo "total=${total}\n"
+echo "half=${7 / 2}\n"
+val same = 1 == 1
+echo same ? "same\n" : "diff\n"
