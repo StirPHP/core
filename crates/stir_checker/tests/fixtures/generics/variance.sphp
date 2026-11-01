@@ -1,0 +1,18 @@
+namespace App
+
+interface Source<out T> {
+    function next(): T
+    function put(x: T): Unit // error: SPHP0027
+}
+
+interface Sink<in T> {
+    function put(x: T): Unit
+    function get(): T // error: SPHP0027
+}
+
+class Cell<T>(var $value: T)
+
+val src: Source<Int>? = null
+val wider: Source<Int?>? = src
+val cell: Cell<Int> = new Cell(1)
+val cellWider: Cell<Int?> = cell // error: SPHP0005

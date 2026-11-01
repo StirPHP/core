@@ -301,6 +301,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         for e in sink {
             self.error(e.range, e.code, e.message);
         }
+        self.check_type_bounds(node.text_range(), &ty);
         ty
     }
 
@@ -1162,6 +1163,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             let _ = t;
         }
         self.check_class_header(&model);
+        self.check_variance(&model);
         // primary constructor defaults
         if let Some(ctor) = node.child(PRIMARY_CTOR) {
             for p in ctor.descendants().filter(|d| d.kind() == PARAM) {
@@ -2923,6 +2925,179 @@ impl<'a, 'db> Checker<'a, 'db> {
         self.ctx.record_ty(&model, args)
     }
 
+    /// Inferred type arguments must satisfy their bounds.
+    fn check_bounds(&mut self, range: TextRange, inf: &Inference, vars: &[stir_types::ParamId]) {
+        for id in vars {
+            let (Some(arg), Some(bound)) = (
+                inf.solved.get(id),
+                stir_types::TypeEnv::param_bound(self.ctx, *id),
+            ) else {
+                continue;
+            };
+            if arg.is_error() || arg.is_bottom() {
+                continue;
+            }
+            let bound = inf.apply(&bound);
+            if !self.assignable(arg, &bound) {
+                self.error(
+                    range,
+                    codes::TYPE_BOUND,
+                    format!("inferred type argument `{arg}` does not satisfy the bound `{bound}`"),
+                );
+            }
+        }
+    }
+
+    /// Explicit type arguments in a written type must satisfy their bounds.
+    fn check_type_bounds(&mut self, range: TextRange, ty: &Ty) {
+        let mut problems = Vec::new();
+        ty.walk(&mut |t| {
+            if let TyKind::Class { name, args } = t.kind()
+                && let Some(c) = self.ctx.class(name)
+            {
+                let map = self.ctx.subst_map(&c, args);
+                for (p, a) in c.params.iter().zip(args) {
+                    if let Some(b) = stir_types::TypeEnv::param_bound(self.ctx, p.id) {
+                        let b = stir_types::subst(&b, &map);
+                        if !a.is_error() && !stir_types::is_assignable(self.ctx, a, &b) {
+                            problems.push(format!(
+                                "type argument `{a}` of `{}` does not satisfy the bound `{b}`",
+                                c.name
+                            ));
+                        }
+                    }
+                }
+            }
+            true
+        });
+        for p in problems {
+            self.error(range, codes::TYPE_BOUND, p);
+        }
+    }
+
+    /// Declaration-site variance: `out T` only in output positions, `in T` only in inputs.
+    fn check_variance(&mut self, model: &Rc<ClassModel<'db>>) {
+        use stir_types::Variance;
+        let annotated: Vec<(stir_types::ParamId, SmolStr, Variance)> = model
+            .params
+            .iter()
+            .filter(|p| p.variance != Variance::Invariant)
+            .map(|p| (p.id, p.name.clone(), p.variance))
+            .collect();
+        if annotated.is_empty() {
+            return;
+        }
+        let mut found: Vec<(TextRange, String)> = Vec::new();
+        for m in &model.def.methods {
+            if m.name.eq_ignore_ascii_case("__construct")
+                || m.mods.visibility == Visibility::Private
+            {
+                continue;
+            }
+            let sig = self.ctx.method_sig(model, m);
+            for p in &sig.params {
+                self.variance_walk(&p.ty, true, false, &annotated, p.range, &mut found);
+            }
+            self.variance_walk(&sig.ret, false, false, &annotated, m.name_range, &mut found);
+        }
+        for p in &model.def.properties {
+            if p.mods.visibility == Visibility::Private {
+                continue;
+            }
+            if let Some(info) = self.ctx.find_property(&model.self_ty(), &p.name) {
+                self.variance_walk(
+                    &info.ty,
+                    false,
+                    !info.immutable,
+                    &annotated,
+                    p.range,
+                    &mut found,
+                );
+            }
+        }
+        for (range, msg) in found {
+            self.error(range, codes::VARIANCE, msg);
+        }
+    }
+
+    /// Walks `ty` in a position that is contravariant (`input`) or covariant,
+    /// or both (`invariant`), reporting misplaced variance-annotated params.
+    #[allow(clippy::too_many_arguments)]
+    fn variance_walk(
+        &self,
+        ty: &Ty,
+        input: bool,
+        invariant: bool,
+        params: &[(stir_types::ParamId, SmolStr, stir_types::Variance)],
+        range: TextRange,
+        out: &mut Vec<(TextRange, String)>,
+    ) {
+        use stir_types::Variance;
+        match ty.kind() {
+            TyKind::Param { id, .. } => {
+                if let Some((_, name, v)) = params.iter().find(|(p, _, _)| p == id) {
+                    let bad = invariant
+                        || (*v == Variance::Out && input)
+                        || (*v == Variance::In && !input);
+                    if bad {
+                        let pos = if invariant {
+                            "an invariant"
+                        } else if input {
+                            "an input (`in`)"
+                        } else {
+                            "an output (`out`)"
+                        };
+                        let kw = if *v == Variance::Out { "out" } else { "in" };
+                        out.push((range, format!("type parameter `{name}` is declared `{kw}` but occurs in {pos} position")));
+                    }
+                }
+            }
+            TyKind::List(e) => self.variance_walk(e, input, invariant, params, range, out),
+            TyKind::MutableList(e) => self.variance_walk(e, input, true, params, range, out),
+            TyKind::Map(k, v) => {
+                self.variance_walk(k, input, true, params, range, out);
+                self.variance_walk(v, input, invariant, params, range, out);
+            }
+            TyKind::MutableMap(k, v) => {
+                self.variance_walk(k, input, true, params, range, out);
+                self.variance_walk(v, input, true, params, range, out);
+            }
+            TyKind::Fn(f) => {
+                for p in &f.params {
+                    self.variance_walk(&p.ty, !input, invariant, params, range, out);
+                }
+                self.variance_walk(&f.ret, input, invariant, params, range, out);
+            }
+            TyKind::Class { name, args } => {
+                for (i, a) in args.iter().enumerate() {
+                    match stir_types::TypeEnv::variance(self.ctx, name, i) {
+                        Variance::Out => {
+                            self.variance_walk(a, input, invariant, params, range, out)
+                        }
+                        Variance::In => {
+                            self.variance_walk(a, !input, invariant, params, range, out)
+                        }
+                        Variance::Invariant => {
+                            self.variance_walk(a, input, true, params, range, out)
+                        }
+                    }
+                }
+            }
+            TyKind::Union(_) | TyKind::Intersection(_) => {
+                for m in ty.members() {
+                    self.variance_walk(m, input, invariant, params, range, out);
+                }
+            }
+            TyKind::Record(r) => {
+                for f in &r.fields {
+                    // records are copied by value: fields are covariant
+                    self.variance_walk(&f.ty, input, invariant, params, range, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
     // ------------------------------------------------------------ calls
 
     fn args_of(&self, call: &SyntaxNode) -> Vec<SyntaxNode> {
@@ -3076,6 +3251,15 @@ impl<'a, 'db> Checker<'a, 'db> {
             arg_tys[i] = Some(t);
         }
         inf.finish(&Ty::nothing());
+        self.check_bounds(
+            call.text_range(),
+            &inf,
+            &sig.type_params
+                .iter()
+                .map(|p| p.id)
+                .chain(extra_vars.iter().copied())
+                .collect::<Vec<_>>(),
+        );
         for (i, a) in args.iter().enumerate() {
             let (Some(p), Some(t)) = (assigned[i], &arg_tys[i]) else {
                 continue;
@@ -3292,7 +3476,23 @@ impl<'a, 'db> Checker<'a, 'db> {
         if nullable { t.nullable() } else { t }
     }
 
+    /// A type parameter's members are those of its bound.
+    fn bound_of(&self, ty: &Ty) -> Ty {
+        let mut t = ty.clone();
+        for _ in 0..8 {
+            match t.kind() {
+                TyKind::Param { id, .. } => match stir_types::TypeEnv::param_bound(self.ctx, *id) {
+                    Some(b) => t = b,
+                    None => return t,
+                },
+                _ => return t,
+            }
+        }
+        t
+    }
+
     fn member_type(&mut self, recv: &Ty, name: &str, range: TextRange) -> Ty {
+        let recv = &self.bound_of(recv);
         match recv.kind() {
             TyKind::Error => Ty::error(),
             TyKind::Nothing | TyKind::Never => Ty::nothing(),
@@ -3420,6 +3620,14 @@ impl<'a, 'db> Checker<'a, 'db> {
         range: TextRange,
         expected: Option<&Ty>,
     ) -> Ty {
+        let bounded = self.bound_of(recv);
+        let recv = if matches!(recv.kind(), TyKind::Param { .. })
+            && !matches!(bounded.kind(), TyKind::Param { .. })
+        {
+            &bounded
+        } else {
+            recv
+        };
         if recv.is_error() {
             self.check_args_untyped(node);
             return Ty::error();

@@ -27,3 +27,5 @@ pub const INSTANTIATION: &str = "SPHP0023";
 pub const VISIBILITY: &str = "SPHP0024";
 pub const DUPLICATE_DECLARATION: &str = "SPHP0025";
 pub const UNSUPPORTED_SYNTAX: &str = "SPHP0026";
+pub const VARIANCE: &str = "SPHP0027";
+pub const TYPE_BOUND: &str = "SPHP0028";

@@ -1,0 +1,22 @@
+namespace App
+
+class Box<T>(val value: T) {
+    function get(): T = value
+    function <R> map(f: (T) -> R): Box<R> = new Box(f(value))
+}
+
+function <T> identity(x: T): T = x
+function <T> firstOf(xs: List<T>): T? = null
+function <A, B> pair(a: A, b: B): Map<A, B> = [a => b]
+
+val b = new Box(1)
+val n: Int = b->get()
+val s: String = b->get() // error: SPHP0005
+val mapped: Box<String> = b->map { "v${it}" }
+val bad: Box<Int> = b->map { "v${it}" } // error: SPHP0005
+val i: Int = identity(5)
+val j: String = identity(5) // error: SPHP0005
+val f: Int? = firstOf([1, 2, 3])
+val p: Map<Int, String> = pair(1, "a")
+val explicit: Box<String> = new Box("x")
+val wrongExplicit: Box<String> = new Box(1) // error: SPHP0005
