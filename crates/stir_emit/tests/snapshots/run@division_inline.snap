@@ -1,0 +1,18 @@
+---
+source: crates/stir_emit/tests/programs.rs
+expression: out.code
+---
+<?php
+
+declare(strict_types=1);
+
+$a = 7;
+$b = 2;
+echo $a / $b . "\n";
+echo 6 / 2 . "\n";
+echo \ceil($a / $b) . "\n";
+echo \ceil(\intval('7') / \intval('2')) . "\n";
+echo \intdiv($a, $b) . "\n";
+$n = 9;
+$n /= 2;
+echo "{$n}\n";

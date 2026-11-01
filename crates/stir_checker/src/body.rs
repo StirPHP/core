@@ -2933,8 +2933,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             Ty::union([int, float])
         } else if is_int(l) && is_int(r) {
             match op {
-                // StirPHP integer division truncates (lowered to `intdiv`); PHP's `/` may produce a float.
-                SLASH if php => Ty::union([int, float]),
+                // as in PHP, `/` gives a float unless it divides evenly (`Int.div()` truncates)
+                SLASH => Ty::union([int, float]),
                 POW => Ty::union([int, float]),
                 _ => int,
             }

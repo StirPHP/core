@@ -2241,21 +2241,11 @@ impl<'a, 'db> Lowerer<'a, 'db> {
             self.expr(&es[1])
         };
         let safe = |t: &Option<Ty>| t.as_ref().is_some_and(is_safe_family);
-        let both_int = |t: &Option<Ty>| {
-            t.as_ref()
-                .is_some_and(|t| stir_types::is_assignable(self.ctx, t, &Ty::int()))
-        };
         let bop = match op {
             PLUS => BinaryOp::Add,
             MINUS => BinaryOp::Sub,
             STAR => BinaryOp::Mul,
-            SLASH => {
-                if both_int(&lt) && both_int(&rt) {
-                    // StirPHP integer division truncates
-                    return Expr::call_fn("\\intdiv", vec![Arg::Positional(l), Arg::Positional(r)]);
-                }
-                BinaryOp::Div
-            }
+            SLASH => BinaryOp::Div,
             PERCENT => BinaryOp::Mod,
             POW => BinaryOp::Pow,
             DOT => BinaryOp::Concat,
@@ -2326,21 +2316,7 @@ impl<'a, 'db> Lowerer<'a, 'db> {
             PLUS_EQ => AssignOp::Add,
             MINUS_EQ => AssignOp::Sub,
             STAR_EQ => AssignOp::Mul,
-            SLASH_EQ => {
-                let rt = self.ty(&es[1]);
-                let int = |t: &Option<Ty>| {
-                    t.as_ref()
-                        .is_some_and(|t| stir_types::is_assignable(self.ctx, t, &Ty::int()))
-                };
-                if int(&lt) && int(&rt) {
-                    let div = Expr::call_fn(
-                        "\\intdiv",
-                        vec![Arg::Positional(target.clone()), Arg::Positional(value)],
-                    );
-                    return target.assign(div);
-                }
-                AssignOp::Div
-            }
+            SLASH_EQ => AssignOp::Div,
             PERCENT_EQ => AssignOp::Mod,
             POW_EQ => AssignOp::Pow,
             DOT_EQ => AssignOp::Concat,

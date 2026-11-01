@@ -1,0 +1,10 @@
+val a: Int = 7
+val b: Int = 2
+echo "${a / b}\n"
+echo "${6 / 2}\n"
+echo "${ceil(a / b)}\n"
+echo "${ceil(intval("7") / intval("2"))}\n"
+echo "${a->div(b)}\n"
+var $n: Int|Float = 9
+$n /= 2
+echo "${$n}\n"

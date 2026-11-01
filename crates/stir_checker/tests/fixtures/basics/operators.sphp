@@ -10,5 +10,9 @@ val g = "a" < 1 // error: SPHP0013
 val h = true && 1 // error: SPHP0015
 val i = !1 // error: SPHP0015
 if (1) {} // error: SPHP0005
-val j: Int = 7 / 2
+val j: Int = 7 / 2 // error: SPHP0005
 function <K of Int | String> show(k: K, u: Int | String): String = "${k} ${u}"
+
+function division_may_be_fractional(a: Int, b: Int): Int = a / b // error: SPHP0005
+function truncating_division(a: Int, b: Int): Int = a->div(b)
+function fractional_division(a: Int, b: Int): Int|Float = a / b
