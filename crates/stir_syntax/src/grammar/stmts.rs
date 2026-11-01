@@ -185,7 +185,7 @@ pub(super) fn stmt(p: &mut Parser<'_>, top_level: bool) {
             p.eat(HALT_DATA);
             m.complete(p, HALT_COMPILER_STMT);
         }
-        IDENT if p.nth(1) == COLON && !p.stir() && p.nth(2) != COLON => {
+        IDENT if p.nth(1) == COLON && p.nth(2) != COLON => {
             let m = p.start();
             member_name(p);
             p.bump(COLON);

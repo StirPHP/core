@@ -996,9 +996,24 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                 });
             }
             let default = exprs_of(p).first().map(|e| self.expr(e));
+            // `function __construct(public int $x)`
+            let promoted_val = p.has_ident("val");
+            let mods = p.child(MODIFIERS);
+            let promote =
+                (promoted_val || p.has_token(VAR_KW) || mods.is_some()).then(|| Promotion {
+                    visibility: Some(
+                        mods.as_ref()
+                            .map(member_visibility)
+                            .unwrap_or(Visibility::Public),
+                    ),
+                    set_visibility: None,
+                    readonly: promoted_val
+                        || mods.as_ref().is_some_and(|m| m.has_token(READONLY_KW)),
+                });
+            let native = native.filter(|n| promote.is_none() || !mentions_callable(n));
             out.push(Param {
                 attrs: Vec::new(),
-                promote: None,
+                promote,
                 ty: native,
                 by_ref: p.has_token(AMP),
                 variadic,
@@ -1489,7 +1504,9 @@ impl<'a, 'db> Lowerer<'a, 'db> {
         self.template_tags(&sig.type_params, &mut doc);
         let saved = std::mem::replace(&mut self.frames, vec![FxHashMap::default()]);
         let params = self.params(m.child(PARAM_LIST), Some(&sig), &mut doc);
-        let is_ctor = md.name.eq_ignore_ascii_case("__construct");
+        // PHP allows no return type on these
+        let is_ctor = md.name.eq_ignore_ascii_case("__construct")
+            || md.name.eq_ignore_ascii_case("__destruct");
         // An `open` method's return type is PHPDoc-only: PHP can't override a
         // method that declares a return type without declaring one itself, and
         // untyped PHP subclasses must be able to override it. Parameter types

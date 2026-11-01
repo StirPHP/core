@@ -1,0 +1,24 @@
+class Promoted {
+    function __construct(public int $b, private val c: string = "c") {}
+    function c(): string = $this->c
+    function __destruct() {
+        echo "destroyed\n"
+    }
+}
+
+function f(): Unit {
+    val p = new Promoted(1)
+    echo "${p->b} ${p->c()}\n"
+}
+f()
+
+function jumps(n: int): int {
+    if (n > 2) {
+        goto done
+    }
+    echo "small\n"
+    done:
+    return n
+}
+echo "${jumps(1)}\n"
+echo "${jumps(3)}\n"

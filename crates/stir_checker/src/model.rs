@@ -743,7 +743,10 @@ impl<'db> Ctx<'db> {
         if let Some(c) = self.class(name) {
             // PHPDoc may leave out trailing type arguments: `Generator<K, V>`
             let mut args = args;
-            if !stir && !args.is_empty() && args.len() < c.params.len() {
+            if (!stir || c.name.eq_ignore_ascii_case("Generator"))
+                && !args.is_empty()
+                && args.len() < c.params.len()
+            {
                 args.resize(c.params.len(), Ty::any_platform());
             }
             if c.params.len() != args.len() && !(args.is_empty() && !stir) {
@@ -1126,8 +1129,13 @@ impl<'db> Ctx<'db> {
             .unwrap_or_default()
     }
 
+    /// A stub wins over a project's `define()` fallback for an extension's constant.
     pub fn constant(&self, name: &str) -> Option<ItemLoc> {
-        self.index.consts.get(name).and_then(|v| v.first()).copied()
+        let locs = self.index.consts.get(name)?;
+        locs.iter()
+            .find(|l| l.file.origin(self.db) == FileOrigin::Stub)
+            .or_else(|| locs.first())
+            .copied()
     }
 }
 

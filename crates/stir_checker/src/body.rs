@@ -782,7 +782,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             WHILE_STMT => {
                 let cond = exprs_of(node).into_iter().next();
-                self.widen_all();
+                self.widen_for_loop(node);
                 let facts = cond.as_ref().map(|c| self.condition(c)).unwrap_or_default();
                 let snap = self.snapshot();
                 self.apply_facts(&facts.0);
@@ -790,18 +790,18 @@ impl<'a, 'db> Checker<'a, 'db> {
                     self.stmt(&s);
                 }
                 self.restore_types(&snap);
-                self.widen_all();
+                self.widen_for_loop(node);
                 self.apply_facts(&facts.1);
             }
             DO_WHILE_STMT => {
-                self.widen_all();
+                self.widen_for_loop(node);
                 for s in node.children().filter(|c| is_stmt_kind(c.kind())) {
                     self.stmt(&s);
                 }
                 if let Some(c) = exprs_of(node).first() {
                     self.condition(c);
                 }
-                self.widen_all();
+                self.widen_for_loop(node);
             }
             FOR_STMT => {
                 for part in [FOR_INIT, FOR_COND, FOR_STEP] {
@@ -815,11 +815,11 @@ impl<'a, 'db> Checker<'a, 'db> {
                         }
                     }
                 }
-                self.widen_all();
+                self.widen_for_loop(node);
                 for s in node.children().filter(|c| is_stmt_kind(c.kind())) {
                     self.stmt(&s);
                 }
-                self.widen_all();
+                self.widen_for_loop(node);
             }
             FOREACH_STMT => self.foreach_stmt(node),
             SWITCH_STMT => {
@@ -1011,6 +1011,49 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
+    /// A loop's body may run again after any of it: variables it can change lose their
+    /// narrowings. PHP code's types are flow-joined, so all of them are reset there.
+    fn widen_for_loop(&mut self, node: &SyntaxNode) {
+        if !self.stir() {
+            self.widen_all();
+            return;
+        }
+        let mut mutated = Vec::new();
+        for d in node.descendants() {
+            let target = match d.kind() {
+                ASSIGN_EXPR => d.children().next(),
+                PREFIX_EXPR | POSTFIX_EXPR
+                    if op_token(&d).is_some_and(|t| matches!(t.kind(), INC | DEC)) =>
+                {
+                    d.children().next()
+                }
+                FOREACH_STMT => {
+                    mutated.extend(exprs_of(&d).into_iter().skip(1));
+                    None
+                }
+                VARIABLE_EXPR if d.parent().is_some_and(|p| p.has_token(AMP)) => Some(d.clone()),
+                // `use (&$x)`
+                CLOSURE_USE_VAR if d.has_token(AMP) => Some(d.clone()),
+                _ => None,
+            };
+            mutated.extend(target);
+        }
+        for mut target in mutated {
+            while target.kind() == INDEX_EXPR {
+                let Some(base) = exprs_of(&target).into_iter().next() else {
+                    break;
+                };
+                target = base;
+            }
+            let name = text_of(&target);
+            if let Some(l) = self.lookup_mut(name.trim_start_matches(['&', '$', ' ']))
+                && l.kind.mutable()
+            {
+                l.ty = l.declared.clone();
+            }
+        }
+    }
+
     /// Variables assigned inside `node` lose their narrowings.
     fn widen_assigned_in(&mut self, node: &SyntaxNode) {
         for a in node.descendants().filter(|d| d.kind() == ASSIGN_EXPR) {
@@ -1042,12 +1085,12 @@ impl<'a, 'db> Checker<'a, 'db> {
         if let Some(v) = val {
             self.bind_target(v, val_ty);
         }
-        self.widen_all();
+        self.widen_for_loop(node);
         for s in node.children().filter(|c| is_stmt_kind(c.kind())) {
             self.stmt(&s);
         }
         self.pop_block_frame();
-        self.widen_all();
+        self.widen_for_loop(node);
     }
 
     /// Binds a foreach/destructuring target.
@@ -1187,7 +1230,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                             "this function returns `Unit`; it can't return a value",
                         );
                     }
-                } else {
+                } else if !in_generator(node) {
                     self.check_assign(v.text_range(), &t, &fcx.ret, "return value");
                 }
             }
@@ -1196,6 +1239,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     && !matches!(fcx.ret.kind(), TyKind::Unit | TyKind::Void | TyKind::Error)
                     && !stir_types::is_nullable(self.ctx, &fcx.ret)
                     && self.stir()
+                    && !in_generator(node)
                 {
                     self.error(
                         node.text_range(),
@@ -1435,7 +1479,12 @@ impl<'a, 'db> Checker<'a, 'db> {
                 fcx.ret.kind(),
                 TyKind::Unit | TyKind::Void | TyKind::Error | TyKind::Nothing | TyKind::Never
             ) && !stir_types::is_nullable(self.ctx, &fcx.ret);
-            if self.stir() && needs_value && sig.ret_declared && !block_diverges(self, &block) {
+            if self.stir()
+                && needs_value
+                && sig.ret_declared
+                && !block_diverges(self, &block)
+                && !is_generator(node)
+            {
                 let end = block.text_range().end();
                 let range = node
                     .child(RETURN_TYPE)
@@ -1654,6 +1703,18 @@ impl<'a, 'db> Checker<'a, 'db> {
                 Some(inner) => self.facts(inner),
                 None => Default::default(),
             },
+            // `isset($x)` rules out null
+            ISSET_EXPR => {
+                let mut narrow = Vec::new();
+                for arg in node.child(ARG_LIST).iter().flat_map(|l| l.children_of(ARG)) {
+                    if let Some((name, local)) =
+                        exprs_of(&arg).first().and_then(|e| self.local_of(e))
+                    {
+                        narrow.push((name, stir_types::without_null(&local.ty)));
+                    }
+                }
+                (Facts { narrow }, Facts::default())
+            }
             PREFIX_EXPR if op_token(node).is_some_and(|t| t.kind() == BANG) => {
                 match exprs_of(node).first() {
                     Some(inner) => {
@@ -2249,7 +2310,11 @@ impl<'a, 'db> Checker<'a, 'db> {
                 } else {
                     bt
                 };
-                if self.stir() && (bt.is_nullable_like(self.ctx)) && !is_write_target(node) {
+                if self.stir()
+                    && self.probing == 0
+                    && bt.is_nullable_like(self.ctx)
+                    && !is_write_target(node)
+                {
                     self.error(
                         base.text_range(),
                         codes::NULLABLE_ACCESS,
@@ -2772,7 +2837,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                         .is_some_and(|b| {
                             matches!(
                                 strip_platform(b).kind(),
-                                TyKind::Array { .. } | TyKind::PhpList { .. } | TyKind::Shape(_)
+                                TyKind::Array { .. }
+                                    | TyKind::PhpList { .. }
+                                    | TyKind::Shape(_)
+                                    | TyKind::PhpString
                             )
                         });
                 if stir
@@ -3131,7 +3199,8 @@ impl<'a, 'db> Checker<'a, 'db> {
                 if op == DOT_EQ
                     && self.stir()
                     && !self.assignable(&vt, &Ty::string())
-                    && !(lt.is_php() && self.assignable(&vt, &Ty::php_string()))
+                    && !((lt.is_php() || declared.is_php())
+                        && self.assignable(&vt, &Ty::php_string()))
                     && !vt.is_error()
                 {
                     self.error(
@@ -4186,6 +4255,16 @@ impl<'a, 'db> Checker<'a, 'db> {
             let range = value_of(a)
                 .map(|v| v.text_range())
                 .unwrap_or(a.text_range());
+            // the callee may have written to it
+            if param.by_ref
+                && self.stir()
+                && let Some(v) = value_of(a)
+                && let Some((name, local)) = self.local_of(&v)
+                && local.kind.mutable()
+                && let Some(l) = self.lookup_mut(&name)
+            {
+                l.ty = l.declared.clone();
+            }
             if param.by_ref
                 && let Some(v) = value_of(a)
                 && !matches!(
@@ -5889,6 +5968,32 @@ fn unquoted_literal(node: &SyntaxNode) -> Option<String> {
         .and_then(|t| t.strip_suffix('\''))
         .or_else(|| text.strip_prefix('"').and_then(|t| t.strip_suffix('"')))?;
     (!inner.contains(['\\', '$'])).then(|| inner.to_owned())
+}
+
+/// A function with `yield` in its own body: its declared type describes the generator,
+/// and `return` gives the generator's final value.
+fn is_generator(function: &SyntaxNode) -> bool {
+    fn has_yield(node: &SyntaxNode) -> bool {
+        node.children().any(|c| {
+            matches!(c.kind(), YIELD_EXPR | YIELD_FROM_EXPR)
+                || (!matches!(
+                    c.kind(),
+                    FUNCTION_DECL | METHOD_DECL | CLOSURE_EXPR | ARROW_FN_EXPR | LAMBDA_EXPR
+                ) && has_yield(&c))
+        })
+    }
+    has_yield(function)
+}
+
+fn in_generator(node: &SyntaxNode) -> bool {
+    node.ancestors()
+        .find(|a| {
+            matches!(
+                a.kind(),
+                FUNCTION_DECL | METHOD_DECL | CLOSURE_EXPR | ARROW_FN_EXPR | LAMBDA_EXPR
+            )
+        })
+        .is_some_and(|f| is_generator(&f))
 }
 
 /// A PHP string or array in a variable may name a function: `$callback()`.
