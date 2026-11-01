@@ -5608,6 +5608,10 @@ impl<'a, 'db> Checker<'a, 'db> {
             } else {
                 self.stmt(s);
             }
+            // a body ending in `return` adds nothing beyond the values it returned
+            if i + 1 == n && self.diverges(s) {
+                last = Ty::nothing();
+            }
         }
         let fcx = self.fns.pop().unwrap();
         let ret = fcx

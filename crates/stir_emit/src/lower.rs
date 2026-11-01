@@ -375,6 +375,35 @@ fn file_level_comment(root: &SyntaxNode) -> Option<DocComment> {
     })
 }
 
+/// Makes each path of a lowered `if` return the value of its last expression.
+fn return_last_values(stmts: &mut Vec<Stmt>) {
+    let Some(last) = stmts.last_mut() else {
+        return;
+    };
+    match &mut last.kind {
+        StmtKind::Expr(e) => {
+            let value = std::mem::replace(e, Expr::null());
+            *last = Stmt::ret(Some(value));
+        }
+        StmtKind::Block(body) => return_last_values(body),
+        StmtKind::If {
+            then,
+            elseifs,
+            else_,
+            ..
+        } => {
+            return_last_values(then);
+            for branch in elseifs {
+                return_last_values(&mut branch.body);
+            }
+            if let Some(body) = else_ {
+                return_last_values(body);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn mentions_callable(t: &Type) -> bool {
     match t {
         Type::Builtin(BuiltinType::Callable) => true,
@@ -1126,7 +1155,7 @@ impl<'a, 'db> Lowerer<'a, 'db> {
         out.push(Stmt::new(StmtKind::Function(FunctionDecl {
             doc: (!doc.is_empty()).then_some(doc),
             attrs,
-            by_ref: false,
+            by_ref: node.has_token(AMP),
             name,
             params,
             return_type: ret_native,
@@ -1550,7 +1579,7 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                 stir_hir::Visibility::Private => Visibility::Private,
             }),
             is_static: md.mods.is_static,
-            by_ref: false,
+            by_ref: m.has_token(AMP),
             name: md.name.clone(),
             params,
             return_type: ret_native,
@@ -2939,6 +2968,12 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                     body.extend(pre);
                     body.push(Stmt::ret(Some(v)));
                 }
+            } else if i + 1 == n && !unit && s.kind() == IF_STMT {
+                // a trailing `if` is the lambda's value
+                let mut lowered = Vec::new();
+                self.stmt(s, &mut lowered);
+                return_last_values(&mut lowered);
+                body.extend(lowered);
             } else {
                 self.stmt(s, &mut body);
             }
