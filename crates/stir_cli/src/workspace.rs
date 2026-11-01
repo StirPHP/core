@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use anyhow::Context as _;
 use futures::{StreamExt as _, TryStreamExt as _};
-use stir_db::{FileOrigin, RootDatabase, SourceFile, Workspace};
+use stir_db::{FileOrigin, IgnoreRule, RootDatabase, Settings, SourceFile, Workspace};
 use stir_project::{Autoload, FileKind, Project};
 use stir_syntax::Dialect;
 
@@ -110,7 +110,8 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         ));
     }
 
-    let workspace = Workspace::new(&db, files);
+    let settings = load_settings(project).await?;
+    let workspace = Workspace::new(&db, files, settings);
     tracing::debug!(
         sources = sources.len(),
         stubs = stub_count,
@@ -125,6 +126,57 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         stub_count,
         vendor_count,
     })
+}
+
+/// Check settings: `checkPhp` from `sphp.toml`, plus the rule level and
+/// `ignoreErrors` of the PHPStan config (the `phpstan` key of `sphp.toml`, else
+/// `phpstan.neon` or `phpstan.neon.dist` at the project root).
+pub async fn load_settings(project: &Project) -> anyhow::Result<Settings> {
+    let mut settings = Settings {
+        check_php: project.config.check_php,
+        ..Settings::default()
+    };
+    let path = match project.phpstan_path() {
+        Some(p) => Some(p),
+        None => ["phpstan.neon", "phpstan.neon.dist"]
+            .iter()
+            .map(|n| project.root.join(n))
+            .find(|p| p.is_file()),
+    };
+    let Some(path) = path else {
+        return Ok(settings);
+    };
+    let root = project.root.clone();
+    let config = tokio::task::spawn_blocking(move || {
+        let opts = stir_neon::phpstan::LoadOptions::new()
+            .param("currentWorkingDirectory", root.to_string_lossy());
+        stir_neon::phpstan::PhpstanConfig::load_with(&path, &opts)
+    })
+    .await?
+    .context("failed to load the PHPStan configuration")?;
+    settings.php_level = config.level.map(|l| match l {
+        stir_neon::phpstan::Level::Level(n) => n.min(stir_db::MAX_PHP_LEVEL),
+        stir_neon::phpstan::Level::Max => stir_db::MAX_PHP_LEVEL,
+    });
+    settings.ignore_errors = config
+        .ignore_errors
+        .into_iter()
+        .map(|e| {
+            let mut rule = IgnoreRule {
+                identifiers: e.identifiers,
+                paths: e.paths,
+                ..IgnoreRule::default()
+            };
+            for m in e.messages {
+                match m {
+                    stir_neon::phpstan::IgnoreMessage::Regex(r) => rule.patterns.push(r),
+                    stir_neon::phpstan::IgnoreMessage::Raw(r) => rule.raw_messages.push(r),
+                }
+            }
+            rule
+        })
+        .collect();
+    Ok(settings)
 }
 
 /// Collects every `.php` file reachable from the autoload rules, canonicalised and
@@ -284,5 +336,31 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(without.vendor_count, 0);
+    }
+
+    #[tokio::test]
+    async fn reads_phpstan_settings() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        write(&root.join("sphp.toml"), "srcDir = \"src\"\ncheckPhp = true\n");
+        write(
+            &root.join("phpstan.neon.dist"),
+            "parameters:\n    level: 5\n    ignoreErrors:\n        - '#^unknown function#'\n        -\n            identifier: SPHP0007\n            path: src/legacy.php\n",
+        );
+        let project = Project::load(root).await.unwrap();
+        let settings = load_settings(&project).await.unwrap();
+        assert!(settings.check_php);
+        assert_eq!(settings.php_level, Some(5));
+        assert_eq!(settings.ignore_errors.len(), 2);
+        assert_eq!(settings.ignore_errors[0].patterns, ["#^unknown function#"]);
+        assert_eq!(settings.ignore_errors[1].identifiers, ["SPHP0007"]);
+        assert!(settings.ignore_errors[1].paths[0].ends_with("src/legacy.php"));
+
+        write(&root.join("sphp.toml"), "srcDir = \"src\"\nphpstan = \"conf/custom.neon\"\n");
+        write(&root.join("conf/custom.neon"), "parameters:\n    level: max\n");
+        let project = Project::load(root).await.unwrap();
+        let settings = load_settings(&project).await.unwrap();
+        assert!(!settings.check_php);
+        assert_eq!(settings.php_level, Some(stir_db::MAX_PHP_LEVEL));
     }
 }

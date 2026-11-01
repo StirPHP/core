@@ -55,50 +55,15 @@ pub async fn run(args: CheckArgs) -> anyhow::Result<ExitCode> {
         vendor = loaded.vendor_count,
         "loaded files"
     );
-    let check_php = project.config.check_php;
-    let targets: Vec<SourceFile> = loaded
-        .sources
-        .iter()
-        .copied()
-        .filter(|f| check_php || f.dialect(&loaded.db) != Dialect::Php)
-        .filter(|f| filters.is_empty() || filters.iter().any(|p| f.path(&loaded.db).starts_with(p)))
-        .collect();
-
-    let start = Instant::now();
-    let mut diagnostics = check_files(&loaded, &targets).await?;
-    tracing::debug!(files = targets.len(), elapsed = ?start.elapsed(), "checked");
-    diagnostics.sort_by(|a, b| {
-        (&a.file, a.range.start(), a.range.end(), a.severity, a.code).cmp(&(
-            &b.file,
-            b.range.start(),
-            b.range.end(),
-            b.severity,
-            b.code,
-        ))
-    });
-
-    let texts: HashMap<&Path, &str> = loaded
-        .sources
-        .iter()
-        .map(|f| (f.path(&loaded.db).as_path(), f.text(&loaded.db).as_str()))
-        .collect();
+    let (diagnostics, checked) = collect_diagnostics(&project, &loaded, &filters).await?;
+    let texts = source_texts(&loaded);
     let shown = &diagnostics[..args.max_errors.unwrap_or(usize::MAX).min(diagnostics.len())];
 
-    let summary = Summary::new(&diagnostics, targets.len());
+    let summary = Summary::new(&diagnostics, checked);
     let mut stdout = std::io::stdout().lock();
     match args.format {
         Format::Human => {
-            let color = use_color(std::io::stdout().is_terminal());
-            let out = render_human(shown, &texts, &cwd, color);
-            stdout.write_all(&out)?;
-            if shown.len() < diagnostics.len() {
-                writeln!(
-                    stdout,
-                    "... {} more not shown (--max-errors {})",
-                    diagnostics.len() - shown.len(),
-                    shown.len()
-                )?;
-            }
+            print_human(&mut stdout, &diagnostics, &texts, &cwd, args.max_errors)?;
             writeln!(stdout, "{summary}")?;
         }
         Format::Json => {
@@ -117,7 +82,8 @@ pub async fn run(args: CheckArgs) -> anyhow::Result<ExitCode> {
     })
 }
 
-async fn load_project(cwd: &Path) -> anyhow::Result<Project> {
+/// Loads the project whose `sphp.toml` is in `cwd` or one of its ancestors.
+pub(crate) async fn load_project(cwd: &Path) -> anyhow::Result<Project> {
     match Project::load(cwd).await {
         Ok(project) => Ok(project),
         Err(stir_project::Error::ConfigNotFound { start }) => anyhow::bail!(
@@ -127,6 +93,75 @@ async fn load_project(cwd: &Path) -> anyhow::Result<Project> {
         ),
         Err(e) => Err(e.into()),
     }
+}
+
+/// Type-checks the project's sources (`.php` ones only with `checkPhp` or a
+/// `// @sphp-check` comment), limited to
+/// files under `filters` when non-empty. Returns the sorted diagnostics and the
+/// number of files checked.
+pub(crate) async fn collect_diagnostics(
+    project: &Project,
+    loaded: &Loaded,
+    filters: &[PathBuf],
+) -> anyhow::Result<(Vec<Diagnostic>, usize)> {
+    let check_php = project.config.check_php;
+    let targets: Vec<SourceFile> = loaded
+        .sources
+        .iter()
+        .copied()
+        .filter(|f| {
+            // `// @sphp-check` / `// @sphp-nocheck` override `checkPhp` per file.
+            f.dialect(&loaded.db) != Dialect::Php
+                || stir_checker::levels::directive(f.text(&loaded.db)).unwrap_or(check_php)
+        })
+        .filter(|f| filters.is_empty() || filters.iter().any(|p| f.path(&loaded.db).starts_with(p)))
+        .collect();
+
+    let start = Instant::now();
+    let mut diagnostics = check_files(loaded, &targets).await?;
+    tracing::debug!(files = targets.len(), elapsed = ?start.elapsed(), "checked");
+    diagnostics.sort_by(|a, b| {
+        (&a.file, a.range.start(), a.range.end(), a.severity, a.code).cmp(&(
+            &b.file,
+            b.range.start(),
+            b.range.end(),
+            b.severity,
+            b.code,
+        ))
+    });
+    Ok((diagnostics, targets.len()))
+}
+
+/// Path → text of every project source, for rendering diagnostics.
+pub(crate) fn source_texts(loaded: &Loaded) -> HashMap<&Path, &str> {
+    loaded
+        .sources
+        .iter()
+        .map(|f| (f.path(&loaded.db).as_path(), f.text(&loaded.db).as_str()))
+        .collect()
+}
+
+/// Renders diagnostics for humans (coloured when stdout is a terminal), showing at
+/// most `max_errors` of them.
+pub(crate) fn print_human(
+    out: &mut impl std::io::Write,
+    diagnostics: &[Diagnostic],
+    texts: &HashMap<&Path, &str>,
+    cwd: &Path,
+    max_errors: Option<usize>,
+) -> std::io::Result<()> {
+    let shown = &diagnostics[..max_errors.unwrap_or(usize::MAX).min(diagnostics.len())];
+    let color = use_color(std::io::stdout().is_terminal());
+    out.write_all(&render_human(shown, texts, cwd, color))?;
+    if shown.len() < diagnostics.len() {
+        writeln!(
+            out,
+            "... {} more not shown (--max-errors {})",
+            diagnostics.len() - shown.len(),
+            shown.len()
+        )?;
+    }
+    Ok(())
 }
 
 async fn canonical_filters(cwd: &Path, paths: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
@@ -160,15 +195,15 @@ fn use_color(is_tty: bool) -> bool {
     is_tty && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
 }
 
-struct Summary {
-    errors: usize,
+pub(crate) struct Summary {
+    pub(crate) errors: usize,
     warnings: usize,
     files_with_problems: usize,
     checked: usize,
 }
 
 impl Summary {
-    fn new(diagnostics: &[Diagnostic], checked: usize) -> Self {
+    pub(crate) fn new(diagnostics: &[Diagnostic], checked: usize) -> Self {
         let count = |s| diagnostics.iter().filter(|d| d.severity == s).count();
         let mut files: Vec<&Path> = diagnostics.iter().map(|d| d.file.as_path()).collect();
         files.dedup();
@@ -231,7 +266,7 @@ impl<'a> LineMap<'a> {
     }
 }
 
-fn display_path(path: &Path, cwd: &Path) -> String {
+pub(crate) fn display_path(path: &Path, cwd: &Path) -> String {
     path.strip_prefix(cwd).unwrap_or(path).display().to_string()
 }
 

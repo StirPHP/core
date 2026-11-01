@@ -11,9 +11,15 @@ ariadne = "0.6.0"
 clap.workspace = true
 futures = "0.3.34"
 inquire = "0.9.4"
+notify-debouncer-full = "0.7.0"
+pathdiff = "0.2.3"
+salsa = "0.28.5"
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
+sourcemap = "9.3.2"
 stir_checker = { version = "0.1.0", path = "../stir_checker" }
 stir_db = { version = "0.1.0", path = "../stir_db" }
+stir_emit = { version = "0.1.0", path = "../stir_emit" }
+stir_neon = { version = "0.1.0", path = "../stir_neon" }
 stir_project = { version = "0.1.0", path = "../stir_project" }
 stir_stubs = { version = "0.1.0", path = "../stir_stubs" }
 stir_syntax = { version = "0.1.0", path = "../stir_syntax" }

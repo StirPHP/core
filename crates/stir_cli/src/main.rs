@@ -1,4 +1,6 @@
+mod build;
 mod check;
+mod watch;
 mod workspace;
 
 use std::path::{Path, PathBuf};
@@ -23,7 +25,7 @@ enum Command {
     /// Type-check the project.
     Check(check::CheckArgs),
     /// Transpile the project to plain PHP.
-    Build,
+    Build(build::BuildArgs),
 }
 
 #[derive(Debug, Args)]
@@ -56,7 +58,7 @@ async fn main() -> anyhow::Result<ExitCode> {
     match cli.command {
         Command::Init(args) => run_init(args).await.map(|()| ExitCode::SUCCESS),
         Command::Check(args) => check::run(args).await,
-        Command::Build => anyhow::bail!("`build` is not implemented yet"),
+        Command::Build(args) => build::run(args).await,
     }
 }
 
