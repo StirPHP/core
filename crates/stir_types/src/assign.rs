@@ -779,6 +779,16 @@ impl<'a> Checker<'a> {
                 self.arg(from, to, 0, Variance::Out, &k, key)?;
                 return self.arg(from, to, 1, Variance::Out, &v, value);
             }
+            // PHP callables: `'strlen'`, `[$object, 'method']`
+            (
+                K::PhpString | K::PhpList { .. } | K::Array { .. } | K::Shape(_),
+                K::Callable { closure: false, .. },
+            ) => return Ok(()),
+            (K::Literal(l), K::Callable { closure: false, .. })
+                if l.family == Family::Php && matches!(l.value, LitValue::String(_)) =>
+            {
+                return Ok(());
+            }
             (_, K::Callable { sig, closure }) => {
                 return self.callable(from, to, sig.as_ref(), *closure);
             }
