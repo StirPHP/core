@@ -96,7 +96,23 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         ));
     }
 
-    let settings = load_settings(project).await?;
+    let config = load_phpstan_config(project).await?;
+    if let Some(config) = &config {
+        let own: BTreeSet<PathBuf> = sources
+            .iter()
+            .filter_map(|f| f.path(&db).canonicalize().ok())
+            .collect();
+        for (path, text) in read_vendor(scanned_paths(config, &own).await?).await {
+            files.push(SourceFile::new(
+                &db,
+                path,
+                text,
+                Dialect::Php,
+                FileOrigin::Vendor,
+            ));
+        }
+    }
+    let settings = settings_from(project, config);
     let workspace = Workspace::new(&db, files, settings);
     tracing::debug!(
         sources = sources.len(),
@@ -141,10 +157,12 @@ pub fn builtin_files(db: &RootDatabase) -> Vec<SourceFile> {
 /// `ignoreErrors` of the PHPStan config (the `phpstan` key of `sphp.toml`, else
 /// `phpstan.neon` or `phpstan.neon.dist` at the project root).
 pub async fn load_settings(project: &Project) -> anyhow::Result<Settings> {
-    let mut settings = Settings {
-        check_php: project.config.check_php,
-        ..Settings::default()
-    };
+    Ok(settings_from(project, load_phpstan_config(project).await?))
+}
+
+async fn load_phpstan_config(
+    project: &Project,
+) -> anyhow::Result<Option<stir_neon::phpstan::PhpstanConfig>> {
     let path = match project.phpstan_path() {
         Some(p) => Some(p),
         None => ["phpstan.neon", "phpstan.neon.dist"]
@@ -153,7 +171,7 @@ pub async fn load_settings(project: &Project) -> anyhow::Result<Settings> {
             .find(|p| p.is_file()),
     };
     let Some(path) = path else {
-        return Ok(settings);
+        return Ok(None);
     };
     let root = project.root.clone();
     let config = tokio::task::spawn_blocking(move || {
@@ -164,8 +182,68 @@ pub async fn load_settings(project: &Project) -> anyhow::Result<Settings> {
     .await?
     .context("failed to load the PHPStan configuration")?;
     for skipped in &config.skipped_includes {
-        tracing::warn!("skipping PHPStan include {}: not installed", skipped.display());
+        tracing::warn!(
+            "skipping PHPStan include {}: not installed",
+            skipped.display()
+        );
     }
+    Ok(Some(config))
+}
+
+/// The files PHPStan reads for their symbols (`bootstrapFiles`, `scanFiles` and
+/// `scanDirectories`), other than the project's own.
+async fn scanned_paths(
+    config: &stir_neon::phpstan::PhpstanConfig,
+    own: &BTreeSet<PathBuf>,
+) -> anyhow::Result<Vec<PathBuf>> {
+    let files: Vec<PathBuf> = config
+        .bootstrap_files
+        .iter()
+        .chain(&config.scan_files)
+        .cloned()
+        .collect();
+    let dirs = config.scan_directories.clone();
+    let own = own.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut out = BTreeSet::new();
+        for file in files.into_iter().filter(|f| f.is_file()) {
+            out.insert(file);
+        }
+        for dir in dirs {
+            for entry in ignore::WalkBuilder::new(dir)
+                .standard_filters(false)
+                .build()
+                .flatten()
+            {
+                if entry.path().extension().is_some_and(|e| e == "php") {
+                    out.insert(entry.into_path());
+                }
+            }
+        }
+        out.into_iter()
+            .filter(|p| p.canonicalize().map_or(true, |c| !own.contains(&c)))
+            .collect()
+    })
+    .await
+    .context("failed to list the PHPStan scan paths")
+}
+
+fn settings_from(project: &Project, config: Option<stir_neon::phpstan::PhpstanConfig>) -> Settings {
+    let mut settings = Settings {
+        check_php: project.config.check_php,
+        ..Settings::default()
+    };
+    let Some(config) = config else {
+        return settings;
+    };
+    settings.php_paths = config.paths.clone();
+    settings.php_excludes = config
+        .exclude_paths
+        .analyse
+        .iter()
+        .chain(&config.exclude_paths.analyse_and_scan)
+        .cloned()
+        .collect();
     settings.php_level = config.level.map(|l| match l {
         stir_neon::phpstan::Level::Level(n) => n.min(stir_db::MAX_PHP_LEVEL),
         stir_neon::phpstan::Level::Max => stir_db::MAX_PHP_LEVEL,
@@ -188,7 +266,7 @@ pub async fn load_settings(project: &Project) -> anyhow::Result<Settings> {
             rule
         })
         .collect();
-    Ok(settings)
+    settings
 }
 
 /// Collects every `.php` file reachable from the autoload rules, canonicalised and
@@ -383,5 +461,43 @@ mod tests {
         let settings = load_settings(&project).await.unwrap();
         assert!(!settings.check_php);
         assert_eq!(settings.php_level, Some(stir_db::MAX_PHP_LEVEL));
+    }
+
+    #[tokio::test]
+    async fn loads_phpstan_paths_and_scanned_files() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        write(&root.join("sphp.toml"), "srcDir = \"src\"\n");
+        write(&root.join("src/a.php"), "<?php\necho BOOTED;\n");
+        write(
+            &root.join("tools/boot.php"),
+            "<?php\ndefine('BOOTED', 1);\n",
+        );
+        write(
+            &root.join("phpstan.neon"),
+            "parameters:\n    paths:\n        - src\n    excludePaths:\n        analyse:\n            - src/gen\n    bootstrapFiles:\n        - tools/boot.php\n    scanFiles:\n        - src/a.php\n",
+        );
+        let project = Project::load(&root).await.unwrap();
+        let loaded = load_workspace(&project, LoadOptions { vendor: false })
+            .await
+            .unwrap();
+        let settings = loaded.workspace.settings(&loaded.db);
+        assert_eq!(settings.php_paths, [root.join("src")]);
+        assert_eq!(settings.php_excludes, [root.join("src/gen")]);
+        assert_eq!(loaded.sources.len(), 1);
+        let paths: Vec<_> = loaded
+            .workspace
+            .files(&loaded.db)
+            .iter()
+            .map(|f| f.path(&loaded.db).clone())
+            .collect();
+        assert_eq!(
+            paths
+                .iter()
+                .filter(|p| p.ends_with("tools/boot.php"))
+                .count(),
+            1
+        );
+        assert_eq!(paths.iter().filter(|p| p.ends_with("src/a.php")).count(), 1);
     }
 }

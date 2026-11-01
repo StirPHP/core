@@ -77,6 +77,10 @@ pub struct Settings {
     pub php_version: (u8, u8),
     /// PHPStan `ignoreErrors`, applied to diagnostics in `.php` files only.
     pub ignore_errors: Vec<IgnoreRule>,
+    /// PHPStan `paths`: if any, only `.php` files under these are reported.
+    pub php_paths: Vec<PathBuf>,
+    /// PHPStan `excludePaths` (may contain fnmatch globs): `.php` files not reported.
+    pub php_excludes: Vec<PathBuf>,
 }
 
 impl Default for Settings {
@@ -86,6 +90,8 @@ impl Default for Settings {
             php_level: None,
             php_version: DEFAULT_PHP_VERSION,
             ignore_errors: Vec::new(),
+            php_paths: Vec::new(),
+            php_excludes: Vec::new(),
         }
     }
 }

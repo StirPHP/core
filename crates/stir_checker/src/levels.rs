@@ -94,7 +94,8 @@ pub fn php_checked(text: &str, settings: &Settings) -> bool {
     directive(text).unwrap_or(settings.check_php)
 }
 
-/// Drops `.php` diagnostics above the configured level or matched by `ignoreErrors`.
+/// Drops `.php` diagnostics above the configured level, matched by `ignoreErrors`
+/// or outside the analysed paths.
 pub fn filter_php(diags: &mut Vec<Diagnostic>, settings: &Settings) {
     let level = settings.level();
     let rules: Vec<CompiledRule<'_>> = settings
@@ -102,7 +103,13 @@ pub fn filter_php(diags: &mut Vec<Diagnostic>, settings: &Settings) {
         .iter()
         .map(CompiledRule::new)
         .collect();
-    diags.retain(|d| min_level(d) <= level && !rules.iter().any(|r| r.matches(d)));
+    let analysed = |file: &Path| {
+        (settings.php_paths.is_empty() || settings.php_paths.iter().any(|p| path_matches(p, file)))
+            && !settings.php_excludes.iter().any(|p| path_matches(p, file))
+    };
+    diags.retain(|d| {
+        min_level(d) <= level && analysed(&d.file) && !rules.iter().any(|r| r.matches(d))
+    });
 }
 
 struct CompiledRule<'a> {
@@ -187,6 +194,26 @@ fn fnmatch(pat: &[u8], s: &[u8]) -> bool {
 mod tests {
     use super::*;
     use stir_syntax::TextRange;
+
+    #[test]
+    fn analysed_paths() {
+        let settings = Settings {
+            php_paths: vec!["/p/src".into()],
+            php_excludes: vec!["/p/src/lib".into(), "*/gen/*".into()],
+            ..Settings::default()
+        };
+        let mut diags = [
+            "/p/src/a.php",
+            "/p/src/lib/b.php",
+            "/p/src/gen/c.php",
+            "/p/other/d.php",
+        ]
+        .map(|f| diag(codes::UNDEFINED_VARIABLE, "x", f))
+        .to_vec();
+        filter_php(&mut diags, &settings);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].file, Path::new("/p/src/a.php"));
+    }
 
     fn diag(code: &'static str, msg: &str, file: &str) -> Diagnostic {
         Diagnostic::error(file, TextRange::default(), code, msg)
