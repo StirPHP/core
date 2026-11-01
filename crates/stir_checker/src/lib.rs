@@ -21,7 +21,8 @@ pub use model::Ctx;
 #[salsa::tracked(returns(ref))]
 pub fn check_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> Arc<Vec<Diagnostic>> {
     let mut diags = stir_db::syntax_diagnostics(db, file).as_ref().clone();
-    if file.origin(db) == FileOrigin::Source {
+    // Semantic errors on a broken tree are mostly noise: fix syntax first.
+    if file.origin(db) == FileOrigin::Source && diags.is_empty() {
         let ctx = Ctx::new(db, ws);
         let mut checker = Checker::new(&ctx, file);
         let root = stir_db::parse(db, file).syntax();
