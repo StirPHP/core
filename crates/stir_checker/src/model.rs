@@ -1315,7 +1315,11 @@ fn literal_ty(node: &stir_syntax::SyntaxNode) -> Option<Ty> {
                 .map(|e| {
                     let parts: Vec<_> = e.children().collect();
                     // keyed elements make it a map: not inferred
-                    if parts.len() == 1 { literal_ty(&parts[0]) } else { None }
+                    if parts.len() == 1 {
+                        literal_ty(&parts[0])
+                    } else {
+                        None
+                    }
                 })
                 .collect::<Option<_>>()?;
             let elem = elems.first().cloned().unwrap_or_else(Ty::nothing);

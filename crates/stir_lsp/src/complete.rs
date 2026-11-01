@@ -52,23 +52,112 @@ pub struct Completions {
 }
 
 const STIR_KEYWORDS: &[&str] = &[
-    "val", "var", "function", "class", "data", "record", "interface", "sealed", "open",
-    "abstract", "enum", "typealias", "when", "if", "else", "for", "foreach", "while", "do",
-    "return", "throw", "try", "catch", "finally", "is", "as", "in", "out", "of", "where", "mut",
-    "null", "true", "false", "this", "new", "namespace", "use", "break", "continue", "echo",
-    "private", "protected", "public", "static", "override", "const",
+    "val",
+    "var",
+    "function",
+    "class",
+    "data",
+    "record",
+    "interface",
+    "sealed",
+    "open",
+    "abstract",
+    "enum",
+    "typealias",
+    "when",
+    "if",
+    "else",
+    "for",
+    "foreach",
+    "while",
+    "do",
+    "return",
+    "throw",
+    "try",
+    "catch",
+    "finally",
+    "is",
+    "as",
+    "in",
+    "out",
+    "of",
+    "where",
+    "mut",
+    "null",
+    "true",
+    "false",
+    "this",
+    "new",
+    "namespace",
+    "use",
+    "break",
+    "continue",
+    "echo",
+    "private",
+    "protected",
+    "public",
+    "static",
+    "override",
+    "const",
 ];
 
 const PHP_KEYWORDS: &[&str] = &[
-    "function", "class", "interface", "trait", "enum", "abstract", "final", "readonly",
-    "if", "else", "elseif", "for", "foreach", "while", "do", "switch", "case", "match",
-    "return", "throw", "try", "catch", "finally", "instanceof", "new", "namespace", "use",
-    "break", "continue", "echo", "private", "protected", "public", "static", "const", "null",
-    "true", "false", "array", "fn", "yield", "isset", "unset", "empty",
+    "function",
+    "class",
+    "interface",
+    "trait",
+    "enum",
+    "abstract",
+    "final",
+    "readonly",
+    "if",
+    "else",
+    "elseif",
+    "for",
+    "foreach",
+    "while",
+    "do",
+    "switch",
+    "case",
+    "match",
+    "return",
+    "throw",
+    "try",
+    "catch",
+    "finally",
+    "instanceof",
+    "new",
+    "namespace",
+    "use",
+    "break",
+    "continue",
+    "echo",
+    "private",
+    "protected",
+    "public",
+    "static",
+    "const",
+    "null",
+    "true",
+    "false",
+    "array",
+    "fn",
+    "yield",
+    "isset",
+    "unset",
+    "empty",
 ];
 
 const STIR_TYPES: &[&str] = &[
-    "Int", "Float", "String", "Bool", "Unit", "Nothing", "List", "MutableList", "Map",
+    "Int",
+    "Float",
+    "String",
+    "Bool",
+    "Unit",
+    "Nothing",
+    "List",
+    "MutableList",
+    "Map",
     "MutableMap",
 ];
 
@@ -130,7 +219,13 @@ pub fn complete(db: &dyn Db, ws: Workspace, file: SourceFile, offset: TextSize) 
         if let Some(Def::Class(key)) = def
             && let Some(model) = ctx.class(&key)
         {
-            member_items(&ctx, &model.self_ty(), true, enclosing.as_deref(), &mut out.items);
+            member_items(
+                &ctx,
+                &model.self_ty(),
+                true,
+                enclosing.as_deref(),
+                &mut out.items,
+            );
             out.items.push(Item {
                 label: "class".into(),
                 kind: ItemKind::Keyword,
@@ -151,7 +246,13 @@ pub fn complete(db: &dyn Db, ws: Workspace, file: SourceFile, offset: TextSize) 
         && let Some(key) = &enclosing
         && let Some(model) = ctx.class(key)
     {
-        member_items(&ctx, &model.self_ty(), false, enclosing.as_deref(), &mut out.items);
+        member_items(
+            &ctx,
+            &model.self_ty(),
+            false,
+            enclosing.as_deref(),
+            &mut out.items,
+        );
     }
     let keywords = if stir { STIR_KEYWORDS } else { PHP_KEYWORDS };
     for kw in keywords {
@@ -251,9 +352,21 @@ fn member_items(
                 };
                 (ItemKind::Property, label, insert)
             }
-            MemberTy::Field(t) => (ItemKind::Field, format!("{}: {t}", m.name), m.name.to_string()),
-            MemberTy::Const(t) => (ItemKind::Const, format!("const {}: {t}", m.name), m.name.to_string()),
-            MemberTy::Case => (ItemKind::EnumCase, format!("case {}", m.name), m.name.to_string()),
+            MemberTy::Field(t) => (
+                ItemKind::Field,
+                format!("{}: {t}", m.name),
+                m.name.to_string(),
+            ),
+            MemberTy::Const(t) => (
+                ItemKind::Const,
+                format!("const {}: {t}", m.name),
+                m.name.to_string(),
+            ),
+            MemberTy::Case => (
+                ItemKind::EnumCase,
+                format!("case {}", m.name),
+                m.name.to_string(),
+            ),
         };
         out.push(Item {
             label: m.name.to_string(),
@@ -343,12 +456,19 @@ fn local_items(
         }
         let has_dollar = matches!(
             kind,
-            LocalKind::Var | LocalKind::Php | LocalKind::Loop | LocalKind::Param(stir_hir::Binding::Php)
+            LocalKind::Var
+                | LocalKind::Php
+                | LocalKind::Loop
+                | LocalKind::Param(stir_hir::Binding::Php)
         );
         if dollar && !has_dollar {
             continue;
         }
-        let label = if has_dollar { format!("${name}") } else { name.clone() };
+        let label = if has_dollar {
+            format!("${name}")
+        } else {
+            name.clone()
+        };
         out.push(Item {
             insert: label.clone(),
             label,
@@ -400,7 +520,11 @@ fn global_items(
             kind: ItemKind::Function,
             detail: Some(render::signature(&sig, "function").label),
             insert,
-            rank: if loc.file.origin(db) == stir_db::FileOrigin::Source { 2 } else { 4 },
+            rank: if loc.file.origin(db) == stir_db::FileOrigin::Source {
+                2
+            } else {
+                4
+            },
         });
     }
     for locs in index.classes.values() {
@@ -411,7 +535,9 @@ fn global_items(
             continue;
         }
         let resolved = scope.resolve_class(short).key();
-        let insert = if resolved == c.name.key() || (stir && c.name.namespace().eq_ignore_ascii_case("stir")) {
+        let insert = if resolved == c.name.key()
+            || (stir && c.name.namespace().eq_ignore_ascii_case("stir"))
+        {
             short.to_owned()
         } else {
             format!("\\{}", c.name.as_str())
@@ -426,7 +552,11 @@ fn global_items(
             },
             detail: Some(c.name.as_str().to_owned()),
             insert,
-            rank: if loc.file.origin(db) == stir_db::FileOrigin::Source { 2 } else { 4 },
+            rank: if loc.file.origin(db) == stir_db::FileOrigin::Source {
+                2
+            } else {
+                4
+            },
         });
     }
     for locs in index.consts.values() {
@@ -451,8 +581,11 @@ fn global_items(
     const LIMIT: usize = 400;
     if out.items.len() > LIMIT {
         out.items.sort_by(|a, b| {
-            (a.rank, !a.label.starts_with(prefix), a.label.len())
-                .cmp(&(b.rank, !b.label.starts_with(prefix), b.label.len()))
+            (a.rank, !a.label.starts_with(prefix), a.label.len()).cmp(&(
+                b.rank,
+                !b.label.starts_with(prefix),
+                b.label.len(),
+            ))
         });
         out.items.truncate(LIMIT);
         out.incomplete = true;

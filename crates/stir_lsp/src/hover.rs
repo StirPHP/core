@@ -15,7 +15,12 @@ pub struct HoverResult {
     pub markdown: String,
 }
 
-pub fn hover(db: &dyn Db, ws: Workspace, file: SourceFile, offset: TextSize) -> Option<HoverResult> {
+pub fn hover(
+    db: &dyn Db,
+    ws: Workspace,
+    file: SourceFile,
+    offset: TextSize,
+) -> Option<HoverResult> {
     let typed = typed_file(db, ws, file);
     if let Some((range, def)) = nav::def_at(db, ws, file, offset) {
         let narrowed = typed.types.get(&range).cloned();
@@ -149,13 +154,16 @@ pub fn describe(
                 .collect();
             code.push_str(&render::type_params(&tps));
             if model.kind() == ClassKind::Record {
-                let fields: Vec<String> = model_api::members(&ctx, &ctx.record_ty(&model, model.params.iter().map(|p| p.ty.clone()).collect()))
-                    .into_iter()
-                    .filter_map(|m| match m.ty {
-                        MemberTy::Field(t) => Some(format!("{}: {t}", m.name)),
-                        _ => None,
-                    })
-                    .collect();
+                let fields: Vec<String> = model_api::members(
+                    &ctx,
+                    &ctx.record_ty(&model, model.params.iter().map(|p| p.ty.clone()).collect()),
+                )
+                .into_iter()
+                .filter_map(|m| match m.ty {
+                    MemberTy::Field(t) => Some(format!("{}: {t}", m.name)),
+                    _ => None,
+                })
+                .collect();
                 code.push_str(&format!(" {{ {} }}", fields.join("; ")));
             } else {
                 let supers: Vec<String> = view
@@ -219,7 +227,8 @@ pub fn describe(
                 }
                 MemberKind::Case => Some(with_doc(format!("case {name}"), Some(owner), None)),
                 MemberKind::Field => {
-                    let rec = ctx.record_ty(&model, model.params.iter().map(|p| p.ty.clone()).collect());
+                    let rec =
+                        ctx.record_ty(&model, model.params.iter().map(|p| p.ty.clone()).collect());
                     let ty = model_api::members(&ctx, &rec)
                         .into_iter()
                         .find(|m| &m.name == name)

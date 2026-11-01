@@ -150,15 +150,19 @@ impl Inference {
                 }
                 self.unify_depth(env, &pf.ret, &af.ret, depth + 1);
             }
-            (TyKind::RecordRef { name: pn, args: pa }, TyKind::RecordRef { name: an, args: aa })
-                if pn.eq_ignore_ascii_case(an) =>
-            {
+            (
+                TyKind::RecordRef { name: pn, args: pa },
+                TyKind::RecordRef { name: an, args: aa },
+            ) if pn.eq_ignore_ascii_case(an) => {
                 for (p, a) in pa.iter().zip(aa) {
                     self.unify_depth(env, p, a, depth + 1);
                 }
             }
             (TyKind::RecordRef { .. }, _) | (_, TyKind::RecordRef { .. }) => {
-                let (p, a) = (stir_types::unfold(env, param), stir_types::unfold(env, &arg));
+                let (p, a) = (
+                    stir_types::unfold(env, param),
+                    stir_types::unfold(env, &arg),
+                );
                 if &p != param || a != arg {
                     self.unify_depth(env, &p, &a, depth + 1);
                 }

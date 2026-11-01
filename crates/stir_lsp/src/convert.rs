@@ -1,8 +1,13 @@
 //! Offsets ↔ LSP positions.
 
 use line_index::{LineCol, LineIndex, WideEncoding, WideLineCol};
+use ls_types::{Position, Range};
 use stir_syntax::{TextRange, TextSize};
-use tower_lsp_server::ls_types::{Position, Range};
+
+/// An LSP position (0-based line and column in the negotiated encoding).
+pub fn position(line: u32, character: u32) -> Position {
+    Position::new(line, character)
+}
 
 /// The position encoding negotiated with the client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,7 +117,10 @@ mod tests {
         let pos = map.position(off);
         assert_eq!(pos, Position::new(0, 12));
         assert_eq!(map.offset(pos), off);
-        assert_eq!(map.offset(Position::new(1, 99)), TextSize::from(text.len() as u32 - 1));
+        assert_eq!(
+            map.offset(Position::new(1, 99)),
+            TextSize::from(text.len() as u32 - 1)
+        );
         let utf8 = LineMap::new(text, Encoding::Utf8);
         assert_eq!(utf8.position(off), Position::new(0, 15));
     }

@@ -145,11 +145,16 @@ fn hover_function_with_doc() {
 #[test]
 fn hover_class_method_and_property() {
     let src = "data class User(val id: Int, val name: String)\nopen class Base\nclass Admin(val level: Int) : Base() {\n    function describe(prefix: String): String = prefix . level\n}\n";
-    let f = Fixture::new(&format!("{src}val u = new User(1, \"a\")\necho u->na<|>me\n"));
+    let f = Fixture::new(&format!(
+        "{src}val u = new User(1, \"a\")\necho u->na<|>me\n"
+    ));
     assert!(f.hover().contains("val name: String"), "{}", f.hover());
-    let f = Fixture::new(&format!("{src}val a = new Admin(1)\necho a->desc<|>ribe(\"x\")\n"));
+    let f = Fixture::new(&format!(
+        "{src}val a = new Admin(1)\necho a->desc<|>ribe(\"x\")\n"
+    ));
     assert!(
-        f.hover().contains("function describe(prefix: String): String"),
+        f.hover()
+            .contains("function describe(prefix: String): String"),
         "{}",
         f.hover()
     );
@@ -207,14 +212,20 @@ fn definition_of_members() {
     assert_eq!(f.definition(), "/src/main.sphp:$count");
     let f = Fixture::new("data class P(val x: Int)\nval p = new P(1)\necho p-><|>x\n");
     assert_eq!(f.definition(), "/src/main.sphp:x");
-    let f = Fixture::new("record Point { x: Int; y: Int }\nvar $p = Point { x = 1, y = 2 }\necho $p->y<|>\n");
+    let f = Fixture::new(
+        "record Point { x: Int; y: Int }\nvar $p = Point { x = 1, y = 2 }\necho $p->y<|>\n",
+    );
     assert_eq!(f.definition(), "/src/main.sphp:y");
 }
 
 #[test]
 fn definition_into_stdlib_and_php() {
     let f = Fixture::new("val s = listOf<|>(1)\n");
-    assert!(f.definition().starts_with("stdlib://"), "{}", f.definition());
+    assert!(
+        f.definition().starts_with("stdlib://"),
+        "{}",
+        f.definition()
+    );
     let f = Fixture::new(
         "//- /src/legacy.php\n<?php\nnamespace Legacy;\nclass Mailer { public function send(string $to): bool { return true; } }\n//- /src/main.sphp\nuse Legacy\\Mailer\nval m = new Mailer()\nval ok = m->se<|>nd(\"a\")\n",
     );
@@ -244,7 +255,11 @@ fn references_of_a_mutable_var_and_its_shadowless_scope() {
     );
     assert_eq!(
         f.references(),
-        ["/src/main.sphp:2:$n", "/src/main.sphp:3:$n", "/src/main.sphp:4:$n"]
+        [
+            "/src/main.sphp:2:$n",
+            "/src/main.sphp:3:$n",
+            "/src/main.sphp:4:$n"
+        ]
     );
 }
 
@@ -342,7 +357,9 @@ fn inlay_hints_for_untyped_bindings() {
 
 #[test]
 fn signature_help_tracks_the_active_parameter() {
-    let f = Fixture::new("function greet(name: String, mut times: Int = 1): String = name\nval g = greet(\"a\", <|>\n");
+    let f = Fixture::new(
+        "function greet(name: String, mut times: Int = 1): String = name\nval g = greet(\"a\", <|>\n",
+    );
     let (file, offset) = f.at();
     let h = hints::signature_help(&f.db, f.ws, file, offset).expect("no help");
     assert_eq!(

@@ -60,9 +60,15 @@ pub fn document_symbols(db: &dyn Db, file: SourceFile) -> Vec<Symbol> {
     };
     let mut out = Vec::new();
     for f in &items.functions {
-        let mut s = leaf(f.name.short(), SymbolKind::Function, f.ptr.text_range(), f.name_range);
+        let mut s = leaf(
+            f.name.short(),
+            SymbolKind::Function,
+            f.ptr.text_range(),
+            f.name_range,
+        );
         if let Some(r) = &f.receiver {
-            let recv = file.text(db)[usize::from(r.range.start())..usize::from(r.range.end())].to_owned();
+            let recv =
+                file.text(db)[usize::from(r.range.start())..usize::from(r.range.end())].to_owned();
             s.name = format!("{recv}.{}", f.name.short());
         }
         out.push(s);
@@ -76,11 +82,26 @@ pub fn document_symbols(db: &dyn Db, file: SourceFile) -> Vec<Symbol> {
         ));
     }
     for a in &items.type_aliases {
-        out.push(leaf(a.name.short(), SymbolKind::TypeAlias, a.name_range, a.name_range));
+        out.push(leaf(
+            a.name.short(),
+            SymbolKind::TypeAlias,
+            a.name_range,
+            a.name_range,
+        ));
     }
     for c in &items.classes {
-        let mut s = leaf(c.name.short(), class_kind(c.kind), c.ptr.text_range(), c.name_range);
-        for p in c.primary_ctor.iter().flatten().filter(|p| p.promoted.is_some()) {
+        let mut s = leaf(
+            c.name.short(),
+            class_kind(c.kind),
+            c.ptr.text_range(),
+            c.name_range,
+        );
+        for p in c
+            .primary_ctor
+            .iter()
+            .flatten()
+            .filter(|p| p.promoted.is_some())
+        {
             s.children
                 .push(leaf(&p.name, SymbolKind::Property, p.range, p.name_range));
         }
@@ -117,8 +138,12 @@ pub fn document_symbols(db: &dyn Db, file: SourceFile) -> Vec<Symbol> {
             ));
         }
         for m in c.methods.iter().filter(|m| !m.magic) {
-            s.children
-                .push(leaf(&m.name, SymbolKind::Method, m.ptr.text_range(), m.name_range));
+            s.children.push(leaf(
+                &m.name,
+                SymbolKind::Method,
+                m.ptr.text_range(),
+                m.name_range,
+            ));
         }
         s.children.sort_by_key(|c| c.full_range.start());
         out.push(s);
@@ -193,7 +218,8 @@ pub enum FoldKind {
 pub fn folding_ranges(db: &dyn Db, file: SourceFile) -> Vec<(TextRange, FoldKind)> {
     let root = stir_db::parse(db, file).syntax();
     let text = file.text(db);
-    let multiline = |r: TextRange| text[usize::from(r.start())..usize::from(r.end())].contains('\n');
+    let multiline =
+        |r: TextRange| text[usize::from(r.start())..usize::from(r.end())].contains('\n');
     let mut out = Vec::new();
     for node in root.descendants() {
         let foldable = matches!(

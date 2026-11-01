@@ -156,7 +156,8 @@ all written in StirPHP.
 | `stir_checker` | the type checker |
 | `stir_emit` | PHP output AST, printer and the StirPHP → PHP lowering |
 | `stir_project` | `sphp.toml`, discovery, composer autoload, `init`, workspace loading |
-| `stir_lsp` | the language server (tower-lsp-server) |
+| `stir_lsp` | the language server (tower-lsp-server; the editor features build without it) |
+| `stir_wasm` | the checker and compiler for the browser (WebAssembly), for the docs playground |
 | `stir_cli` | the `sphp` binary |
 
 ## Tests

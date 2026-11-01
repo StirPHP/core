@@ -10,14 +10,15 @@ pub mod hints;
 pub mod hover;
 pub mod nav;
 pub mod render;
+#[cfg(feature = "server")]
 pub mod server;
 pub mod symbols;
 pub mod tokens;
 
-use tower_lsp_server::{LspService, Server};
-
 /// Serves the language server over stdin/stdout until the client exits.
+#[cfg(feature = "server")]
 pub async fn run_stdio() {
+    use tower_lsp_server::{LspService, Server};
     let (service, socket) = LspService::new(server::Server::new);
     Server::new(tokio::io::stdin(), tokio::io::stdout(), socket)
         .serve(service)

@@ -387,7 +387,10 @@ pub enum TyKind {
     /// through other records): expanded one level at a time with
     /// [`TypeEnv::unfold_record`](crate::TypeEnv::unfold_record), so recursive
     /// records stay finite.
-    RecordRef { name: SmolStr, args: Vec<Ty> },
+    RecordRef {
+        name: SmolStr,
+        args: Vec<Ty>,
+    },
     /// StirPHP function type `(A, B) -> R`.
     Fn(FnTy),
 

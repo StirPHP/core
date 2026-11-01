@@ -89,7 +89,12 @@ fn decl_defs(db: &dyn Db, file: SourceFile, root: &SyntaxNode) -> Vec<(TextRange
                 out.push((p.name_range, member(c, MemberKind::Property, &p.name)));
             }
         }
-        for p in c.primary_ctor.iter().flatten().filter(|p| p.promoted.is_some()) {
+        for p in c
+            .primary_ctor
+            .iter()
+            .flatten()
+            .filter(|p| p.promoted.is_some())
+        {
             out.push((p.name_range, member(c, MemberKind::Property, &p.name)));
         }
         for p in c.properties.iter().filter(|p| !p.magic) {
@@ -237,7 +242,11 @@ pub fn target(db: &dyn Db, ws: Workspace, file: SourceFile, def: &Def) -> Option
         Def::Const(loc) => {
             let c = &file_items(db, loc.file).consts[loc.index as usize];
             let root = stir_db::parse(db, loc.file).syntax();
-            at(loc.file, c.range, name_range(&root, c.range, c.name.short()))
+            at(
+                loc.file,
+                c.range,
+                name_range(&root, c.range, c.name.short()),
+            )
         }
         Def::TypeAlias(loc) => {
             let a = &file_items(db, loc.file).type_aliases[loc.index as usize];
@@ -255,7 +264,10 @@ pub fn target(db: &dyn Db, ws: Workspace, file: SourceFile, def: &Def) -> Option
             let named = |range: TextRange| at(loc.file, range, name_range(&root, range, name));
             match kind {
                 MemberKind::Method => {
-                    let m = c.methods.iter().find(|m| m.name.eq_ignore_ascii_case(name))?;
+                    let m = c
+                        .methods
+                        .iter()
+                        .find(|m| m.name.eq_ignore_ascii_case(name))?;
                     if m.magic {
                         at(loc.file, c.name_range, c.name_range)
                     } else {
@@ -315,6 +327,10 @@ pub fn references(
 
 /// The innermost function-like node (not a lambda) around `node`.
 pub fn enclosing_function(node: &SyntaxNode) -> Option<SyntaxNode> {
-    node.ancestors()
-        .find(|n| matches!(n.kind(), FUNCTION_DECL | METHOD_DECL | CLOSURE_EXPR | ARROW_FN_EXPR))
+    node.ancestors().find(|n| {
+        matches!(
+            n.kind(),
+            FUNCTION_DECL | METHOD_DECL | CLOSURE_EXPR | ARROW_FN_EXPR
+        )
+    })
 }

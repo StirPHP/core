@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Setter as _;
-use stir_db::{Db, Diagnostic, FileOrigin, RootDatabase, Settings, Severity, SourceFile, Workspace};
+use stir_db::{
+    Db, Diagnostic, FileOrigin, RootDatabase, Settings, Severity, SourceFile, Workspace,
+};
 use stir_project::Project;
 use stir_project::workspace::{LoadOptions, builtin_files, load_workspace};
 use stir_syntax::{Dialect, TextRange, TextSize};
@@ -168,7 +170,11 @@ fn location(db: &dyn Db, file: SourceFile, range: TextRange, enc: Encoding) -> O
     Some(Location::new(file_uri(db, file)?, map.range(range)))
 }
 
-fn lsp_diagnostic(d: &Diagnostic, map: &LineMap, uri: &Uri) -> tower_lsp_server::ls_types::Diagnostic {
+fn lsp_diagnostic(
+    d: &Diagnostic,
+    map: &LineMap,
+    uri: &Uri,
+) -> tower_lsp_server::ls_types::Diagnostic {
     let mut message = d.message.clone();
     for note in &d.notes {
         message.push('\n');
@@ -290,12 +296,13 @@ impl Server {
         &self,
         f: impl FnOnce() -> Option<T> + Send + 'static,
     ) -> Result<Option<T>> {
-        let result = tokio::task::spawn_blocking(move || salsa::Cancelled::catch(AssertUnwindSafe(f)))
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "request panicked");
-                Error::internal_error()
-            })?;
+        let result =
+            tokio::task::spawn_blocking(move || salsa::Cancelled::catch(AssertUnwindSafe(f)))
+                .await
+                .map_err(|e| {
+                    tracing::error!(error = %e, "request panicked");
+                    Error::internal_error()
+                })?;
         result.map_err(|_| content_modified())
     }
 
@@ -319,7 +326,11 @@ impl Server {
             let open: Vec<(PathBuf, i32, String)> = s
                 .open
                 .iter()
-                .filter_map(|(p, v)| s.files.get(p).map(|f| (p.clone(), *v, f.text(&s.db).clone())))
+                .filter_map(|(p, v)| {
+                    s.files
+                        .get(p)
+                        .map(|f| (p.clone(), *v, f.text(&s.db).clone()))
+                })
                 .collect();
             let mut state = match loaded {
                 Some((db, ws, root, out_dir)) => {
@@ -397,7 +408,10 @@ async fn diagnostics_loop(
                         let diags = stir_checker::check_file(&db, ws, f).as_ref().clone();
                         let lsp = Uri::from_file_path(&path).map(|uri| {
                             let map = LineMap::new(f.text(&db), enc);
-                            let lsp = diags.iter().map(|d| lsp_diagnostic(d, &map, &uri)).collect();
+                            let lsp = diags
+                                .iter()
+                                .map(|d| lsp_diagnostic(d, &map, &uri))
+                                .collect();
                             (uri, lsp)
                         });
                         (path, diags, lsp)
@@ -421,7 +435,11 @@ async fn diagnostics_loop(
             published.insert(path, diags);
         }
         // removed files
-        let gone: Vec<PathBuf> = published.keys().filter(|p| !seen.contains(*p)).cloned().collect();
+        let gone: Vec<PathBuf> = published
+            .keys()
+            .filter(|p| !seen.contains(*p))
+            .cloned()
+            .collect();
         for path in gone {
             published.remove(&path);
             if let Some(uri) = Uri::from_file_path(&path) {
@@ -458,7 +476,12 @@ fn document_symbol(s: symbols::Symbol, map: &LineMap) -> DocumentSymbol {
         deprecated: None,
         range: map.range(s.full_range),
         selection_range: map.range(s.focus_range),
-        children: Some(s.children.into_iter().map(|c| document_symbol(c, map)).collect()),
+        children: Some(
+            s.children
+                .into_iter()
+                .map(|c| document_symbol(c, map))
+                .collect(),
+        ),
     }
 }
 
@@ -510,7 +533,11 @@ impl LanguageServer for Server {
             .as_ref()
             .and_then(|g| g.position_encodings.as_ref())
             .is_some_and(|e| e.contains(&PositionEncodingKind::UTF8));
-        *self.encoding.lock().unwrap() = if utf8 { Encoding::Utf8 } else { Encoding::Utf16 };
+        *self.encoding.lock().unwrap() = if utf8 {
+            Encoding::Utf8
+        } else {
+            Encoding::Utf16
+        };
         #[allow(deprecated)]
         let folder = params
             .workspace_folders
@@ -529,7 +556,10 @@ impl LanguageServer for Server {
             .unwrap_or(false);
 
         let legend = SemanticTokensLegend {
-            token_types: tokens::TOKEN_TYPES.iter().map(|t| SemanticTokenType::new(t)).collect(),
+            token_types: tokens::TOKEN_TYPES
+                .iter()
+                .map(|t| SemanticTokenType::new(t))
+                .collect(),
             token_modifiers: tokens::TOKEN_MODIFIERS
                 .iter()
                 .map(|m| SemanticTokenModifier::new(m))
@@ -575,12 +605,14 @@ impl LanguageServer for Server {
                 document_symbol_provider: Some(OneOf::Left(true)),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 semantic_tokens_provider: Some(
-                    SemanticTokensServerCapabilities::SemanticTokensOptions(SemanticTokensOptions {
-                        legend,
-                        full: Some(SemanticTokensFullOptions::Bool(true)),
-                        range: Some(false),
-                        ..Default::default()
-                    }),
+                    SemanticTokensServerCapabilities::SemanticTokensOptions(
+                        SemanticTokensOptions {
+                            legend,
+                            full: Some(SemanticTokensFullOptions::Bool(true)),
+                            range: Some(false),
+                            ..Default::default()
+                        },
+                    ),
                 ),
                 inlay_hint_provider: Some(OneOf::Left(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
@@ -593,13 +625,19 @@ impl LanguageServer for Server {
     async fn initialized(&self, _: InitializedParams) {
         self.load().await;
         if *self.watch_dynamic.lock().unwrap() {
-            let watchers = ["**/*.sphp", "**/*.php", "**/sphp.toml", "**/phpstan.neon*", "**/composer.json"]
-                .into_iter()
-                .map(|g| FileSystemWatcher {
-                    glob_pattern: GlobPattern::String(g.into()),
-                    kind: None,
-                })
-                .collect();
+            let watchers = [
+                "**/*.sphp",
+                "**/*.php",
+                "**/sphp.toml",
+                "**/phpstan.neon*",
+                "**/composer.json",
+            ]
+            .into_iter()
+            .map(|g| FileSystemWatcher {
+                glob_pattern: GlobPattern::String(g.into()),
+                kind: None,
+            })
+            .collect();
             let options = DidChangeWatchedFilesRegistrationOptions { watchers };
             let registration = Registration {
                 id: "sphp-watch".into(),
@@ -646,7 +684,10 @@ impl LanguageServer for Server {
                     Some(range) => {
                         let map = LineMap::new(&text, enc);
                         let r = map.text_range(range);
-                        text.replace_range(usize::from(r.start())..usize::from(r.end()), &change.text);
+                        text.replace_range(
+                            usize::from(r.start())..usize::from(r.end()),
+                            &change.text,
+                        );
                     }
                     None => text = change.text,
                 }
@@ -678,10 +719,15 @@ impl LanguageServer for Server {
         let mut reload = false;
         let mut updates = Vec::new();
         for change in params.changes {
-            let Some(path) = uri_path(&change.uri).or_else(|| change.uri.to_file_path().map(|p| p.into_owned())) else {
+            let Some(path) =
+                uri_path(&change.uri).or_else(|| change.uri.to_file_path().map(|p| p.into_owned()))
+            else {
                 continue;
             };
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
             if name == "sphp.toml" || name.starts_with("phpstan.neon") || name == "composer.json" {
                 reload = true;
                 continue;
@@ -719,28 +765,37 @@ impl LanguageServer for Server {
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let pos = params.text_document_position_params.position;
-        self.read(&params.text_document_position_params.text_document.uri, move |db, ws, file, map| {
-            let h = hover::hover(db, ws, file, map.offset(pos))?;
-            Some(Hover {
-                contents: HoverContents::Markup(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value: h.markdown,
-                }),
-                range: Some(map.range(h.range)),
-            })
-        })
+        self.read(
+            &params.text_document_position_params.text_document.uri,
+            move |db, ws, file, map| {
+                let h = hover::hover(db, ws, file, map.offset(pos))?;
+                Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: h.markdown,
+                    }),
+                    range: Some(map.range(h.range)),
+                })
+            },
+        )
         .await
     }
 
-    async fn goto_definition(&self, params: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
         let pos = params.text_document_position_params.position;
         let enc = self.encoding();
-        self.read(&params.text_document_position_params.text_document.uri, move |db, ws, file, map| {
-            let (_, def) = nav::def_at(db, ws, file, map.offset(pos))?;
-            let t = nav::target(db, ws, file, &def)?;
-            let loc = location(db, t.file, t.focus_range, enc)?;
-            Some(GotoDefinitionResponse::Scalar(loc))
-        })
+        self.read(
+            &params.text_document_position_params.text_document.uri,
+            move |db, ws, file, map| {
+                let (_, def) = nav::def_at(db, ws, file, map.offset(pos))?;
+                let t = nav::target(db, ws, file, &def)?;
+                let loc = location(db, t.file, t.focus_range, enc)?;
+                Some(GotoDefinitionResponse::Scalar(loc))
+            },
+        )
         .await
     }
 
@@ -750,34 +805,42 @@ impl LanguageServer for Server {
     ) -> Result<Option<GotoDefinitionResponse>> {
         let pos = params.text_document_position_params.position;
         let enc = self.encoding();
-        self.read(&params.text_document_position_params.text_document.uri, move |db, ws, file, map| {
-            let offset = map.offset(pos);
-            let typed = stir_checker::typed_file(db, ws, file);
-            let ty = match nav::def_at(db, ws, file, offset) {
-                Some((range, stir_checker::Def::Local { decl })) => typed
-                    .types
-                    .get(&range)
-                    .cloned()
-                    .or_else(|| typed.locals.get(&decl).map(|l| l.0.clone()))?,
-                Some((range, _)) => typed.types.get(&range).cloned()?,
-                None => typed
-                    .types
-                    .iter()
-                    .filter(|(r, _)| r.contains(offset))
-                    .min_by_key(|(r, _)| r.len())?
-                    .1
-                    .clone(),
-            };
-            let ty = stir_checker::strip_platform(&stir_types::without_null(&ty));
-            let key = match ty.kind() {
-                stir_types::TyKind::Class { name, .. } => name.to_ascii_lowercase(),
-                stir_types::TyKind::Record(r) => r.name.as_ref()?.to_ascii_lowercase(),
-                _ => return None,
-            };
-            let def = stir_checker::Def::Class(key.trim_start_matches('\\').into());
-            let t = nav::target(db, ws, file, &def)?;
-            Some(GotoDefinitionResponse::Scalar(location(db, t.file, t.focus_range, enc)?))
-        })
+        self.read(
+            &params.text_document_position_params.text_document.uri,
+            move |db, ws, file, map| {
+                let offset = map.offset(pos);
+                let typed = stir_checker::typed_file(db, ws, file);
+                let ty = match nav::def_at(db, ws, file, offset) {
+                    Some((range, stir_checker::Def::Local { decl })) => typed
+                        .types
+                        .get(&range)
+                        .cloned()
+                        .or_else(|| typed.locals.get(&decl).map(|l| l.0.clone()))?,
+                    Some((range, _)) => typed.types.get(&range).cloned()?,
+                    None => typed
+                        .types
+                        .iter()
+                        .filter(|(r, _)| r.contains(offset))
+                        .min_by_key(|(r, _)| r.len())?
+                        .1
+                        .clone(),
+                };
+                let ty = stir_checker::strip_platform(&stir_types::without_null(&ty));
+                let key = match ty.kind() {
+                    stir_types::TyKind::Class { name, .. } => name.to_ascii_lowercase(),
+                    stir_types::TyKind::Record(r) => r.name.as_ref()?.to_ascii_lowercase(),
+                    _ => return None,
+                };
+                let def = stir_checker::Def::Class(key.trim_start_matches('\\').into());
+                let t = nav::target(db, ws, file, &def)?;
+                Some(GotoDefinitionResponse::Scalar(location(
+                    db,
+                    t.file,
+                    t.focus_range,
+                    enc,
+                )?))
+            },
+        )
         .await
     }
 
@@ -785,20 +848,25 @@ impl LanguageServer for Server {
         let pos = params.text_document_position.position;
         let include_decl = params.context.include_declaration;
         let enc = self.encoding();
-        self.read(&params.text_document_position.text_document.uri, move |db, ws, file, map| {
-            let (_, def) = nav::def_at(db, ws, file, map.offset(pos))?;
-            let decl = nav::target(db, ws, file, &def);
-            let refs = nav::references(db, ws, file, &def);
-            Some(
-                refs.into_iter()
-                    .filter(|(f, r)| {
-                        include_decl
-                            || decl.as_ref().is_none_or(|d| !(d.file == *f && d.focus_range == *r))
-                    })
-                    .filter_map(|(f, r)| location(db, f, r, enc))
-                    .collect(),
-            )
-        })
+        self.read(
+            &params.text_document_position.text_document.uri,
+            move |db, ws, file, map| {
+                let (_, def) = nav::def_at(db, ws, file, map.offset(pos))?;
+                let decl = nav::target(db, ws, file, &def);
+                let refs = nav::references(db, ws, file, &def);
+                Some(
+                    refs.into_iter()
+                        .filter(|(f, r)| {
+                            include_decl
+                                || decl
+                                    .as_ref()
+                                    .is_none_or(|d| !(d.file == *f && d.focus_range == *r))
+                        })
+                        .filter_map(|(f, r)| location(db, f, r, enc))
+                        .collect(),
+                )
+            },
+        )
         .await
     }
 
@@ -807,26 +875,32 @@ impl LanguageServer for Server {
         params: DocumentHighlightParams,
     ) -> Result<Option<Vec<DocumentHighlight>>> {
         let pos = params.text_document_position_params.position;
-        self.read(&params.text_document_position_params.text_document.uri, move |db, ws, file, map| {
-            let (_, def) = nav::def_at(db, ws, file, map.offset(pos))?;
-            let decl = nav::target(db, ws, file, &def);
-            Some(
-                nav::file_refs(db, ws, file)
-                    .iter()
-                    .filter(|(_, d)| *d == def)
-                    .map(|(r, _)| DocumentHighlight {
-                        range: map.range(*r),
-                        kind: Some(
-                            if decl.as_ref().is_some_and(|d| d.file == file && d.focus_range == *r) {
-                                DocumentHighlightKind::WRITE
-                            } else {
-                                DocumentHighlightKind::READ
-                            },
-                        ),
-                    })
-                    .collect(),
-            )
-        })
+        self.read(
+            &params.text_document_position_params.text_document.uri,
+            move |db, ws, file, map| {
+                let (_, def) = nav::def_at(db, ws, file, map.offset(pos))?;
+                let decl = nav::target(db, ws, file, &def);
+                Some(
+                    nav::file_refs(db, ws, file)
+                        .iter()
+                        .filter(|(_, d)| *d == def)
+                        .map(|(r, _)| DocumentHighlight {
+                            range: map.range(*r),
+                            kind: Some(
+                                if decl
+                                    .as_ref()
+                                    .is_some_and(|d| d.file == file && d.focus_range == *r)
+                                {
+                                    DocumentHighlightKind::WRITE
+                                } else {
+                                    DocumentHighlightKind::READ
+                                },
+                            ),
+                        })
+                        .collect(),
+                )
+            },
+        )
         .await
     }
 
@@ -845,7 +919,9 @@ impl LanguageServer for Server {
                 let text = &file.text(db)[usize::from(range.start())..usize::from(range.end())];
                 let short = text.rsplit('\\').next().unwrap_or(text);
                 let start = range.end() - TextSize::of(short);
-                Some(Ok(PrepareRenameResponse::Range(map.range(TextRange::new(start, range.end())))))
+                Some(Ok(PrepareRenameResponse::Range(
+                    map.range(TextRange::new(start, range.end())),
+                )))
             })
             .await?;
         match result {
@@ -859,35 +935,41 @@ impl LanguageServer for Server {
         let pos = params.text_document_position.position;
         let new_name = params.new_name;
         if !valid_identifier(&new_name) {
-            return Err(Error::invalid_params(format!("`{new_name}` is not a valid name")));
+            return Err(Error::invalid_params(format!(
+                "`{new_name}` is not a valid name"
+            )));
         }
         let enc = self.encoding();
         let result = self
-            .read(&params.text_document_position.text_document.uri, move |db, ws, file, map| {
-                let (_, def) = nav::def_at(db, ws, file, map.offset(pos))?;
-                if !hover::is_project_def(db, ws, file, &def) {
-                    return Some(Err("can't rename a declaration outside the project"));
-                }
-                let _ = map;
-                let mut changes: std::collections::HashMap<Uri, Vec<TextEdit>> = Default::default();
-                for (f, range) in nav::references(db, ws, file, &def) {
-                    let text = f.text(db);
-                    let old = &text[usize::from(range.start())..usize::from(range.end())];
-                    // only the last segment of a qualified name changes
-                    let short = old.rsplit('\\').next().unwrap_or(old);
-                    let range = TextRange::new(range.end() - TextSize::of(short), range.end());
-                    let Some(uri) = file_uri(db, f) else { continue };
-                    let fmap = LineMap::new(text, enc);
-                    changes.entry(uri).or_default().push(TextEdit {
-                        range: fmap.range(range),
-                        new_text: renamed(short, &new_name),
-                    });
-                }
-                Some(Ok(WorkspaceEdit {
-                    changes: Some(changes),
-                    ..Default::default()
-                }))
-            })
+            .read(
+                &params.text_document_position.text_document.uri,
+                move |db, ws, file, map| {
+                    let (_, def) = nav::def_at(db, ws, file, map.offset(pos))?;
+                    if !hover::is_project_def(db, ws, file, &def) {
+                        return Some(Err("can't rename a declaration outside the project"));
+                    }
+                    let _ = map;
+                    let mut changes: std::collections::HashMap<Uri, Vec<TextEdit>> =
+                        Default::default();
+                    for (f, range) in nav::references(db, ws, file, &def) {
+                        let text = f.text(db);
+                        let old = &text[usize::from(range.start())..usize::from(range.end())];
+                        // only the last segment of a qualified name changes
+                        let short = old.rsplit('\\').next().unwrap_or(old);
+                        let range = TextRange::new(range.end() - TextSize::of(short), range.end());
+                        let Some(uri) = file_uri(db, f) else { continue };
+                        let fmap = LineMap::new(text, enc);
+                        changes.entry(uri).or_default().push(TextEdit {
+                            range: fmap.range(range),
+                            new_text: renamed(short, &new_name),
+                        });
+                    }
+                    Some(Ok(WorkspaceEdit {
+                        changes: Some(changes),
+                        ..Default::default()
+                    }))
+                },
+            )
             .await?;
         match result {
             Some(Ok(e)) => Ok(Some(e)),
@@ -898,67 +980,73 @@ impl LanguageServer for Server {
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let pos = params.text_document_position.position;
-        self.read(&params.text_document_position.text_document.uri, move |db, ws, file, map| {
-            let c = complete::complete(db, ws, file, map.offset(pos));
-            let range = map.range(c.replace);
-            let items = c
-                .items
-                .into_iter()
-                .map(|i| CompletionItem {
-                    filter_text: Some(i.label.clone()),
-                    sort_text: Some(format!("{}{}", i.rank, i.label)),
-                    kind: Some(completion_kind(i.kind)),
-                    detail: i.detail,
-                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                        range,
-                        new_text: i.insert,
-                    })),
-                    label: i.label,
-                    ..Default::default()
-                })
-                .collect();
-            Some(CompletionResponse::List(CompletionList {
-                is_incomplete: c.incomplete,
-                items,
-            }))
-        })
+        self.read(
+            &params.text_document_position.text_document.uri,
+            move |db, ws, file, map| {
+                let c = complete::complete(db, ws, file, map.offset(pos));
+                let range = map.range(c.replace);
+                let items = c
+                    .items
+                    .into_iter()
+                    .map(|i| CompletionItem {
+                        filter_text: Some(i.label.clone()),
+                        sort_text: Some(format!("{}{}", i.rank, i.label)),
+                        kind: Some(completion_kind(i.kind)),
+                        detail: i.detail,
+                        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                            range,
+                            new_text: i.insert,
+                        })),
+                        label: i.label,
+                        ..Default::default()
+                    })
+                    .collect();
+                Some(CompletionResponse::List(CompletionList {
+                    is_incomplete: c.incomplete,
+                    items,
+                }))
+            },
+        )
         .await
     }
 
     async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
         let pos = params.text_document_position_params.position;
-        self.read(&params.text_document_position_params.text_document.uri, move |db, ws, file, map| {
-            let h = hints::signature_help(db, ws, file, map.offset(pos))?;
-            let parameters = h
-                .params
-                .iter()
-                .map(|&(s, e)| {
-                    let (s, e) = (s as usize, e as usize);
-                    ParameterInformation {
-                        label: ParameterLabel::LabelOffsets([
-                            map.measure(&h.label[..s]),
-                            map.measure(&h.label[..e]),
-                        ]),
-                        documentation: None,
-                    }
-                })
-                .collect();
-            Some(SignatureHelp {
-                signatures: vec![SignatureInformation {
-                    label: h.label,
-                    documentation: h.doc.map(|d| {
-                        Documentation::MarkupContent(MarkupContent {
-                            kind: MarkupKind::Markdown,
-                            value: d,
-                        })
-                    }),
-                    parameters: Some(parameters),
+        self.read(
+            &params.text_document_position_params.text_document.uri,
+            move |db, ws, file, map| {
+                let h = hints::signature_help(db, ws, file, map.offset(pos))?;
+                let parameters = h
+                    .params
+                    .iter()
+                    .map(|&(s, e)| {
+                        let (s, e) = (s as usize, e as usize);
+                        ParameterInformation {
+                            label: ParameterLabel::LabelOffsets([
+                                map.measure(&h.label[..s]),
+                                map.measure(&h.label[..e]),
+                            ]),
+                            documentation: None,
+                        }
+                    })
+                    .collect();
+                Some(SignatureHelp {
+                    signatures: vec![SignatureInformation {
+                        label: h.label,
+                        documentation: h.doc.map(|d| {
+                            Documentation::MarkupContent(MarkupContent {
+                                kind: MarkupKind::Markdown,
+                                value: d,
+                            })
+                        }),
+                        parameters: Some(parameters),
+                        active_parameter: Some(h.active_param),
+                    }],
+                    active_signature: Some(0),
                     active_parameter: Some(h.active_param),
-                }],
-                active_signature: Some(0),
-                active_parameter: Some(h.active_param),
-            })
-        })
+                })
+            },
+        )
         .await
     }
 

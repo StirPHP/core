@@ -117,12 +117,7 @@ fn class_type(db: &dyn Db, ws: Workspace, key: &str) -> (TokenType, u32) {
     (ty, lib)
 }
 
-fn resolved(
-    db: &dyn Db,
-    ws: Workspace,
-    file: SourceFile,
-    def: &Def,
-) -> Option<(TokenType, u32)> {
+fn resolved(db: &dyn Db, ws: Workspace, file: SourceFile, def: &Def) -> Option<(TokenType, u32)> {
     let lib = |f: SourceFile| {
         if f.origin(db) == FileOrigin::Source {
             0
@@ -179,7 +174,10 @@ fn resolved(
                     (TokenType::Property, m | lib)
                 }
                 MemberKind::Field => (TokenType::Property, modifier::MUTABLE),
-                MemberKind::Const => (TokenType::Property, modifier::READONLY | modifier::STATIC | lib),
+                MemberKind::Const => (
+                    TokenType::Property,
+                    modifier::READONLY | modifier::STATIC | lib,
+                ),
                 MemberKind::Case => (TokenType::EnumMember, lib),
             }
         }
@@ -192,7 +190,8 @@ pub fn semantic_tokens(db: &dyn Db, ws: Workspace, file: SourceFile) -> Vec<Toke
     let refs = nav::file_refs(db, ws, file);
     let decls: rustc_hash::FxHashSet<TextRange> = {
         let items = file_items(db, file);
-        let mut s: rustc_hash::FxHashSet<TextRange> = typed_file(db, ws, file).locals.keys().copied().collect();
+        let mut s: rustc_hash::FxHashSet<TextRange> =
+            typed_file(db, ws, file).locals.keys().copied().collect();
         s.extend(items.functions.iter().map(|f| f.name_range));
         s.extend(items.classes.iter().map(|c| c.name_range));
         for c in &items.classes {
@@ -210,7 +209,10 @@ pub fn semantic_tokens(db: &dyn Db, ws: Workspace, file: SourceFile) -> Vec<Toke
         }
     }
     let mut out = Vec::new();
-    for token in root.descendants_with_tokens().filter_map(|e| e.into_token()) {
+    for token in root
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+    {
         let range = token.text_range();
         if range.is_empty() {
             continue;
@@ -227,11 +229,12 @@ pub fn semantic_tokens(db: &dyn Db, ws: Workspace, file: SourceFile) -> Vec<Toke
             (IDENT | VARIABLE | NAME_QUALIFIED | NAME_FULLY_QUALIFIED | NAME_RELATIVE, Some(t)) => {
                 Some(t)
             }
-            (IDENT, None) if parent.as_ref().is_some_and(|p| p.kind() == NAME_REF)
-                && parent
-                    .as_ref()
-                    .and_then(|p| p.parent())
-                    .is_some_and(|g| g.kind() == NAMED_TYPE) =>
+            (IDENT, None)
+                if parent.as_ref().is_some_and(|p| p.kind() == NAME_REF)
+                    && parent
+                        .as_ref()
+                        .and_then(|p| p.parent())
+                        .is_some_and(|g| g.kind() == NAMED_TYPE) =>
             {
                 Some((TokenType::Type, modifier::DEFAULT_LIBRARY))
             }

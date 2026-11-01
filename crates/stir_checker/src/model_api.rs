@@ -300,7 +300,11 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
             };
             push(&mut out, member, 0);
         }
-        let props = c.def.properties.iter().map(|p| (p.name.clone(), p.mods.is_static, p.mods.visibility));
+        let props = c
+            .def
+            .properties
+            .iter()
+            .map(|p| (p.name.clone(), p.mods.is_static, p.mods.visibility));
         let promoted = c
             .def
             .primary_ctor
@@ -313,7 +317,11 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
                     .filter(|m| m.name.eq_ignore_ascii_case("__construct"))
                     .flat_map(|m| m.sig.params.iter()),
             )
-            .filter_map(|p| p.promoted.as_ref().map(|pr| (p.name.clone(), false, pr.mods.visibility)));
+            .filter_map(|p| {
+                p.promoted
+                    .as_ref()
+                    .map(|pr| (p.name.clone(), false, pr.mods.visibility))
+            });
         for (pname, is_static, visibility) in props.chain(promoted).collect::<Vec<_>>() {
             let Some(p) = ctx.find_property(&anc, &pname) else {
                 continue;

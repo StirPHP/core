@@ -7,10 +7,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crate::{Autoload, FileKind, Project};
 use anyhow::Context as _;
 use futures::{StreamExt as _, TryStreamExt as _};
 use stir_db::{FileOrigin, IgnoreRule, RootDatabase, Settings, SourceFile, Workspace};
-use crate::{Autoload, FileKind, Project};
 use stir_syntax::Dialect;
 
 /// Maximum number of files read concurrently.

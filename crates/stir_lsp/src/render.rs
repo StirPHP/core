@@ -94,7 +94,10 @@ pub fn class_keyword(kind: ClassKind, mods: &stir_hir::ClassMods) -> String {
     let mut s = String::new();
     for (on, m) in [
         (mods.is_sealed, "sealed "),
-        (mods.is_abstract && !mods.is_sealed && kind == ClassKind::Class, "abstract "),
+        (
+            mods.is_abstract && !mods.is_sealed && kind == ClassKind::Class,
+            "abstract ",
+        ),
         (mods.is_open, "open "),
         (mods.is_data, "data "),
     ] {

@@ -128,7 +128,10 @@ fn write(path: &Path, text: &str) {
 async fn editing_session() {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = std::fs::canonicalize(tmp.path()).unwrap();
-    write(&root.join("sphp.toml"), "srcDir = \"src\"\noutDir = \"build\"\n");
+    write(
+        &root.join("sphp.toml"),
+        "srcDir = \"src\"\noutDir = \"build\"\n",
+    );
     write(
         &root.join("src/lib.sphp"),
         "namespace App\n\nfunction greet(name: String): String = \"Hello, ${name}!\"\n",
@@ -167,7 +170,10 @@ async fn editing_session() {
         )
         .await;
     let text = hover["contents"]["value"].as_str().unwrap();
-    assert!(text.contains("function greet(name: String): String"), "{text}");
+    assert!(
+        text.contains("function greet(name: String): String"),
+        "{text}"
+    );
     let def = c
         .request(
             "textDocument/definition",
@@ -287,7 +293,8 @@ async fn opened_build_output_does_not_shadow_the_stdlib() {
     assert!(
         !c.backlog
             .iter()
-            .any(|m| m["params"]["uri"] == runtime_uri.as_str() && !m["params"]["diagnostics"].as_array().unwrap().is_empty())
+            .any(|m| m["params"]["uri"] == runtime_uri.as_str()
+                && !m["params"]["diagnostics"].as_array().unwrap().is_empty())
     );
     let _ = c.request("shutdown", Value::Null).await;
 }

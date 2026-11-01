@@ -16,7 +16,12 @@ pub struct TypeHint {
 }
 
 /// `: T` after bindings declared without a type: `val`/`var` and lambda parameters.
-pub fn inlay_hints(db: &dyn Db, ws: Workspace, file: SourceFile, range: TextRange) -> Vec<TypeHint> {
+pub fn inlay_hints(
+    db: &dyn Db,
+    ws: Workspace,
+    file: SourceFile,
+    range: TextRange,
+) -> Vec<TypeHint> {
     let root = stir_db::parse(db, file).syntax();
     let typed = typed_file(db, ws, file);
     let mut out = Vec::new();
@@ -28,8 +33,12 @@ pub fn inlay_hints(db: &dyn Db, ws: Workspace, file: SourceFile, range: TextRang
             continue;
         };
         let Some(holder) = token.parent().and_then(|n| {
-            n.ancestors()
-                .find(|a| matches!(a.kind(), VAL_DECL | VAR_DECL | PARAM | FOREACH_STMT | CATCH_CLAUSE))
+            n.ancestors().find(|a| {
+                matches!(
+                    a.kind(),
+                    VAL_DECL | VAR_DECL | PARAM | FOREACH_STMT | CATCH_CLAUSE
+                )
+            })
         }) else {
             continue;
         };
@@ -39,7 +48,9 @@ pub fn inlay_hints(db: &dyn Db, ws: Workspace, file: SourceFile, range: TextRang
             }
             // lambda parameters without a written type
             (PARAM, LocalKind::Param(_)) => {
-                holder.parent().is_some_and(|p| p.kind() == LAMBDA_PARAM_LIST)
+                holder
+                    .parent()
+                    .is_some_and(|p| p.kind() == LAMBDA_PARAM_LIST)
                     && stir_hir::first_type(&holder).is_none()
             }
             _ => false,
@@ -132,7 +143,9 @@ pub fn signature_help(
             });
             (model_api::method_info(&ctx, class, name)?, "function", doc)
         }
-        Def::Class(key) if call.kind() == NEW_EXPR => (model_api::ctor_info(&ctx, key)?, "new", None),
+        Def::Class(key) if call.kind() == NEW_EXPR => {
+            (model_api::ctor_info(&ctx, key)?, "new", None)
+        }
         _ => return None,
     };
     // the receiver of an extension function is not an argument

@@ -1467,14 +1467,20 @@ impl<'a, 'db> Lowerer<'a, 'db> {
             return true;
         }
         let def = model.def;
-        if def.methods.iter().any(|m| m.name.eq_ignore_ascii_case("__construct") && !m.magic)
+        if def
+            .methods
+            .iter()
+            .any(|m| m.name.eq_ignore_ascii_case("__construct") && !m.magic)
             || def.primary_ctor.as_ref().is_some_and(|p| !p.is_empty())
         {
             return true;
         }
         if !model.is_stir() {
             // PHP classes: an inherited constructor
-            return self.ctx.find_method(&model.self_ty(), "__construct").is_some();
+            return self
+                .ctx
+                .find_method(&model.self_ty(), "__construct")
+                .is_some();
         }
         // properties initialized in the constructor (readonly or non-constant defaults)
         let root = stir_db::parse(self.db, model.file).syntax();
@@ -1490,7 +1496,8 @@ impl<'a, 'db> Lowerer<'a, 'db> {
             if mods.as_ref().is_some_and(|x| x.has_token(STATIC_KW)) {
                 continue;
             }
-            let readonly = p.has_ident("val") || mods.as_ref().is_some_and(|x| x.has_token(READONLY_KW));
+            let readonly =
+                p.has_ident("val") || mods.as_ref().is_some_and(|x| x.has_token(READONLY_KW));
             for e in p.children_of(PROPERTY_ELEM) {
                 if let Some(d) = exprs_of(&e).into_iter().next()
                     && (readonly || !is_constant_expr(&sub.expr(&d)))
@@ -2218,9 +2225,9 @@ impl<'a, 'db> Lowerer<'a, 'db> {
             return Expr::null();
         };
         let nullsafe = node.kind() == NULLSAFE_PROPERTY_FETCH_EXPR;
-        let bt = self.ty(base).map(|t| {
-            stir_types::unfold(self.ctx, &strip_platform(&stir_types::without_null(&t)))
-        });
+        let bt = self
+            .ty(base)
+            .map(|t| stir_types::unfold(self.ctx, &strip_platform(&stir_types::without_null(&t))));
         let b = self.expr(base);
         let Some(name) = node.child(SyntaxKind::NAME).map(|n| text(&n)) else {
             return Expr::raw(text(node));
@@ -2303,7 +2310,10 @@ impl<'a, 'db> Lowerer<'a, 'db> {
     /// are arrays, and a literal is also valid where PHP needs a constant
     /// expression (property defaults).
     fn collection_literal(&mut self, node: &SyntaxNode, fqn: &str) -> Option<Expr> {
-        let list = matches!(fqn, "Stir\\listOf" | "Stir\\mutableListOf" | "Stir\\emptyList");
+        let list = matches!(
+            fqn,
+            "Stir\\listOf" | "Stir\\mutableListOf" | "Stir\\emptyList"
+        );
         let map = matches!(fqn, "Stir\\mapOf" | "Stir\\mutableMapOf" | "Stir\\emptyMap");
         if !list && !map {
             return None;
@@ -2344,7 +2354,11 @@ impl<'a, 'db> Lowerer<'a, 'db> {
 
     /// The operands of `a to b` (infix or `a->to(b)`) calling the stdlib `to`.
     fn to_pair(&self, node: &SyntaxNode) -> Option<(SyntaxNode, SyntaxNode)> {
-        let loc = self.typed.extension_calls.get(&node.text_range()).copied()?;
+        let loc = self
+            .typed
+            .extension_calls
+            .get(&node.text_range())
+            .copied()?;
         if self.ctx.function_def(loc).name.as_str() != "Stir\\to" {
             return None;
         }

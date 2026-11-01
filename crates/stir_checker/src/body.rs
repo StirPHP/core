@@ -14,9 +14,9 @@ use stir_syntax::{Dialect, SyntaxKind, SyntaxKind::*, SyntaxNode, SyntaxToken, T
 use stir_types::{Family, LitValue, Ty, TyKind};
 
 use crate::codes;
-use crate::typed::{Def, MemberKind};
 use crate::infer::{Inference, widen_literals};
 use crate::model::{ClassModel, Ctx, FnSig, LowerCx};
+use crate::typed::{Def, MemberKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalKind {
@@ -270,7 +270,13 @@ impl<'a, 'db> Checker<'a, 'db> {
         self.defs.insert(range, def);
     }
 
-    fn member_def(&mut self, range: TextRange, class: &ClassModel<'_>, kind: MemberKind, name: &str) {
+    fn member_def(
+        &mut self,
+        range: TextRange,
+        class: &ClassModel<'_>,
+        kind: MemberKind,
+        name: &str,
+    ) {
         self.def(
             range,
             Def::Member {
@@ -879,9 +885,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         // After the if: types are those of the fall-through path, and
         // variables assigned on a path that falls through lose narrowings.
         self.restore_types(&snap);
-        if !has_else
-            && let Some(ff) = falls_through_facts
-        {
+        if !has_else && let Some(ff) = falls_through_facts {
             self.apply_facts(&ff);
         }
         if !all_diverge {
@@ -2704,6 +2708,20 @@ impl<'a, 'db> Checker<'a, 'db> {
                         ),
                     };
                     self.error(target.text_range(), codes::REASSIGN_IMMUTABLE, msg);
+                } else if self.lookup(&name).is_none()
+                    && self.implicit_this.contains(&target.text_range())
+                    && !self.in_ctor
+                    && self
+                        .this_ty()
+                        .and_then(|t| self.ctx.find_property(&t, &name))
+                        .is_some_and(|p| p.immutable)
+                {
+                    // `step = 1` for a `val step` property
+                    self.error(
+                        target.text_range(),
+                        codes::REASSIGN_IMMUTABLE,
+                        format!("property `{name}` is a `val` and can't be reassigned; declare it with `var ${name}`"),
+                    );
                 }
             }
             VARIABLE_EXPR => {
@@ -2749,10 +2767,9 @@ impl<'a, 'db> Checker<'a, 'db> {
             VARIABLE_EXPR if op == EQ => {
                 let name = text_of(lhs);
                 let n = name.trim_start_matches('$').to_owned();
-                let local = self
-                    .lookup(&n)
-                    .cloned()
-                    .filter(|l| !(self.stir() && !l.kind.dollar() && self.has_mutable_property(&n)));
+                let local = self.lookup(&n).cloned().filter(|l| {
+                    !(self.stir() && !l.kind.dollar() && self.has_mutable_property(&n))
+                });
                 match local {
                     Some(l) => {
                         if l.kind != LocalKind::This {
@@ -3324,6 +3341,18 @@ impl<'a, 'db> Checker<'a, 'db> {
                 continue;
             }
             let sub = self.ctx.method_sig(model, m);
+            if m.mods.is_override && !ancestors.iter().skip(1).any(|anc| {
+                matches!(anc.kind(), TyKind::Class { name, .. }
+                if self.ctx.class(name).is_some_and(|c| c.def.methods.iter().any(|x| {
+                    x.name.eq_ignore_ascii_case(&m.name) && x.mods.visibility != Visibility::Private
+                })))
+            }) {
+                self.error(
+                    m.name_range,
+                    codes::INCOMPATIBLE_OVERRIDE,
+                    format!("`{}` overrides nothing: no supertype declares it", m.name),
+                );
+            }
             for anc in ancestors.iter().skip(1) {
                 let TyKind::Class { name, args } = anc.kind() else {
                     continue;
@@ -3975,7 +4004,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                         self.def(
                             range,
                             Def::Member {
-                                class: SmolStr::new(rn.trim_start_matches('\\').to_ascii_lowercase()),
+                                class: SmolStr::new(
+                                    rn.trim_start_matches('\\').to_ascii_lowercase(),
+                                ),
                                 kind: MemberKind::Field,
                                 name: SmolStr::new(name),
                             },
@@ -4467,7 +4498,11 @@ impl<'a, 'db> Checker<'a, 'db> {
         match self.ctx.find_const(&cls, &name) {
             Some(t) => {
                 if let Some((owner, kind)) = self.ctx.const_owner(&cls, &name) {
-                    let kind = if kind { MemberKind::Case } else { MemberKind::Const };
+                    let kind = if kind {
+                        MemberKind::Case
+                    } else {
+                        MemberKind::Const
+                    };
                     self.member_def(name_node.text_range(), &owner, kind, &name);
                 }
                 t
@@ -4609,7 +4644,13 @@ impl<'a, 'db> Checker<'a, 'db> {
                     );
                 }
                 self.check_args_untyped(node);
-                model.self_ty()
+                // nothing to infer type arguments from but the expected type
+                match exp_args {
+                    Some(args) if args.len() == model.params.len() => {
+                        Ty::class(model.name.clone(), args)
+                    }
+                    _ => model.self_ty(),
+                }
             }
         }
     }
