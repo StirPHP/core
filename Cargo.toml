@@ -16,6 +16,19 @@ tokio = { version = "1.54.1", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
+# Internal crates: versionless paths, so they always are this workspace's version.
+stir_checker = { path = "crates/stir_checker" }
+stir_db = { path = "crates/stir_db" }
+stir_emit = { path = "crates/stir_emit" }
+stir_hir = { path = "crates/stir_hir" }
+stir_lsp = { path = "crates/stir_lsp", default-features = false }
+stir_neon = { path = "crates/stir_neon" }
+stir_phpdoc = { path = "crates/stir_phpdoc" }
+stir_project = { path = "crates/stir_project" }
+stir_stubs = { path = "crates/stir_stubs" }
+stir_syntax = { path = "crates/stir_syntax" }
+stir_types = { path = "crates/stir_types" }
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 unused_must_use = "deny"

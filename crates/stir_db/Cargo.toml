@@ -8,7 +8,7 @@ rust-version.workspace = true
 [dependencies]
 salsa = "0.28.5"
 smol_str = "0.3.7"
-stir_syntax = { version = "0.1.0", path = "../stir_syntax" }
+stir_syntax.workspace = true
 
 [lints]
 workspace = true

@@ -9,11 +9,11 @@ rust-version.workspace = true
 rowan = "0.17.0"
 rustc-hash = "2.1.3"
 smol_str = "0.3.7"
-stir_checker = { version = "0.1.0", path = "../stir_checker" }
-stir_db = { version = "0.1.0", path = "../stir_db" }
-stir_hir = { version = "0.1.0", path = "../stir_hir" }
-stir_syntax = { version = "0.1.0", path = "../stir_syntax" }
-stir_types = { version = "0.1.0", path = "../stir_types" }
+stir_checker.workspace = true
+stir_db.workspace = true
+stir_hir.workspace = true
+stir_syntax.workspace = true
+stir_types.workspace = true
 
 [lints]
 workspace = true
@@ -21,7 +21,7 @@ workspace = true
 [dev-dependencies]
 insta = "1.49.0"
 libtest-mimic = "0.8.2"
-stir_stubs = { path = "../stir_stubs" }
+stir_stubs.workspace = true
 tempfile = "3.27.0"
 
 [[test]]

@@ -13,12 +13,12 @@ crate-type = ["cdylib", "rlib"]
 salsa = "0.28.5"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-stir_checker = { version = "0.1.0", path = "../stir_checker" }
-stir_db = { version = "0.1.0", path = "../stir_db" }
-stir_emit = { version = "0.1.0", path = "../stir_emit" }
-stir_lsp = { version = "0.1.0", path = "../stir_lsp", default-features = false }
-stir_stubs = { version = "0.1.0", path = "../stir_stubs" }
-stir_syntax = { version = "0.1.0", path = "../stir_syntax" }
+stir_checker.workspace = true
+stir_db.workspace = true
+stir_emit.workspace = true
+stir_lsp.workspace = true
+stir_stubs.workspace = true
+stir_syntax.workspace = true
 wasm-bindgen = "=0.2.129"
 
 [lints]
