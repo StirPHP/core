@@ -410,11 +410,32 @@ impl<'a, 'db> Checker<'a, 'db> {
                 msg.push_str("; narrow the untyped value first (`is` / `as`)");
             }
             let partial = from.is_union() && from.members().iter().any(|m| self.assignable(m, to));
+            let implicit_mixed = !self.stir() && self.is_implicitly_mixed(from, to);
             self.error(range, codes::TYPE_MISMATCH, msg);
-            if partial {
+            if implicit_mixed {
+                // PHPStan only checks inside `array` from level 9
+                if let Some(d) = self.diags.last_mut() {
+                    d.php_level = Some(9);
+                }
+            } else if partial {
                 self.tag_partial_union();
             }
         }
+    }
+
+    /// Does `from` fit `to` once the elements of its plain `array`s are ignored?
+    /// Also true of an array going to a shape: nothing says which keys it has.
+    fn is_implicitly_mixed(&self, from: &Ty, to: &Ty) -> bool {
+        let bottom = from.transform(&mut |t| match t.kind() {
+            TyKind::Mixed | TyKind::ArrayKey => Some(Ty::never()),
+            _ => None,
+        });
+        self.assignable(&bottom, to)
+            || (matches!(from.kind(), TyKind::Array { .. } | TyKind::PhpList { .. })
+                && to
+                    .members()
+                    .iter()
+                    .any(|m| matches!(m.kind(), TyKind::Shape(_))))
     }
 
     // ------------------------------------------------------------ locals
@@ -4299,6 +4320,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                     Some(p) => {
                         let class = p.class.clone();
                         self.member_def(range, &class, MemberKind::Property, name);
+                        // an inaccessible property goes through `__get`, if there is one
+                        if self.has_magic(&cls, "__get") && !self.visible(&p.class, p.visibility) {
+                            return Ty::any_platform();
+                        }
                         self.check_visibility(
                             range,
                             &p.class,
@@ -4386,6 +4411,22 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
+    fn visible(&self, owner: &Rc<ClassModel<'db>>, vis: Visibility) -> bool {
+        match vis {
+            Visibility::Public => true,
+            // a trait's private members belong to the classes using it
+            Visibility::Private => {
+                owner.kind() == ClassKind::Trait
+                    || self.class.as_ref().is_some_and(|c| c.key == owner.key)
+            }
+            Visibility::Protected => self.class.as_ref().is_some_and(|c| {
+                c.key == owner.key
+                    || self.ctx.is_subclass(&c.name, &owner.name)
+                    || self.ctx.is_subclass(&owner.name, &c.name)
+            }),
+        }
+    }
+
     fn check_visibility(
         &mut self,
         range: TextRange,
@@ -4393,16 +4434,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         vis: Visibility,
         what: &str,
     ) {
-        let ok = match vis {
-            Visibility::Public => true,
-            Visibility::Private => self.class.as_ref().is_some_and(|c| c.key == owner.key),
-            Visibility::Protected => self.class.as_ref().is_some_and(|c| {
-                c.key == owner.key
-                    || self.ctx.is_subclass(&c.name, &owner.name)
-                    || self.ctx.is_subclass(&owner.name, &c.name)
-            }),
-        };
-        if !ok {
+        if !self.visible(owner, vis) {
             let v = match vis {
                 Visibility::Private => "private",
                 _ => "protected",
@@ -4484,6 +4516,11 @@ impl<'a, 'db> Checker<'a, 'db> {
             && let Some((owner, m, map)) = self.ctx.find_method(&cls, name)
         {
             self.member_def(range, &owner, MemberKind::Method, &m.name);
+            // an inaccessible method goes through `__call`, if there is one
+            if self.has_magic(&cls, "__call") && !self.visible(&owner, m.mods.visibility) {
+                self.check_args_untyped(node);
+                return Ty::any_platform();
+            }
             self.check_visibility(
                 range,
                 &owner,
