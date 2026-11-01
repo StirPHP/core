@@ -2,7 +2,7 @@
   "name": "stirphp",
   "displayName": "StirPHP",
   "description": "StirPHP language support: diagnostics, completion, navigation and highlighting via the sphp language server.",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "stirphp",
   "license": "MIT",
   "private": true,
