@@ -700,6 +700,8 @@ impl<'db> Ctx<'db> {
             None => Some((d, true)),
             Some(n) if n == d || d.is_error() => Some((n, false)),
             Some(n) if n.is_error() => Some((d, true)),
+            // a template's bound is checked where it's used
+            Some(_) if !stir_types::free_params(&d).is_empty() => Some((d, false)),
             Some(n) if stir_types::is_assignable(self, &d, &n) => {
                 // PHPDoc refines a native type (`string[]` for `array`): the
                 // native type is enforced, so nullability is known and the
@@ -727,7 +729,21 @@ impl<'db> Ctx<'db> {
         sink: &mut Vec<LowerError>,
     ) -> Ty {
         let key = SmolStr::new(name.to_ascii_lowercase());
+        // PHPStan's refinement keywords this checker doesn't model
+        if !stir && name.contains('-') {
+            if key.ends_with("-string") {
+                return Ty::php_string();
+            }
+            if key.ends_with("-int") {
+                return Ty::php_int();
+            }
+        }
         if let Some(c) = self.class(name) {
+            // PHPDoc may leave out trailing type arguments: `Generator<K, V>`
+            let mut args = args;
+            if !stir && !args.is_empty() && args.len() < c.params.len() {
+                args.resize(c.params.len(), Ty::any_platform());
+            }
             if c.params.len() != args.len() && !(args.is_empty() && !stir) {
                 if stir || !args.is_empty() {
                     sink.push(LowerError {
@@ -1098,6 +1114,14 @@ impl<'db> Ctx<'db> {
             .get(name.to_ascii_lowercase().as_str())
             .and_then(|v| v.first())
             .copied()
+    }
+
+    pub fn function_overloads(&self, name: &str) -> Vec<ItemLoc> {
+        self.index
+            .functions
+            .get(name.to_ascii_lowercase().as_str())
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn constant(&self, name: &str) -> Option<ItemLoc> {

@@ -94,6 +94,9 @@ pub struct Checker<'a, 'db> {
     conditional_depth: u32,
     /// Inside `isset`, `empty` or the left of `??`: the value is allowed not to exist.
     probing: u32,
+    /// The function (by `fns` depth) that ran `include` or `extract`, which can
+    /// define any variable from then on.
+    dynamic_vars_fn: Option<usize>,
     frames: Vec<FxHashMap<SmolStr, Local>>,
     fns: Vec<FnCx>,
     class: Option<Rc<ClassModel<'db>>>,
@@ -249,6 +252,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             diags: Vec::new(),
             conditional_depth: 0,
             probing: 0,
+            dynamic_vars_fn: None,
             frames: vec![FxHashMap::default()],
             fns: Vec::new(),
             class: None,
@@ -463,7 +467,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 && to
                     .members()
                     .iter()
-                    .any(|m| matches!(m.kind(), TyKind::Shape(_))))
+                    .any(|m| matches!(m.kind(), TyKind::Shape(_) | TyKind::PhpList { .. })))
     }
 
     // ------------------------------------------------------------ locals
@@ -1337,6 +1341,7 @@ impl<'a, 'db> Checker<'a, 'db> {
     /// Checks a function/method body against its signature.
     fn function_body(&mut self, node: &SyntaxNode, sig: &FnSig, this: Option<Ty>, expr_body: bool) {
         let saved_frames = std::mem::replace(&mut self.frames, vec![FxHashMap::default()]);
+        let saved_dynamic_vars = self.dynamic_vars_fn.take();
         if let Some(t) = this {
             // `this` in extension functions is a val; `$this` in methods
             let kind = if self.class.is_some() {
@@ -1418,6 +1423,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 );
             }
         }
+        self.dynamic_vars_fn = saved_dynamic_vars;
         self.fns.pop();
         self.frames = saved_frames;
     }
@@ -2176,7 +2182,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     Some(STRING_CAST) => Ty::php_string(),
                     Some(BOOL_CAST) => Ty::php_bool(),
                     Some(ARRAY_CAST) => Ty::php_array(),
-                    Some(OBJECT_CAST) => Ty::object(),
+                    Some(OBJECT_CAST) => Ty::class("stdClass", Vec::new()),
                     Some(VOID_CAST) => Ty::void(),
                     _ => Ty::null(),
                 }
@@ -2297,6 +2303,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 }
             }
             EVAL_EXPR | INCLUDE_EXPR => {
+                self.dynamic_vars_fn = Some(self.fns.len());
                 for e in exprs_of(node) {
                     self.expr(&e, None);
                 }
@@ -2436,6 +2443,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                 if is_superglobal(name) {
                     return Ty::any_platform();
                 }
+                if !self.stir() && self.dynamic_vars_fn == Some(self.fns.len()) {
+                    self.declare(name, Ty::any_platform(), LocalKind::Php, node.text_range());
+                    return Ty::any_platform();
+                }
                 if self.probing > 0 && !self.stir() {
                     // from here on, it may exist
                     self.declare(name, Ty::any_platform(), LocalKind::Php, node.text_range());
@@ -2454,6 +2465,23 @@ impl<'a, 'db> Checker<'a, 'db> {
                 }
             }
         }
+    }
+
+    /// Does this file test for `name` with `defined('name')`, `function_exists('name')`?
+    /// Such a symbol is expected to be missing in some environments.
+    fn guarded_by(&self, check: &str, name: &str) -> bool {
+        let text = self.file.text(self.ctx.db);
+        let name = name.trim_start_matches('\\');
+        [format!("'{name}'"), format!("\"{name}\"")]
+            .iter()
+            .any(|quoted| {
+                text.match_indices(quoted.as_str()).any(|(at, _)| {
+                    text[..at]
+                        .trim_end()
+                        .strip_suffix('(')
+                        .is_some_and(|before| before.trim_end().ends_with(check))
+                })
+            })
     }
 
     fn name_expr(&mut self, node: &SyntaxNode) -> Ty {
@@ -2504,6 +2532,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 self.def(node.text_range(), Def::Const(loc));
                 self.const_type(loc)
             }
+            None if !self.stir() && self.guarded_by("defined", &text) => Ty::any_platform(),
             None => {
                 self.error(
                     node.text_range(),
@@ -4154,6 +4183,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                 .flatten()
                 .find_map(|f| self.ctx.function(f.as_str()).map(|loc| (f, loc)));
             let Some((fqn, loc)) = found else {
+                if !self.stir() && self.guarded_by("function_exists", &text) {
+                    self.check_args_untyped(node);
+                    return Ty::any_platform();
+                }
                 self.error(
                     callee.text_range(),
                     codes::UNDEFINED_FUNCTION,
@@ -4167,8 +4200,29 @@ impl<'a, 'db> Checker<'a, 'db> {
                 node.text_range(),
                 SmolStr::new(self.ctx.function_def(loc).name.as_str()),
             );
-            let _ = fqn;
+            // several declarations: overloaded stubs, or a PHP conditional declaration
+            let overloads = self.ctx.function_overloads(fqn.as_str());
+            if !self.stir() && overloads.len() > 1 {
+                let start = self.diags.len();
+                for (i, candidate) in overloads.iter().enumerate() {
+                    let sig = self.ctx.function_sig(*candidate);
+                    let t = self.check_args(node, &sig, &FxHashMap::default(), None, expected, &[]);
+                    if self.diags.len() == start || i + 1 == overloads.len() {
+                        return t;
+                    }
+                    self.diags.truncate(start);
+                }
+            }
             let sig = self.ctx.function_sig(loc);
+            if self
+                .ctx
+                .function_def(loc)
+                .name
+                .as_str()
+                .eq_ignore_ascii_case("extract")
+            {
+                self.dynamic_vars_fn = Some(self.fns.len());
+            }
             return self.check_args(node, &sig, &FxHashMap::default(), None, expected, &[]);
         }
         let ct = self.expr(&callee, None);

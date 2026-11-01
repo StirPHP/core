@@ -540,7 +540,7 @@ impl Lowerer {
             type_params.extend(extra);
         }
         let names = names_of(&type_params, outer);
-        let params = node
+        let mut params = node
             .child(PARAM_LIST)
             .map(|pl| self.params(&pl, &names, ctor, doc))
             .unwrap_or_default();
@@ -554,6 +554,32 @@ impl Lowerer {
         let doc_ret = doc
             .and_then(|d| d.return_tag())
             .map(|r| self.doc_cx(&names).lower(&r.ty));
+        // `func_get_args()`: the function takes more than it declares
+        if node.descendants().any(|d| {
+            d.kind() == NAME_EXPR && {
+                let name = d.text().to_string().to_ascii_lowercase();
+                matches!(
+                    name.trim().trim_start_matches('\\'),
+                    "func_get_args" | "func_num_args" | "func_get_arg"
+                )
+            }
+        }) && !params.iter().any(|p| p.variadic)
+        {
+            params.push(ParamDef {
+                name: SmolStr::new("__args"),
+                binding: Binding::Php,
+                ty: None,
+                doc_ty: None,
+                has_default: true,
+                default_is_null: false,
+                variadic: true,
+                by_ref: false,
+                promoted: None,
+                range: node.text_range(),
+                name_range: node.text_range(),
+                ptr: NodePtr::new(node),
+            });
+        }
         Signature {
             type_params,
             params,
@@ -672,6 +698,18 @@ impl Lowerer {
     }
 
     fn function(&mut self, node: &SyntaxNode) {
+        self.function_item(node);
+        // a function declared inside another is global once that one has run
+        for nested in node
+            .descendants()
+            .skip(1)
+            .filter(|d| d.kind() == FUNCTION_DECL)
+        {
+            self.function_item(&nested);
+        }
+    }
+
+    fn function_item(&mut self, node: &SyntaxNode) {
         let Some(name_node) = node.child(NAME) else {
             return;
         };

@@ -627,6 +627,27 @@ impl<'a> Checker<'a> {
 
         let (f, t) = (from.kind(), to.kind());
         match (f, t) {
+            // an empty PHP array literal fits any PHP array type
+            (
+                K::PhpList {
+                    elem,
+                    non_empty: false,
+                },
+                K::Array {
+                    non_empty: false, ..
+                },
+            ) if matches!(elem.kind(), K::Never) => {
+                return Ok(());
+            }
+            (
+                K::PhpList {
+                    elem,
+                    non_empty: false,
+                },
+                K::Shape(_),
+            ) if matches!(elem.kind(), K::Never) => {
+                return Ok(());
+            }
             (K::List(a) | K::MutableList(a), K::List(b)) => {
                 return self.arg(from, to, 0, Variance::Out, a, b);
             }
