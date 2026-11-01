@@ -33,6 +33,7 @@ pub(crate) fn lower_file(
         strict_types: true,
         ..File::default()
     };
+    out.doc = file_level_comment(&root);
     let mut stmts = Vec::new();
     for child in root.children() {
         if child.kind() == NAMESPACE_DECL && child.child(BLOCK).is_none() {
@@ -328,6 +329,49 @@ pub(crate) fn native_type(t: &Ty) -> Option<Type> {
             return None;
         }
         _ => return None,
+    })
+}
+
+/// A comment opening the file, kept when it's about the file rather than a declaration
+/// (it's followed by a blank line or `?>`): WordPress reads pattern headers out of it.
+fn file_level_comment(root: &SyntaxNode) -> Option<DocComment> {
+    let mut tokens = root
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .skip_while(|t| matches!(t.kind(), WHITESPACE | OPEN_TAG));
+    let comment = tokens.next()?;
+    if comment.kind() != DOC_COMMENT && comment.kind() != COMMENT {
+        return None;
+    }
+    let text = comment.text();
+    let body = text.strip_prefix("/*")?.strip_suffix("*/")?;
+    let next = tokens.next()?;
+    let about_file = next.kind() == CLOSE_TAG
+        || (next.kind() == WHITESPACE && next.text().matches('\n').count() > 1);
+    if !about_file {
+        return None;
+    }
+    let mut lines: Vec<String> = body
+        .trim_start_matches('*')
+        .lines()
+        .map(|l| {
+            l.trim()
+                .trim_start_matches('*')
+                .strip_prefix(' ')
+                .unwrap_or_else(|| l.trim().trim_start_matches('*'))
+                .trim_end()
+                .to_owned()
+        })
+        .collect();
+    while lines.first().is_some_and(|l| l.is_empty()) {
+        lines.remove(0);
+    }
+    while lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+    Some(DocComment {
+        summary: lines,
+        tags: Vec::new(),
     })
 }
 
@@ -809,7 +853,7 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                     push(out, StmtKind::Expr(Expr::var(name).assign(v)));
                 }
             }
-            INLINE_HTML_STMT => push(out, StmtKind::InlineHtml(text(node))),
+            INLINE_HTML_STMT => push(out, StmtKind::InlineHtml(node.text().to_string())),
             LABEL_STMT => push(
                 out,
                 StmtKind::Label(SmolStr::new(node.name_text().unwrap_or_default())),

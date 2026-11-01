@@ -238,7 +238,7 @@ fn paren_cond(p: &mut Parser<'_>) {
 
 /// Body of a control structure: a statement, or (with `:`) an alternative-syntax list.
 fn control_body(p: &mut Parser<'_>, terminators: TokenSet) -> bool {
-    if p.at(COLON) && !p.stir() {
+    if p.at(COLON) {
         let m = p.start();
         p.bump(COLON);
         alt_stmt_list(p, terminators);

@@ -281,6 +281,8 @@ struct Lexer<'a> {
     modes: Vec<Mode>,
     out: Lexed,
     halted: bool,
+    /// A StirPHP file has left inline HTML and is back in code.
+    embedded: bool,
 }
 
 /// Tokenizes `src`. The token lengths always sum to `src.len()`.
@@ -298,6 +300,7 @@ pub fn lex(src: &str, dialect: Dialect) -> Lexed {
         modes: vec![start],
         out: Lexed::default(),
         halted: false,
+        embedded: false,
     };
     lexer.run();
     debug_assert_eq!(
@@ -415,7 +418,26 @@ impl<'a> Lexer<'a> {
                 }
                 self.push(kind, len);
                 *self.modes.last_mut().unwrap() = Mode::Code;
+                self.embedded = true;
             }
+        }
+    }
+
+    /// In a StirPHP file, `?>` closes after `<?php` has re-opened code, at the start of a
+    /// line or after `;`: anywhere else it ends a nullable generic argument.
+    fn close_tag_allowed(&self) -> bool {
+        if self.dialect == Dialect::Php || self.embedded {
+            return true;
+        }
+        match self.out.tokens.last().map(|t| t.kind) {
+            None | Some(SEMI) => true,
+            Some(COMMENT | DOC_COMMENT) => true,
+            Some(WHITESPACE) => {
+                let before = &self.src[..self.pos];
+                let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+                before[line_start..].trim().is_empty() || before.trim_end().ends_with(';')
+            }
+            _ => false,
         }
     }
 
@@ -430,8 +452,8 @@ impl<'a> Lexer<'a> {
             return;
         }
 
-        // close tag (StirPHP files have no inline HTML: `List<T?>` is a type)
-        if c == b'?' && b.get(1) == Some(&b'>') && self.dialect == Dialect::Php {
+        // close tag (in StirPHP `List<T?>` is a type, so only where a statement can end)
+        if c == b'?' && b.get(1) == Some(&b'>') && self.close_tag_allowed() {
             let mut len = 2;
             if b.get(2) == Some(&b'\n') {
                 len = 3;
