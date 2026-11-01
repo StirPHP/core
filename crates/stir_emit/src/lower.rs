@@ -733,7 +733,8 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                     2 => (None, &es[1]),
                     _ => return,
                 };
-                let by_ref = value.kind() == PREFIX_EXPR && op_of(value) == Some(AMP);
+                let by_ref = node.has_token(AMP)
+                    || (value.kind() == PREFIX_EXPR && op_of(value) == Some(AMP));
                 let bind = |this: &mut Self, n: &SyntaxNode| -> Expr {
                     if n.kind() == VARIABLE_EXPR {
                         this.declare(text(n).trim_start_matches('$'), Bind::Var);
