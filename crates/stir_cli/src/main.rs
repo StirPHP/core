@@ -1,4 +1,8 @@
+mod check;
+mod workspace;
+
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use stir_project::{InitOptions, InitReport};
@@ -17,7 +21,7 @@ enum Command {
     /// Create a new StirPHP project in the current directory.
     Init(InitArgs),
     /// Type-check the project.
-    Check,
+    Check(check::CheckArgs),
     /// Transpile the project to plain PHP.
     Build,
 }
@@ -42,7 +46,7 @@ struct InitArgs {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> anyhow::Result<ExitCode> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_env("SPHP_LOG"))
         .with_writer(std::io::stderr)
@@ -50,10 +54,9 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        Command::Init(args) => run_init(args).await,
-        Command::Check | Command::Build => {
-            anyhow::bail!("`{:?}` is not implemented yet", cli.command)
-        }
+        Command::Init(args) => run_init(args).await.map(|()| ExitCode::SUCCESS),
+        Command::Check(args) => check::run(args).await,
+        Command::Build => anyhow::bail!("`build` is not implemented yet"),
     }
 }
 

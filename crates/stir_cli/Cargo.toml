@@ -7,9 +7,16 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+ariadne = "0.6.0"
 clap.workspace = true
+futures = "0.3.34"
 inquire = "0.9.4"
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+stir_checker = { version = "0.1.0", path = "../stir_checker" }
+stir_db = { version = "0.1.0", path = "../stir_db" }
 stir_project = { version = "0.1.0", path = "../stir_project" }
+stir_stubs = { version = "0.1.0", path = "../stir_stubs" }
+stir_syntax = { version = "0.1.0", path = "../stir_syntax" }
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
