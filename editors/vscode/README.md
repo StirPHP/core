@@ -7,13 +7,17 @@ Language support for StirPHP (`.sphp` files), a strictly typed superset of PHP:
 - diagnostics, hover, go to definition, references, rename, completion,
   signature help, inlay type hints, outline and folding — all from `sphp lsp`
 
-## Requirements
+## The language server
 
-The `sphp` binary on your `PATH` (or set `sphp.server.path`):
+The extension downloads `sphp` itself: on first start it fetches the build for
+your platform from [GitHub Releases](https://github.com/StirPHP/core/releases),
+checks it against the release's `SHA256SUMS` and keeps it in the extension's
+storage. Every few hours it looks for a newer build and installs it; you're
+offered a server restart, and the next start uses it anyway.
 
-```sh
-cargo install --path crates/stir_cli
-```
+To use your own `sphp` instead (a local build, say), set `sphp.server.path`.
+Without network and without a downloaded build, the extension falls back to
+`sphp` on the `PATH`.
 
 VS Code 1.100 or newer.
 
@@ -21,11 +25,14 @@ VS Code 1.100 or newer.
 
 | Setting | Default | |
 |---|---|---|
-| `sphp.server.path` | `sphp` | the binary; started as `sphp lsp` |
+| `sphp.server.path` | (empty) | the `sphp` to run instead of the downloaded one: a path or a command on the `PATH` |
+| `sphp.server.channel` | `stable` | download the latest release, or `nightly` (built from every commit on `main`) |
+| `sphp.server.autoUpdate` | `true` | install newer builds of the channel |
 | `sphp.php.enable` | `false` | also serve `.php` files |
 | `sphp.trace.server` | `off` | log LSP traffic to the output channel |
 
-Command: **StirPHP: Restart Language Server**.
+Commands: **StirPHP: Restart Language Server**, **StirPHP: Check for Updates**.
+The **StirPHP** output channel logs which `sphp` is used.
 
 ## Development
 

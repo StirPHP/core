@@ -3,12 +3,17 @@
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "target": "es2022",
-    "lib": ["es2022"],
+    "lib": [
+      "es2022"
+    ],
     "checkJs": true,
     "allowJs": true,
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["extension.js"]
+  "include": [
+    "extension.js",
+    "server.js"
+  ]
 }

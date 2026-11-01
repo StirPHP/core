@@ -16,7 +16,8 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "workspaceContains:**/sphp.toml"
+    "workspaceContains:**/sphp.toml",
+    "onLanguage:sphp"
   ],
   "contributes": {
     "languages": [
@@ -44,8 +45,26 @@
       "properties": {
         "sphp.server.path": {
           "type": "string",
-          "default": "sphp",
-          "markdownDescription": "Path to the `sphp` binary. The language server is started with `sphp lsp`."
+          "default": "",
+          "markdownDescription": "The `sphp` binary to run (started as `sphp lsp`): a path, or a command on the `PATH`. Leave empty to let the extension download and update `sphp` itself."
+        },
+        "sphp.server.channel": {
+          "type": "string",
+          "enum": [
+            "stable",
+            "nightly"
+          ],
+          "enumDescriptions": [
+            "The latest release.",
+            "Built from every commit on main; may be broken."
+          ],
+          "default": "stable",
+          "markdownDescription": "Which builds of `sphp` the extension downloads (when `sphp.server.path` is empty)."
+        },
+        "sphp.server.autoUpdate": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Look for a newer `sphp` every few hours and install it (when `sphp.server.path` is empty). **StirPHP: Check for Updates** checks at any time."
         },
         "sphp.php.enable": {
           "type": "boolean",
@@ -68,6 +87,11 @@
       {
         "command": "sphp.restartServer",
         "title": "Restart Language Server",
+        "category": "StirPHP"
+      },
+      {
+        "command": "sphp.checkForUpdates",
+        "title": "Check for Updates",
         "category": "StirPHP"
       }
     ],
@@ -105,6 +129,8 @@
     "package": "vsce package --allow-missing-repository"
   },
   "dependencies": {
+    "fflate": "0.8.3",
+    "tar": "7.5.22",
     "vscode-languageclient": "^11.0.0"
   },
   "devDependencies": {
