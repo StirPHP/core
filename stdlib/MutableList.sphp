@@ -36,37 +36,37 @@ function <T> MutableList<T>.set(index: Int, element: T): Unit =
 // TODO(stir): needs by-reference receiver
 /** Removes and returns the element at `index`; throws \OutOfBoundsException if out of range. */
 function <T> MutableList<T>.removeAt(index: Int): T =
-    if (index >= 0 && index < count(this)) array_splice(this, index, 1)[0]
+    if (index >= 0 && index < count(this)) (array_splice(this, index, 1) as List<T>)[0]
     else throw new \OutOfBoundsException("Index ${index} out of bounds for length ${count(this)}.")
 
 // TODO(stir): needs by-reference receiver
 /** Removes the first occurrence of `element` (strict comparison); returns true if one was removed. */
 function <T> MutableList<T>.remove(element: T): Bool =
-    in_array(element, this, true) && array_splice(this, array_search(element, this, true), 1) !== []
+    in_array(element, this, true) && array_splice(this, array_search(element, this, true) as Int, 1) !== []
 
 // TODO(stir): needs by-reference receiver
 /** Removes and returns the first element; throws \OutOfBoundsException if the list is empty. */
-function <T> MutableList<T>.removeFirst(): T = if (this === []) throw new \OutOfBoundsException("List is empty.") else array_shift(this)
+function <T> MutableList<T>.removeFirst(): T = if (this === []) throw new \OutOfBoundsException("List is empty.") else array_shift(this) as T
 
 // TODO(stir): needs by-reference receiver
 /** Removes and returns the last element; throws \OutOfBoundsException if the list is empty. */
-function <T> MutableList<T>.removeLast(): T = if (this === []) throw new \OutOfBoundsException("List is empty.") else array_pop(this)
+function <T> MutableList<T>.removeLast(): T = if (this === []) throw new \OutOfBoundsException("List is empty.") else array_pop(this) as T
 
 // TODO(stir): needs by-reference receiver
 /** Removes and returns the first element, or returns null if the list is empty. */
-function <T> MutableList<T>.removeFirstOrNull(): T? = array_shift(this)
+function <T> MutableList<T>.removeFirstOrNull(): T? = array_shift(this) as T?
 
 // TODO(stir): needs by-reference receiver
 /** Removes and returns the last element, or returns null if the list is empty. */
-function <T> MutableList<T>.removeLastOrNull(): T? = array_pop(this)
+function <T> MutableList<T>.removeLastOrNull(): T? = array_pop(this) as T?
 
 // TODO(stir): needs by-reference receiver
 /** Removes every element matching `predicate`. */
-function <T> MutableList<T>.removeAll(predicate: (T) -> Bool): Unit = this = array_values(array_filter(this, { !predicate(it) }))
+function <T> MutableList<T>.removeAll(predicate: (T) -> Bool): Unit = this = array_values(array_filter(this, { element: T -> !predicate(element) })) as MutableList<T>
 
 // TODO(stir): needs by-reference receiver
 /** Keeps only the elements matching `predicate`. */
-function <T> MutableList<T>.retainAll(predicate: (T) -> Bool): Unit = this = array_values(array_filter(this, { predicate(it) }))
+function <T> MutableList<T>.retainAll(predicate: (T) -> Bool): Unit = this = array_values(array_filter(this, { element: T -> predicate(element) })) as MutableList<T>
 
 // TODO(stir): needs by-reference receiver
 /** Removes all elements. */
@@ -74,21 +74,21 @@ function <T> MutableList<T>.clear(): Unit = this = []
 
 // TODO(stir): needs by-reference receiver
 /** Sorts the list in place, ascending (strings by code point, never as numeric strings); stable. */
-function <T of Int | Float | String> MutableList<T>.sort(): Unit = usort(this, { a, b -> compareValues(a, b) })
+function <T of Int | Float | String> MutableList<T>.sort(): Unit = usort(this, { a: T, b: T -> compareValues(a, b) })
 
 // TODO(stir): needs by-reference receiver
 /** Sorts the list in place, descending (strings by code point); stable. */
-function <T of Int | Float | String> MutableList<T>.sortDescending(): Unit = usort(this, { a, b -> compareValues(b, a) })
+function <T of Int | Float | String> MutableList<T>.sortDescending(): Unit = usort(this, { a: T, b: T -> compareValues(b, a) })
 
 // TODO(stir): needs by-reference receiver
 /** Sorts the list in place, ascending by `selector`; stable. */
 function <T, R of Int | Float | String> MutableList<T>.sortBy(selector: (T) -> R): Unit =
-    usort(this, { a, b -> compareValues(selector(a), selector(b)) })
+    usort(this, { a: T, b: T -> compareValues(selector(a), selector(b)) })
 
 // TODO(stir): needs by-reference receiver
 /** Sorts the list in place, descending by `selector`; stable. */
 function <T, R of Int | Float | String> MutableList<T>.sortByDescending(selector: (T) -> R): Unit =
-    usort(this, { a, b -> compareValues(selector(b), selector(a)) })
+    usort(this, { a: T, b: T -> compareValues(selector(b), selector(a)) })
 
 // TODO(stir): needs by-reference receiver
 /** Sorts the list in place with `comparator` (negative, zero or positive); stable. */
@@ -96,7 +96,7 @@ function <T> MutableList<T>.sortWith(comparator: (T, T) -> Int): Unit = usort(th
 
 // TODO(stir): needs by-reference receiver
 /** Reverses the list in place. */
-function <T> MutableList<T>.reverse(): Unit = this = array_reverse(this)
+function <T> MutableList<T>.reverse(): Unit = this = array_reverse(this) as MutableList<T>
 
 // TODO(stir): needs by-reference receiver
 /** Shuffles the list in place. */

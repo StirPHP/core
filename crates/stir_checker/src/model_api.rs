@@ -25,7 +25,13 @@ fn view(ctx: &Ctx<'_>, sig: &FnSig) -> FnSigView {
         type_params: sig
             .type_params
             .iter()
-            .map(|p| (p.name.clone(), stir_types::TypeEnv::param_bound(ctx, p.id), p.variance))
+            .map(|p| {
+                (
+                    p.name.clone(),
+                    stir_types::TypeEnv::param_bound(ctx, p.id),
+                    p.variance,
+                )
+            })
             .collect(),
         params: sig.params.iter().map(|p| p.ty.clone()).collect(),
         ret: sig.ret.clone(),
@@ -37,7 +43,11 @@ pub fn fn_sig_view(ctx: &Ctx<'_>, loc: ItemLoc) -> FnSigView {
     view(ctx, &ctx.function_sig(loc))
 }
 
-pub fn method_sig_view<'db>(ctx: &Ctx<'db>, model: &ClassModelRef<'db>, m: &MethodDef) -> FnSigView {
+pub fn method_sig_view<'db>(
+    ctx: &Ctx<'db>,
+    model: &ClassModelRef<'db>,
+    m: &MethodDef,
+) -> FnSigView {
     view(ctx, &ctx.method_sig(model, m))
 }
 
@@ -69,7 +79,11 @@ pub fn class_view<'db>(ctx: &Ctx<'db>, model: &ClassModelRef<'db>) -> ClassView 
     }
     for i in &supers.interfaces {
         if generic(i) {
-            let tag = if model.kind() == stir_hir::ClassKind::Interface { "extends" } else { "implements" };
+            let tag = if model.kind() == stir_hir::ClassKind::Interface {
+                "extends"
+            } else {
+                "implements"
+            };
             super_docs.push((tag, stir_types::to_phpdoc(i)));
         }
     }
@@ -82,17 +96,32 @@ pub fn class_view<'db>(ctx: &Ctx<'db>, model: &ClassModelRef<'db>) -> ClassView 
         .flatten()
         .map(|p| ctx.param_sig(p, &cx, &mut sink).ty)
         .collect();
-    let enum_backing = model.def.enum_backing.as_ref().map(|t| ctx.lower(t, &cx, &mut sink));
+    let enum_backing = model
+        .def
+        .enum_backing
+        .as_ref()
+        .map(|t| ctx.lower(t, &cx, &mut sink));
     let builtin = |n: &String| matches!(n.to_ascii_lowercase().as_str(), "unitenum" | "backedenum");
     ClassView {
         type_params: model
             .params
             .iter()
-            .map(|p| (p.name.clone(), stir_types::TypeEnv::param_bound(ctx, p.id), p.variance))
+            .map(|p| {
+                (
+                    p.name.clone(),
+                    stir_types::TypeEnv::param_bound(ctx, p.id),
+                    p.variance,
+                )
+            })
             .collect(),
         super_docs,
         parent: supers.parent.as_ref().and_then(name_of),
-        interfaces: supers.interfaces.iter().filter_map(name_of).filter(|n| !builtin(n)).collect(),
+        interfaces: supers
+            .interfaces
+            .iter()
+            .filter_map(name_of)
+            .filter(|n| !builtin(n))
+            .collect(),
         ctor_params,
         enum_backing,
     }

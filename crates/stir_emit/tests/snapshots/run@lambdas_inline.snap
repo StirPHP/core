@@ -24,7 +24,7 @@ $count = 0;
 });
 echo "sum={$count}\n";
 $__i5 = fn (int $acc, int $x): int => $acc + $x;
-$total = \array_reduce($nums, $__i5, 0);
+$total = \array_reduce($nums, fn ($accumulator, $element) => $__i5($accumulator, $element), 0);
 echo "fold={$total}\n";
 $s = '  hi  ';
 $__i6 = \mb_trim($s);

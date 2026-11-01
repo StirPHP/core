@@ -5,7 +5,7 @@ use stir_db::{Db, SourceFile, Workspace};
 use crate::print::Mapping;
 
 /// Options for code generation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct EmitOptions {
     /// Inline extension functions at call sites instead of calling them.
     pub inline_extensions: bool,
@@ -14,16 +14,6 @@ pub struct EmitOptions {
     /// when the file calls non-inlined stdlib/extension functions.
     pub runtime_require: Option<String>,
     pub print: crate::PrintOptions,
-}
-
-impl Default for EmitOptions {
-    fn default() -> Self {
-        EmitOptions {
-            inline_extensions: false,
-            runtime_require: None,
-            print: crate::PrintOptions::default(),
-        }
-    }
 }
 
 /// The generated PHP of one file.

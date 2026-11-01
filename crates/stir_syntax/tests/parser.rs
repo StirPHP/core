@@ -201,6 +201,12 @@ fn errors_snapshot() {
     insta::assert_snapshot!(parse("<?php $a = ; if ($b { }", Dialect::Php).debug_tree());
 }
 
-stir!(stir_stdlib_gaps, "function <T> List<T?>.filterNotNull(): List<T> = []\nforeach (xs as $x) { echo $x }\nforeach (m as $k => $v) {}\nval f = { x: Int -> if (x > 0) 1 else 2 }\nval g = { -> 1 }\nval list = xs\necho list->size()\n");
+stir!(
+    stir_stdlib_gaps,
+    "function <T> List<T?>.filterNotNull(): List<T> = []\nforeach (xs as $x) { echo $x }\nforeach (m as $k => $v) {}\nval f = { x: Int -> if (x > 0) 1 else 2 }\nval g = { -> 1 }\nval list = xs\necho list->size()\n"
+);
 
-stir!(stir_infix_and_type_args, "val p = \"a\" to 1\nval xs = mutableListOf<Int>()\nval m = mapOf<String, List<Int>>()\nval c = a < b\nval d = x->get<Int>(1)\n");
+stir!(
+    stir_infix_and_type_args,
+    "val p = \"a\" to 1\nval xs = mutableListOf<Int>()\nval m = mapOf<String, List<Int>>()\nval c = a < b\nval d = x->get<Int>(1)\n"
+);

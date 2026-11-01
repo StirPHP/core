@@ -342,7 +342,10 @@ mod tests {
     async fn reads_phpstan_settings() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path();
-        write(&root.join("sphp.toml"), "srcDir = \"src\"\ncheckPhp = true\n");
+        write(
+            &root.join("sphp.toml"),
+            "srcDir = \"src\"\ncheckPhp = true\n",
+        );
         write(
             &root.join("phpstan.neon.dist"),
             "parameters:\n    level: 5\n    ignoreErrors:\n        - '#^unknown function#'\n        -\n            identifier: SPHP0007\n            path: src/legacy.php\n",
@@ -356,8 +359,14 @@ mod tests {
         assert_eq!(settings.ignore_errors[1].identifiers, ["SPHP0007"]);
         assert!(settings.ignore_errors[1].paths[0].ends_with("src/legacy.php"));
 
-        write(&root.join("sphp.toml"), "srcDir = \"src\"\nphpstan = \"conf/custom.neon\"\n");
-        write(&root.join("conf/custom.neon"), "parameters:\n    level: max\n");
+        write(
+            &root.join("sphp.toml"),
+            "srcDir = \"src\"\nphpstan = \"conf/custom.neon\"\n",
+        );
+        write(
+            &root.join("conf/custom.neon"),
+            "parameters:\n    level: max\n",
+        );
         let project = Project::load(root).await.unwrap();
         let settings = load_settings(&project).await.unwrap();
         assert!(!settings.check_php);

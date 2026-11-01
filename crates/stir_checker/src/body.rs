@@ -186,6 +186,7 @@ pub fn is_expr_kind(k: SyntaxKind) -> bool {
             | INSTANCEOF_EXPR
             | CALL_EXPR
             | METHOD_CALL_EXPR
+            | INFIX_CALL_EXPR
             | NULLSAFE_METHOD_CALL_EXPR
             | PROPERTY_FETCH_EXPR
             | NULLSAFE_PROPERTY_FETCH_EXPR
@@ -1695,7 +1696,6 @@ impl<'a, 'db> Checker<'a, 'db> {
         self.lower_type_node(node)
     }
 
-
     // ------------------------------------------------------------ expressions
 
     /// Infers the type of an expression, checking it against `expected` where
@@ -1961,6 +1961,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             CALL_EXPR => self.call(node, expected),
             METHOD_CALL_EXPR | NULLSAFE_METHOD_CALL_EXPR => self.method_call(node, expected),
+            INFIX_CALL_EXPR => self.infix_call(node, expected),
             PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR => self.property_fetch(node),
             STATIC_CALL_EXPR => self.static_call(node, expected),
             STATIC_PROPERTY_FETCH_EXPR => self.static_property(node),
@@ -2101,11 +2102,13 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
-    fn check_stringable(&mut self, node: &SyntaxNode, t: &Ty, what: &str) {
-        if !self.stir() || t.is_error() {
-            return;
+    /// Can a value of type `t` be printed (templates, `echo`)?
+    fn is_printable(&self, t: &Ty) -> bool {
+        let t = self.bound_of(&strip_platform(t));
+        if let TyKind::Union(_) = t.kind() {
+            return t.members().iter().all(|m| self.is_printable(m));
         }
-        let ok = [
+        [
             Ty::string(),
             Ty::int(),
             Ty::float(),
@@ -2114,8 +2117,15 @@ impl<'a, 'db> Checker<'a, 'db> {
             Ty::php_float(),
         ]
         .iter()
-        .any(|s| self.assignable(t, s))
-            || self.assignable(t, &Ty::class("Stringable", Vec::new()));
+        .any(|s| self.assignable(&t, s))
+            || self.assignable(&t, &Ty::class("Stringable", Vec::new()))
+    }
+
+    fn check_stringable(&mut self, node: &SyntaxNode, t: &Ty, what: &str) {
+        if !self.stir() || t.is_error() {
+            return;
+        }
+        let ok = self.is_printable(t);
         if !ok {
             let hint = if t.is_any_platform() {
                 "; narrow the untyped value first"
@@ -3349,6 +3359,10 @@ impl<'a, 'db> Checker<'a, 'db> {
     // ------------------------------------------------------------ calls
 
     fn args_of(&self, call: &SyntaxNode) -> Vec<SyntaxNode> {
+        if call.kind() == INFIX_CALL_EXPR {
+            // `a name b`: the right operand is the single argument
+            return exprs_of(call).into_iter().skip(1).take(1).collect();
+        }
         call.children_of(ARG_LIST)
             .iter()
             .flat_map(|a| {
@@ -3383,6 +3397,29 @@ impl<'a, 'db> Checker<'a, 'db> {
                 .map(|p| p.id)
                 .chain(extra_vars.iter().copied()),
         );
+        if let Some(ta) = call.child(CALL_TYPE_ARGS) {
+            let written: Vec<Ty> = ta
+                .children()
+                .filter(|c| stir_hir::is_type_node(c.kind()))
+                .map(|t| self.lower_type_node(&t))
+                .collect();
+            if written.len() != sig.type_params.len() {
+                self.error(
+                    ta.text_range(),
+                    codes::GENERIC_ARITY,
+                    format!(
+                        "`{}` takes {} type argument(s), found {}",
+                        sig.name,
+                        sig.type_params.len(),
+                        written.len()
+                    ),
+                );
+            } else {
+                for (p, t) in sig.type_params.iter().zip(written) {
+                    inf.solved.insert(p.id, t);
+                }
+            }
+        }
         if let (Some(r), Some(rt)) = (&sig.receiver, receiver) {
             inf.unify(self.ctx, &subst_cls(r), rt);
         }
@@ -3462,7 +3499,10 @@ impl<'a, 'db> Checker<'a, 'db> {
         // pass 1: non-lambda arguments
         let mut arg_tys: Vec<Option<Ty>> = vec![None; args.len()];
         let value_of = |a: &SyntaxNode| -> Option<SyntaxNode> {
-            if a.kind() == LAMBDA_EXPR {
+            if a.kind() == LAMBDA_EXPR
+                || (is_expr_kind(a.kind())
+                    && a.parent().is_some_and(|p| p.kind() == INFIX_CALL_EXPR))
+            {
                 Some(a.clone())
             } else {
                 exprs_of(a).into_iter().next()
@@ -3594,7 +3634,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                 self.check_args_untyped(node);
                 return Ty::error();
             };
-            self.function_calls.insert(node.text_range(), SmolStr::new(self.ctx.function_def(loc).name.as_str()));
+            self.function_calls.insert(
+                node.text_range(),
+                SmolStr::new(self.ctx.function_def(loc).name.as_str()),
+            );
             let _ = fqn;
             let sig = self.ctx.function_sig(loc);
             return self.check_args(node, &sig, &FxHashMap::default(), None, expected, &[]);
@@ -3864,6 +3907,29 @@ impl<'a, 'db> Checker<'a, 'db> {
         if nullable { t.nullable() } else { t }
     }
 
+    /// `a name b` is `a->name(b)`.
+    fn infix_call(&mut self, node: &SyntaxNode, expected: Option<&Ty>) -> Ty {
+        let es = exprs_of(node);
+        let Some(lhs) = es.first() else {
+            return Ty::error();
+        };
+        let recv = self.expr(lhs, None);
+        let Some(name_node) = node.child(SyntaxKind::NAME) else {
+            return Ty::error();
+        };
+        let name = text_of(&name_node);
+        let recv = strip_platform(&recv);
+        if self.stir() && stir_types::is_nullable(self.ctx, &recv) && !recv.is_error() {
+            self.error(
+                lhs.text_range(),
+                codes::NULLABLE_ACCESS,
+                format!("`{recv}` may be null; infix calls need a non-null receiver"),
+            );
+        }
+        let recv = stir_types::without_null(&recv);
+        self.call_member(node, &recv, &name, name_node.text_range(), expected)
+    }
+
     fn call_member(
         &mut self,
         node: &SyntaxNode,
@@ -3976,10 +4042,13 @@ impl<'a, 'db> Checker<'a, 'db> {
             self.ext_calls.push((cur, loc, node.text_range()));
         }
         if sig.receiver.as_ref().is_some_and(is_by_ref_receiver)
-            && let Some(base) = node
-                .children()
-                .next()
-                .and_then(|f| exprs_of(&f).into_iter().next())
+            && let Some(base) = if node.kind() == INFIX_CALL_EXPR {
+                exprs_of(node).into_iter().next()
+            } else {
+                node.children()
+                    .next()
+                    .and_then(|f| exprs_of(&f).into_iter().next())
+            }
         {
             self.check_by_ref_receiver(&base, name);
         }

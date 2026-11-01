@@ -138,7 +138,6 @@ fn infix_op(p: &Parser<'_>) -> Option<(SyntaxKind, u8, u8)> {
     Some(op)
 }
 
-
 /// `a name b` in StirPHP: an identifier on the same line between two expressions.
 fn at_infix_call(p: &Parser<'_>) -> bool {
     if !p.stir() || p.current() != IDENT || p.newline_before() {
@@ -151,8 +150,21 @@ fn at_infix_call(p: &Parser<'_>) -> bool {
     !p.nth_newline_before(1)
         && matches!(
             p.nth(1),
-            IDENT | VARIABLE | INT_NUMBER | FLOAT_NUMBER | STRING_SINGLE | STRING_DOUBLE | DQUOTE | L_PAREN
-                | L_BRACK | NAME_QUALIFIED | NAME_FULLY_QUALIFIED | MINUS | BANG | NEW_KW | L_CURLY
+            IDENT
+                | VARIABLE
+                | INT_NUMBER
+                | FLOAT_NUMBER
+                | STRING_SINGLE
+                | STRING_DOUBLE
+                | DQUOTE
+                | L_PAREN
+                | L_BRACK
+                | NAME_QUALIFIED
+                | NAME_FULLY_QUALIFIED
+                | MINUS
+                | BANG
+                | NEW_KW
+                | L_CURLY
         )
 }
 
@@ -172,8 +184,8 @@ fn at_call_type_args(p: &Parser<'_>) -> bool {
                     return p.nth(n + 1) == L_PAREN;
                 }
             }
-            IDENT | COMMA | QUESTION | NAME_QUALIFIED | NAME_FULLY_QUALIFIED | PIPE | L_PAREN | R_PAREN | ARROW
-            | STRING_SINGLE | STRING_DOUBLE | INT_NUMBER => {}
+            IDENT | COMMA | QUESTION | NAME_QUALIFIED | NAME_FULLY_QUALIFIED | PIPE | L_PAREN
+            | R_PAREN | ARROW | STRING_SINGLE | STRING_DOUBLE | INT_NUMBER => {}
             k if k.is_keyword() => {}
             _ => return false,
         }
@@ -428,7 +440,11 @@ fn postfix(p: &mut Parser<'_>) -> Option<CompletedMarker> {
         if newline_breaks(p) {
             break;
         }
-        if matches!(lhs.kind(), NAME_EXPR | PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR | CLASS_CONST_FETCH_EXPR) && at_call_type_args(p) {
+        if matches!(
+            lhs.kind(),
+            NAME_EXPR | PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR | CLASS_CONST_FETCH_EXPR
+        ) && at_call_type_args(p)
+        {
             let t = p.start();
             p.bump(L_ANGLE);
             while !p.at(R_ANGLE) && !p.at(EOF) {

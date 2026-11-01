@@ -144,6 +144,7 @@ fn stir_checker_is_expr(k: SyntaxKind) -> bool {
             | INSTANCEOF_EXPR
             | CALL_EXPR
             | METHOD_CALL_EXPR
+            | INFIX_CALL_EXPR
             | NULLSAFE_METHOD_CALL_EXPR
             | PROPERTY_FETCH_EXPR
             | NULLSAFE_PROPERTY_FETCH_EXPR
@@ -421,7 +422,7 @@ struct Lowerer<'a, 'db> {
     /// Statements to emit before the statement currently being lowered.
     pre: Vec<Stmt>,
     /// > 0 while lowering code that may not run (`&&` right side, branches):
-    /// pre-statements can't be used there.
+    /// > pre-statements can't be used there.
     conditional: u32,
     /// In an extension function body: `this` is `$__this`.
     in_extension: bool,
@@ -985,9 +986,10 @@ impl<'a, 'db> Lowerer<'a, 'db> {
             let saved = std::mem::take(&mut self.pre);
             let v = self.expr(&e);
             let mut out = std::mem::replace(&mut self.pre, saved);
-            if matches!(ret.kind(), TyKind::Unit | TyKind::Void) {
-                out.push(Stmt::expr(v));
-            } else if matches!(ret.kind(), TyKind::Nothing | TyKind::Never) {
+            if matches!(
+                ret.kind(),
+                TyKind::Unit | TyKind::Void | TyKind::Nothing | TyKind::Never
+            ) {
                 out.push(Stmt::expr(v));
             } else {
                 out.push(Stmt::ret(Some(v)));
@@ -1351,9 +1353,7 @@ impl<'a, 'db> Lowerer<'a, 'db> {
             let mut default = None;
             if let Some(dn) = default_node {
                 let v = self.expr(&dn);
-                if !readonly && is_constant_expr(&v) {
-                    default = Some(v);
-                } else if is_static {
+                if (!readonly && is_constant_expr(&v)) || is_static {
                     default = Some(v);
                 } else {
                     ctor_init.push(Stmt::expr(Expr::this().prop(name.as_str()).assign(v)));
@@ -1372,7 +1372,7 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                 set_visibility: None,
                 is_static,
                 readonly: readonly && !is_static,
-                ty: native.or_else(|| readonly.then(|| Type::Builtin(BuiltinType::Mixed))),
+                ty: native.or_else(|| readonly.then_some(Type::Builtin(BuiltinType::Mixed))),
                 name,
                 default,
                 origin: self.origin(&e),
@@ -1755,6 +1755,7 @@ impl<'a, 'db> Lowerer<'a, 'db> {
             CAST_EXPR => Expr::raw(text(node)),
             CALL_EXPR => self.call(node),
             METHOD_CALL_EXPR | NULLSAFE_METHOD_CALL_EXPR => self.method_call(node),
+            INFIX_CALL_EXPR => self.infix_call(node),
             PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR => self.property_fetch(node),
             STATIC_CALL_EXPR => {
                 let Some(fetch) = node.children().next() else {
@@ -2201,6 +2202,42 @@ impl<'a, 'db> Lowerer<'a, 'db> {
 
     fn is_runtime_file(&self) -> bool {
         self.file.origin(self.db) == FileOrigin::Stub
+    }
+
+    /// `a name b` → `a->name(b)` (or the extension function).
+    fn infix_call(&mut self, node: &SyntaxNode) -> Expr {
+        let es = exprs_of(node);
+        let (Some(lhs), Some(rhs)) = (es.first(), es.get(1)) else {
+            return Expr::null();
+        };
+        let name = node
+            .child(SyntaxKind::NAME)
+            .map(|n| text(&n))
+            .unwrap_or_default();
+        if let Some(loc) = self.typed.extension_calls.get(&node.text_range()).copied() {
+            let def = self.ctx.function_def(loc);
+            let fqn = format!("\\{}\\{}", def.name.namespace(), extension_name(def))
+                .replace("\\\\", "\\");
+            let recv = self.expr(lhs);
+            let arg = self.expr(rhs);
+            if self.inline
+                && !self.inlining.contains(&loc)
+                && let Some(e) =
+                    self.inline_call(loc, recv.clone(), vec![Arg::Positional(arg.clone())])
+            {
+                return e;
+            }
+            if loc.file.origin(self.db) == FileOrigin::Stub && !self.is_runtime_file() {
+                self.needs_runtime = true;
+            }
+            return Expr::call_fn(
+                fqn.as_str(),
+                vec![Arg::Positional(recv), Arg::Positional(arg)],
+            );
+        }
+        let recv = self.expr(lhs);
+        let arg = self.expr(rhs);
+        recv.method(name.as_str(), vec![Arg::Positional(arg)])
     }
 
     fn method_call(&mut self, node: &SyntaxNode) -> Expr {
@@ -2978,7 +3015,7 @@ fn decode_dq(s: &str) -> String {
 
 /// The typed info of another file has the same lifetime as the database
 /// borrow; this narrows it to the lowerer's lifetime.
-fn as_typed<'a>(t: &'a std::sync::Arc<TypedFile>) -> &'a TypedFile {
+fn as_typed(t: &std::sync::Arc<TypedFile>) -> &TypedFile {
     t.as_ref()
 }
 

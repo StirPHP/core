@@ -82,6 +82,45 @@ impl Inference {
                 self.unify_depth(env, pk, ak, depth + 1);
                 self.unify_depth(env, pv, av, depth + 1);
             }
+            // PHP-family generic parameters (generic stubs / PHPDoc) against StirPHP values
+            (
+                TyKind::PhpList { elem: p, .. },
+                TyKind::List(a) | TyKind::MutableList(a) | TyKind::PhpList { elem: a, .. },
+            ) => self.unify_depth(env, p, a, depth + 1),
+            (
+                TyKind::Array {
+                    key: pk, value: pv, ..
+                }
+                | TyKind::Iterable { key: pk, value: pv },
+                TyKind::Map(ak, av)
+                | TyKind::MutableMap(ak, av)
+                | TyKind::Array {
+                    key: ak, value: av, ..
+                }
+                | TyKind::Iterable { key: ak, value: av },
+            ) => {
+                self.unify_depth(env, pk, ak, depth + 1);
+                self.unify_depth(env, pv, av, depth + 1);
+            }
+            (
+                TyKind::Array {
+                    key: pk, value: pv, ..
+                }
+                | TyKind::Iterable { key: pk, value: pv },
+                TyKind::List(a) | TyKind::MutableList(a) | TyKind::PhpList { elem: a, .. },
+            ) => {
+                self.unify_depth(env, pk, &Ty::int(), depth + 1);
+                self.unify_depth(env, pv, a, depth + 1);
+            }
+            (TyKind::Callable { sig: Some(pf), .. }, TyKind::Fn(af)) => {
+                for (pp, ap) in pf.params.iter().zip(&af.params) {
+                    self.unify_depth(env, &pp.ty, &ap.ty, depth + 1);
+                }
+                self.unify_depth(env, &pf.ret, &af.ret, depth + 1);
+            }
+            (TyKind::ClassString(Some(p)), TyKind::ClassString(Some(a))) => {
+                self.unify_depth(env, p, a, depth + 1)
+            }
             (TyKind::Fn(pf), TyKind::Fn(af)) => {
                 for (pp, ap) in pf.params.iter().zip(&af.params) {
                     self.unify_depth(env, &pp.ty, &ap.ty, depth + 1);

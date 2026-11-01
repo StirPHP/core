@@ -33,7 +33,7 @@ function String?.orEmpty(): String = this ?: ""
 function <T> List<T>?.orEmpty(): List<T> = this ?: []
 
 /** Returns this map, or an empty map if it is null. */
-function <K, V> Map<K, V>?.orEmpty(): Map<K, V> = this ?: []
+function <K of Int | String, V> Map<K, V>?.orEmpty(): Map<K, V> = this ?: []
 
 /** Returns true if this string is null or "". */
 function String?.isNullOrEmpty(): Bool = this === null || this === ""
@@ -45,4 +45,4 @@ function String?.isNullOrBlank(): Bool = this === null || preg_match('/\A\s*\z/u
 function <T> List<T>?.isNullOrEmpty(): Bool = this === null || this === []
 
 /** Returns true if this map is null or has no entries. */
-function <K, V> Map<K, V>?.isNullOrEmpty(): Bool = this === null || this === []
+function <K of Int | String, V> Map<K, V>?.isNullOrEmpty(): Bool = this === null || count(this) === 0

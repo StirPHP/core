@@ -4,7 +4,6 @@ use stir_db::{FileOrigin, RootDatabase, SourceFile, Workspace};
 use stir_syntax::Dialect;
 
 #[test]
-#[ignore = "stdlib is being brought in line with the checker"]
 fn stdlib_checks_cleanly() {
     let db = RootDatabase::default();
     let mut files: Vec<SourceFile> = stir_stubs::stub_files()

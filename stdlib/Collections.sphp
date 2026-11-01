@@ -22,31 +22,31 @@ function <A, B> A.to(other: B): Pair<A, B> = Pair { first = this, second = other
 function <T> Pair<T, T>.toList(): List<T> = [this->first, this->second]
 
 /** Returns a read-only list of the given elements. */
-function <T> listOf(...elements: T): List<T> = array_values(elements)
+function <T> listOf(...elements: T): List<T> = array_values(elements) as List<T>
 
 /** Returns an empty read-only list. */
 function <T> emptyList(): List<T> = []
 
 /** Returns a read-only list of the given elements that are not null. */
-function <T> listOfNotNull(...elements: T? ): List<T> = array_values(array_filter(elements, { it !== null }))
+function <T> listOfNotNull(...elements: T? ): List<T> = array_values(array_filter(elements, { element: T? -> element !== null })) as List<T>
 
 /** Returns a mutable list of the given elements. */
-function <T> mutableListOf(...elements: T): MutableList<T> = array_values(elements)
+function <T> mutableListOf(...elements: T): MutableList<T> = array_values(elements) as MutableList<T>
 
 /** Returns a list of `size` elements where element i is `init(i)`; throws \ValueError if `size` is negative. */
 function <T> listOfSize(size: Int, init: (Int) -> T): List<T> =
     if (size < 0) throw new \ValueError("Negative list size ${size}.")
     else if (size === 0) []
-    else array_map(init, range(0, size - 1))
+    else array_map(init, range(0, size - 1)) as List<T>
 
 /** Returns a read-only map built from `pairs`; on duplicate keys the last pair wins. */
-function <K of Int | String, V> mapOf(...pairs: Pair<K, V>): Map<K, V> = array_column(pairs, "second", "first")
+function <K of Int | String, V> mapOf(...pairs: Pair<K, V>): Map<K, V> = array_column(pairs, "second", "first") as Map<K, V>
 
 /** Returns an empty read-only map. */
 function <K of Int | String, V> emptyMap(): Map<K, V> = []
 
 /** Returns a mutable map built from `pairs`; on duplicate keys the last pair wins. */
-function <K of Int | String, V> mutableMapOf(...pairs: Pair<K, V>): MutableMap<K, V> = array_column(pairs, "second", "first")
+function <K of Int | String, V> mutableMapOf(...pairs: Pair<K, V>): MutableMap<K, V> = array_column(pairs, "second", "first") as MutableMap<K, V>
 
 /** Compares two scalars: null sorts first, strings by code point (strcmp, never numeric-string), numbers numerically; returns -1, 0 or 1. */
 function <T of Int | Float | String> compareValues(a: T?, b: T?): Int =
@@ -58,11 +58,13 @@ function <T of Int | Float | String> compareValues(a: T?, b: T?): Int =
 
 /**
  * Calls `action(index)` for index 0 until `times`; does nothing if `times` <= 0.
- * Block body: a loop needs a mutable counter.
+ * Block body: a loop needs a mutable counter (a `for` header can't declare a `var`).
  */
 function repeat(times: Int, action: (Int) -> Unit): Unit {
-    for ($index = 0; $index < times; $index++) {
+    var $index = 0
+    while ($index < times) {
         action($index)
+        $index++
     }
 }
 

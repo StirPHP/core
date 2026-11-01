@@ -19,4 +19,4 @@ function Bool.or(other: Bool): Bool = this || other
 function Bool.xor(other: Bool): Bool = this !== other
 
 /** Compares with `other`, false < true: -1, 0 or 1. */
-function Bool.compareTo(other: Bool): Int = this <=> other
+function Bool.compareTo(other: Bool): Int = if (this === other) 0 else if (this) 1 else -1

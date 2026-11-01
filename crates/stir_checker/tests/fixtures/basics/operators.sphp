@@ -11,3 +11,4 @@ val h = true && 1 // error: SPHP0015
 val i = !1 // error: SPHP0015
 if (1) {} // error: SPHP0005
 val j: Int = 7 / 2
+function <K of Int | String> show(k: K, u: Int | String): String = "${k} ${u}"

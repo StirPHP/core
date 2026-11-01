@@ -4,7 +4,7 @@ namespace Stir
 // every index and length below counts Unicode code points (mb_* functions), not bytes.
 
 /** Returns the number of Unicode code points in the string. */
-function String.length(): Int = mb_strlen(this)
+function String.length(): Int = mb_strlen(this) as Int
 
 /** Returns true if the string has no characters. */
 function String.isEmpty(): Bool = this === ""
@@ -60,53 +60,53 @@ function String.contains(other: String, ignoreCase: Bool = false): Bool =
     if (ignoreCase) mb_stripos(this, other) !== false
     else str_contains(this, other)
 
-/** Returns the code-point index of the first occurrence of `other` at or after `startIndex`, or null if absent; throws \ValueError if `startIndex` is past the end. */
-function String.indexOf(other: String, startIndex: Int = 0): Int? = nullIfFalse(mb_strpos(this, other, startIndex))
+/** Returns the code-point index of the first occurrence of `other` at or after `startIndex`, or null if absent; throws \ValueError if `startIndex` is past the end (a negative `startIndex` counts as 0). */
+function String.indexOf(other: String, startIndex: Int = 0): Int? = nullIfFalse(mb_strpos(this, other, max(0, startIndex)))
 
 /** Returns the code-point index of the last occurrence of `other`, or null if absent ("" matches at `length()`). */
 function String.lastIndexOf(other: String): Int? = nullIfFalse(mb_strrpos(this, other))
 
 /** Returns the characters in [startIndex, endIndex) (endIndex defaults to the end); throws \OutOfBoundsException if the range is invalid. */
 function String.substring(startIndex: Int, endIndex: Int? = null): String =
-    if (startIndex < 0 || startIndex > mb_strlen(this) || (endIndex !== null && (endIndex < startIndex || endIndex > mb_strlen(this))))
-        throw new \OutOfBoundsException("Invalid substring range [${startIndex}, ${endIndex}) for length ${mb_strlen(this)}.")
+    if (startIndex < 0 || startIndex > this->length() || (endIndex !== null && (endIndex < startIndex || endIndex > this->length())))
+        throw new \OutOfBoundsException("Invalid substring range starting at ${startIndex} for length ${this->length()}.")
     else mb_substr(this, startIndex, if (endIndex === null) null else endIndex - startIndex)
 
 /** Returns the part of the string before the first occurrence of `delimiter`, or the whole string if absent. */
 function String.substringBefore(delimiter: String): String =
-    if (str_contains(this, delimiter)) strstr(this, delimiter, true) else this
+    if (str_contains(this, delimiter)) strstr(this, delimiter, true) as String else this
 
 /** Returns the part of the string after the first occurrence of `delimiter`, or the whole string if absent. */
 function String.substringAfter(delimiter: String): String =
-    if (str_contains(this, delimiter)) substr(strstr(this, delimiter), strlen(delimiter)) else this
+    if (str_contains(this, delimiter)) substr(strstr(this, delimiter) as String, strlen(delimiter)) as String else this
 
 /** Returns the first `n` characters (the whole string if shorter; negative `n` is treated as 0). */
-function String.take(n: Int): String = mb_substr(this, 0, max(0, n))
+function String.take(n: Int): String = mb_substr(this, 0, n->coerceAtLeast(0))
 
 /** Returns the string without its first `n` characters ("" if shorter; negative `n` is treated as 0). */
-function String.drop(n: Int): String = mb_substr(this, max(0, n))
+function String.drop(n: Int): String = mb_substr(this, n->coerceAtLeast(0))
 
 /** Returns the last `n` characters (the whole string if shorter; non-positive `n` gives ""). */
 function String.takeLast(n: Int): String = if (n <= 0) "" else mb_substr(this, -n)
 
 /** Returns the string without its last `n` characters ("" if shorter; negative `n` is treated as 0). */
-function String.dropLast(n: Int): String = mb_substr(this, 0, max(0, mb_strlen(this) - max(0, n)))
+function String.dropLast(n: Int): String = mb_substr(this, 0, (this->length() - n->coerceAtLeast(0))->coerceAtLeast(0))
 
 /** Returns the string with every occurrence of `oldValue` replaced by `newValue`; an empty `oldValue` leaves the string unchanged (PHP str_replace). */
-function String.replace(oldValue: String, newValue: String): String = str_replace(oldValue, newValue, this)
+function String.replace(oldValue: String, newValue: String): String = str_replace(oldValue, newValue, this) as String
 
 /** Returns the string with every match of the PCRE `pattern` (with delimiters, e.g. '/\d+/u') replaced by `replacement`. */
-function String.replaceRegex(pattern: String, replacement: String): String = preg_replace(pattern, replacement, this)
+function String.replaceRegex(pattern: String, replacement: String): String = preg_replace(pattern, replacement, this) as String
 
 /** Returns true if the whole-or-partial PCRE `pattern` (with delimiters) matches the string. */
 function String.matches(pattern: String): Bool = preg_match(pattern, this) === 1
 
 /** Splits the string around `separator` (at most `limit` parts when `limit` > 0); throws \ValueError if `separator` is empty. */
 function String.split(separator: String, limit: Int = 0): List<String> =
-    explode(separator, this, if (limit > 0) limit else PHP_INT_MAX)
+    array_values(explode(separator, this, if (limit > 0) limit else PHP_INT_MAX)) as List<String>
 
 /** Splits the string into lines on "\r\n", "\r" or "\n"; "" gives [""]. */
-function String.lines(): List<String> = explode("\n", str_replace(["\r\n", "\r"], "\n", this))
+function String.lines(): List<String> = array_values(explode("\n", str_replace(["\r\n", "\r"], "\n", this) as String)) as List<String>
 
 /** Returns the string repeated `n` times; throws \ValueError if `n` is negative. */
 function String.repeat(n: Int): String = str_repeat(this, n)
@@ -123,7 +123,7 @@ function String.padEnd(length: Int, padChar: String = " "): String = mb_str_pad(
 /** Parses the string as a base-10 Int (optional sign, digits only, no whitespace); null if malformed or out of range. */
 function String.toIntOrNull(): Int? =
     if (preg_match('/\A[+-]?[0-9]+\z/', this) !== 1) null
-    else filter_var(preg_replace('/\A([+-]?)0+(?=[0-9])/', '$1', this), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE)
+    else filter_var(preg_replace('/\A([+-]?)0+(?=[0-9])/', '$1', this), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE) as Int?
 
 /** Parses the string as a base-10 Int; throws \InvalidArgumentException if malformed or out of range. */
 function String.toInt(): Int = this->toIntOrNull() ?: throw new \InvalidArgumentException("Invalid Int format: '${this}'.")
@@ -140,23 +140,23 @@ function String.toBool(): Bool = strtolower(this) === "true"
 
 /** Returns the character (a one-code-point string) at `index`; throws \OutOfBoundsException if out of range. */
 function String.get(index: Int): String =
-    if (index >= 0 && index < mb_strlen(this)) mb_substr(this, index, 1)
+    if (index >= 0 && index < this->length()) mb_substr(this, index, 1)
     else throw new \OutOfBoundsException("String index out of range: ${index}.")
 
 /** Returns the character at `index`, or null if out of range. */
 function String.getOrNull(index: Int): String? =
-    if (index >= 0 && index < mb_strlen(this)) mb_substr(this, index, 1) else null
+    if (index >= 0 && index < this->length()) mb_substr(this, index, 1) else null
 
 /** Returns the characters (one-code-point strings) of the string; "" gives []. */
-function String.chars(): List<String> = mb_str_split(this)
+function String.chars(): List<String> = mb_str_split(this) as List<String>
 
 /** Returns the string without `prefix` if it starts with it, otherwise unchanged. */
 function String.removePrefix(prefix: String): String =
-    if (str_starts_with(this, prefix)) substr(this, strlen(prefix)) else this
+    if (str_starts_with(this, prefix)) substr(this, strlen(prefix)) as String else this
 
 /** Returns the string without `suffix` if it ends with it, otherwise unchanged (an empty suffix is a no-op). */
 function String.removeSuffix(suffix: String): String =
-    if (suffix !== "" && str_ends_with(this, suffix)) substr(this, 0, strlen(this) - strlen(suffix)) else this
+    if (suffix !== "" && str_ends_with(this, suffix)) substr(this, 0, strlen(this) - strlen(suffix)) as String else this
 
 /** Returns true if both strings are equal after Unicode case folding. */
 function String.equalsIgnoreCase(other: String): Bool =

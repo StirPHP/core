@@ -34,9 +34,7 @@ pub use typed::{TypedFile, typed_file};
 pub fn check_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> Arc<Vec<Diagnostic>> {
     let php = file.dialect(db) == Dialect::Php;
     let settings = ws.settings(db);
-    if php
-        && file.origin(db) == FileOrigin::Source
-        && !levels::php_checked(file.text(db), settings)
+    if php && file.origin(db) == FileOrigin::Source && !levels::php_checked(file.text(db), settings)
     {
         return Arc::new(Vec::new());
     }
