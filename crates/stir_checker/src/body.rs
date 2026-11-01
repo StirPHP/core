@@ -102,6 +102,8 @@ pub struct Checker<'a, 'db> {
     pub implicit_this: rustc_hash::FxHashSet<TextRange>,
     /// Method-call nodes resolved to an extension function.
     pub extension_calls: FxHashMap<TextRange, stir_hir::ItemLoc>,
+    /// Function-call nodes and the fully-qualified function they call.
+    pub function_calls: FxHashMap<TextRange, SmolStr>,
     /// Types written in `is`/`as`/`when` patterns, by type-node range.
     pub pattern_types: FxHashMap<TextRange, Ty>,
     /// The extension function whose body is being checked.
@@ -247,6 +249,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             current_ext: None,
             ext_calls: Vec::new(),
             extension_calls: FxHashMap::default(),
+            function_calls: FxHashMap::default(),
             pattern_types: FxHashMap::default(),
         }
     }
@@ -1692,12 +1695,6 @@ impl<'a, 'db> Checker<'a, 'db> {
         self.lower_type_node(node)
     }
 
-    fn lower_type_node_quiet(&mut self, node: &SyntaxNode) -> Ty {
-        let n = self.diags.len();
-        let t = self.lower_type_node(node);
-        self.diags.truncate(n);
-        t
-    }
 
     // ------------------------------------------------------------ expressions
 
@@ -3581,12 +3578,14 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             let scope = self.scope(node);
             let r = scope.resolve_function(&text);
-            let loc = self.ctx.function(r.primary.as_str()).or_else(|| {
-                r.fallback
-                    .as_ref()
-                    .and_then(|f| self.ctx.function(f.as_str()))
-            });
-            let Some(loc) = loc else {
+            // `.sphp` files see the StirPHP stdlib (`Stir\...`) after their own namespace
+            let stdlib = (self.stir() && !text.contains('\\'))
+                .then(|| stir_hir::name::Fqn::new(&format!("Stir\\{text}")));
+            let found = [Some(r.primary.clone()), stdlib, r.fallback.clone()]
+                .into_iter()
+                .flatten()
+                .find_map(|f| self.ctx.function(f.as_str()).map(|loc| (f, loc)));
+            let Some((fqn, loc)) = found else {
                 self.error(
                     callee.text_range(),
                     codes::UNDEFINED_FUNCTION,
@@ -3595,6 +3594,8 @@ impl<'a, 'db> Checker<'a, 'db> {
                 self.check_args_untyped(node);
                 return Ty::error();
             };
+            self.function_calls.insert(node.text_range(), SmolStr::new(self.ctx.function_def(loc).name.as_str()));
+            let _ = fqn;
             let sig = self.ctx.function_sig(loc);
             return self.check_args(node, &sig, &FxHashMap::default(), None, expected, &[]);
         }

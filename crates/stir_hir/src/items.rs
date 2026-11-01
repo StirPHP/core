@@ -8,9 +8,13 @@ use stir_syntax::{
     Dialect, StirLanguage, SyntaxKind, SyntaxKind::*, SyntaxNode, TextRange, TextSize,
 };
 
+use stir_phpdoc::{DocBlock, TagKind};
+
 use crate::ast::NodeExt;
+use crate::attrs::{StubAttrs, stub_attrs};
+use crate::doc::{self, Aliases, DocCx};
 use crate::name::{Fqn, Scope, UseKind};
-use crate::type_ref::{TypeCtx, TypeRef, unquote};
+use crate::type_ref::{TypeCtx, TypeRef, TypeRefKind, unquote};
 
 pub type NodePtr = SyntaxNodePtr<StirLanguage>;
 
@@ -65,7 +69,10 @@ pub struct MemberMods {
 pub struct ParamDef {
     pub name: SmolStr,
     pub binding: Binding,
+    /// The native type (for stubs, the `#[LanguageLevelTypeAware]` one).
     pub ty: Option<TypeRef>,
+    /// The PHPDoc `@param` type (`.php` files only); merged with `ty` by the checker.
+    pub doc_ty: Option<TypeRef>,
     pub has_default: bool,
     pub variadic: bool,
     pub by_ref: bool,
@@ -85,9 +92,13 @@ pub struct PromotedProperty {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Signature {
+    /// Native type parameters followed by `@template` ones.
     pub type_params: Vec<TypeParamDef>,
     pub params: Vec<ParamDef>,
+    /// The native return type.
     pub ret: Option<TypeRef>,
+    /// The PHPDoc `@return` type (`.php` files only).
+    pub doc_ret: Option<TypeRef>,
     pub by_ref: bool,
 }
 
@@ -139,7 +150,12 @@ pub struct SupertypeRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PropertyDef {
     pub name: SmolStr,
+    /// The native type.
     pub ty: Option<TypeRef>,
+    /// The PHPDoc `@var` (or `@property`) type.
+    pub doc_ty: Option<TypeRef>,
+    /// Declared by a class-level `@property` tag.
+    pub magic: bool,
     pub mods: MemberMods,
     /// StirPHP `val` property.
     pub immutable: bool,
@@ -154,7 +170,10 @@ pub struct MethodDef {
     pub name: SmolStr,
     pub mods: MemberMods,
     pub sig: Signature,
+    /// Magic (`@method`) methods count as having a body.
     pub has_body: bool,
+    /// Declared by a class-level `@method` tag (its `ptr` is the class node).
+    pub magic: bool,
     pub expr_body: bool,
     pub doc: Option<DocText>,
     pub ptr: NodePtr,
@@ -165,6 +184,8 @@ pub struct MethodDef {
 pub struct ClassConstDef {
     pub name: SmolStr,
     pub ty: Option<TypeRef>,
+    /// The PHPDoc `@var` type.
+    pub doc_ty: Option<TypeRef>,
     pub mods: MemberMods,
     pub value: Option<NodePtr>,
     pub range: TextRange,
@@ -205,6 +226,9 @@ pub struct ClassDef {
     pub cases: Vec<EnumCaseDef>,
     pub fields: Vec<RecordFieldDef>,
     pub traits: Vec<TypeRef>,
+    /// `@phpstan-type` / `@psalm-type` aliases declared on the class (for
+    /// `@phpstan-import-type` in other classes).
+    pub type_aliases: Vec<(SmolStr, TypeRef)>,
     pub doc: Option<DocText>,
     pub ptr: NodePtr,
     pub name_range: TextRange,
@@ -251,11 +275,13 @@ impl FileItems {
     }
 }
 
-pub(crate) fn lower_file(root: &SyntaxNode, dialect: Dialect) -> FileItems {
+pub(crate) fn lower_file(root: &SyntaxNode, dialect: Dialect, php_version: (u8, u8)) -> FileItems {
     let mut l = Lowerer {
         dialect,
+        php_version,
         out: FileItems::default(),
         scope: Scope::default(),
+        aliases: Aliases::default(),
     };
     l.push_scope(TextSize::new(0));
     l.stmts(root);
@@ -264,8 +290,12 @@ pub(crate) fn lower_file(root: &SyntaxNode, dialect: Dialect) -> FileItems {
 
 struct Lowerer {
     dialect: Dialect,
+    /// Target version for the phpstorm-stubs attributes.
+    php_version: (u8, u8),
     out: FileItems,
     scope: Scope,
+    /// Type aliases of the class being lowered.
+    aliases: Aliases,
 }
 
 impl Lowerer {
@@ -275,6 +305,47 @@ impl Lowerer {
 
     fn scope_id(&self) -> u32 {
         (self.out.scopes.len() - 1) as u32
+    }
+
+    fn cur_scope(&self) -> &Scope {
+        &self.out.scopes.last().unwrap().1
+    }
+
+    fn doc_cx<'a>(&'a self, type_params: &'a [SmolStr]) -> DocCx<'a> {
+        DocCx {
+            scope: self.cur_scope(),
+            type_params,
+            aliases: &self.aliases,
+        }
+    }
+
+    /// The parsed doc comment of `node` (`.php` files only).
+    fn doc_block(&self, node: &SyntaxNode) -> Option<DocBlock> {
+        if self.dialect != Dialect::Php {
+            return None;
+        }
+        let t = node.doc_comment()?;
+        Some(doc::parse(t.text(), t.text_range().start()))
+    }
+
+    fn attrs(&self, node: &SyntaxNode) -> StubAttrs {
+        if self.dialect != Dialect::Php {
+            return StubAttrs::default();
+        }
+        stub_attrs(node, self.cur_scope(), self.php_version)
+    }
+
+    /// The `#[LanguageLevelTypeAware]` type, if any (`Some(None)`: no native type).
+    fn type_aware(&self, attrs: &StubAttrs, names: &[SmolStr]) -> Option<Option<TypeRef>> {
+        let (text, offset) = attrs.type_aware.as_ref()?;
+        if text.trim().is_empty() {
+            return Some(None);
+        }
+        Some(Some(doc::lower_type_str(
+            &self.doc_cx(names),
+            text,
+            *offset,
+        )))
     }
 
     fn ctx<'a>(&'a self, type_params: &'a [SmolStr]) -> TypeCtx<'a> {
@@ -331,6 +402,9 @@ impl Lowerer {
             CLASS_DECL | INTERFACE_DECL | TRAIT_DECL | ENUM_DECL | RECORD_DECL => self.class(node),
             TYPEALIAS_DECL => self.type_alias(node),
             CONST_DECL => {
+                if self.attrs(node).unavailable {
+                    return;
+                }
                 for elem in node.children_of(CONST_ELEM) {
                     if let Some(name) = elem.name_text() {
                         self.out.consts.push(ConstDef {
@@ -434,7 +508,13 @@ impl Lowerer {
         out
     }
 
-    fn signature(&self, node: &SyntaxNode, outer: &[SmolStr], ctor: bool) -> Signature {
+    fn signature(
+        &self,
+        node: &SyntaxNode,
+        outer: &[SmolStr],
+        ctor: bool,
+        doc: Option<&DocBlock>,
+    ) -> Signature {
         // Type params may appear before the name (`function <T> f`) or after it.
         let mut type_params = Vec::new();
         for list in node.children_of(TYPE_PARAM_LIST) {
@@ -453,19 +533,30 @@ impl Lowerer {
                 }
             }
         }
+        if let Some(doc) = doc {
+            let extra = doc::templates(doc, &type_params, outer, self.cur_scope(), &self.aliases);
+            type_params.extend(extra);
+        }
         let names = names_of(&type_params, outer);
         let params = node
             .child(PARAM_LIST)
-            .map(|pl| self.params(&pl, &names, ctor))
+            .map(|pl| self.params(&pl, &names, ctor, doc))
             .unwrap_or_default();
-        let ret = node
+        let mut ret = node
             .child(RETURN_TYPE)
             .and_then(|r| first_type(&r))
             .map(|t| self.ctx(&names).lower(&t));
+        if let Some(t) = self.type_aware(&self.attrs(node), &names) {
+            ret = t;
+        }
+        let doc_ret = doc
+            .and_then(|d| d.return_tag())
+            .map(|r| self.doc_cx(&names).lower(&r.ty));
         Signature {
             type_params,
             params,
             ret,
+            doc_ret,
             by_ref: node.has_token(AMP),
         }
     }
@@ -499,10 +590,35 @@ impl Lowerer {
             .collect()
     }
 
-    fn params(&self, list: &SyntaxNode, names: &[SmolStr], ctor: bool) -> Vec<ParamDef> {
+    fn params(
+        &self,
+        list: &SyntaxNode,
+        names: &[SmolStr],
+        ctor: bool,
+        doc: Option<&DocBlock>,
+    ) -> Vec<ParamDef> {
         list.children_of(PARAM)
             .iter()
-            .map(|p| self.param(p, names, ctor))
+            .filter_map(|p| {
+                let attrs = self.attrs(p);
+                if attrs.unavailable {
+                    return None;
+                }
+                let mut def = self.param(p, names, ctor);
+                if let Some(t) = self.type_aware(&attrs, names) {
+                    def.ty = t;
+                }
+                if let Some(doc) = doc {
+                    def.doc_ty = doc
+                        .param(&def.name)
+                        .and_then(|t| t.ty.as_ref())
+                        .map(|t| self.doc_cx(names).lower(t));
+                    if doc::optional_marker(doc, &def.name) {
+                        def.has_default = true;
+                    }
+                }
+                Some(def)
+            })
             .collect()
     }
 
@@ -539,6 +655,7 @@ impl Lowerer {
             name,
             binding,
             ty: first_type(p).map(|t| self.ctx(names).lower(&t)),
+            doc_ty: None,
             has_default: p.has_token(EQ),
             variadic: p.has_token(ELLIPSIS),
             by_ref: p.has_token(AMP),
@@ -553,8 +670,12 @@ impl Lowerer {
         let Some(name_node) = node.child(NAME) else {
             return;
         };
+        if self.attrs(node).unavailable {
+            return;
+        }
         let name = name_node.text().to_string().trim().to_owned();
-        let sig = self.signature(node, &[], false);
+        let doc = self.doc_block(node);
+        let sig = self.signature(node, &[], false, doc.as_ref());
         let names = names_of(&sig.type_params, &[]);
         let receiver = node
             .child(RECEIVER_TYPE)
@@ -595,6 +716,32 @@ impl Lowerer {
         let Some(name_node) = node.child(NAME) else {
             return;
         };
+        if self.attrs(node).unavailable {
+            return;
+        }
+        let doc = self.doc_block(node);
+        let mut local_aliases = Vec::new();
+        if let Some(d) = &doc {
+            let native: Vec<SmolStr> = d
+                .templates()
+                .iter()
+                .map(|t| t.param.name.name.clone())
+                .collect();
+            let (aliases, locals) = doc::class_aliases(d, self.cur_scope(), &native);
+            self.aliases = aliases;
+            local_aliases = locals;
+        }
+        self.class_inner(node, &name_node, doc.as_ref(), local_aliases);
+        self.aliases = Aliases::default();
+    }
+
+    fn class_inner(
+        &mut self,
+        node: &SyntaxNode,
+        name_node: &SyntaxNode,
+        doc: Option<&DocBlock>,
+        type_aliases: Vec<(SmolStr, TypeRef)>,
+    ) {
         let kind = match node.kind() {
             CLASS_DECL => ClassKind::Class,
             INTERFACE_DECL => ClassKind::Interface,
@@ -619,7 +766,11 @@ impl Lowerer {
                 }
             }
         }
-        let type_params = self.type_params(node, &[]);
+        let mut type_params = self.type_params(node, &[]);
+        if let Some(d) = doc {
+            let extra = doc::templates(d, &type_params, &[], self.cur_scope(), &self.aliases);
+            type_params.extend(extra);
+        }
         let names = names_of(&type_params, &[]);
         let ctx = self.ctx(&names);
         let types_in = |clause: SyntaxKind| -> Vec<TypeRef> {
@@ -632,8 +783,18 @@ impl Lowerer {
                 })
                 .unwrap_or_default()
         };
-        let extends = types_in(EXTENDS_CLAUSE);
-        let implements = types_in(IMPLEMENTS_CLAUSE);
+        let mut extends = types_in(EXTENDS_CLAUSE);
+        let mut implements = types_in(IMPLEMENTS_CLAUSE);
+        if let Some(d) = doc {
+            let dcx = self.doc_cx(&names);
+            for tag in d.effective_tags() {
+                match &tag.kind {
+                    TagKind::Extends(t) => refine_super(&mut extends, dcx.lower(&t.ty)),
+                    TagKind::Implements(t) => refine_super(&mut implements, dcx.lower(&t.ty)),
+                    _ => {}
+                }
+            }
+        }
         let supertypes = node
             .child(SUPERTYPE_LIST)
             .map(|l| {
@@ -651,7 +812,7 @@ impl Lowerer {
         let primary_ctor = node
             .child(PRIMARY_CTOR)
             .and_then(|c| c.child(PARAM_LIST))
-            .map(|pl| self.params(&pl, &names, true));
+            .map(|pl| self.params(&pl, &names, true, None));
         let enum_backing = if kind == ClassKind::Enum {
             node.children()
                 .find(|c| is_type_node(c.kind()))
@@ -677,6 +838,7 @@ impl Lowerer {
             cases: Vec::new(),
             fields: Vec::new(),
             traits: Vec::new(),
+            type_aliases,
             doc: doc_of(node),
             ptr: NodePtr::new(node),
             name_range: name_node.text_range(),
@@ -699,7 +861,102 @@ impl Lowerer {
                 self.member(&member, &mut class, &names);
             }
         }
+        if let Some(d) = doc {
+            self.magic_members(d, node, &mut class, &names);
+        }
         self.out.classes.push(class);
+    }
+
+    /// `@property*` and `@method` tags on a class.
+    fn magic_members(
+        &self,
+        doc: &DocBlock,
+        node: &SyntaxNode,
+        class: &mut ClassDef,
+        names: &[SmolStr],
+    ) {
+        let ptr = NodePtr::new(node);
+        for tag in doc.effective_tags() {
+            match &tag.kind {
+                TagKind::Property(p) => {
+                    if class.properties.iter().any(|x| x.name == p.name.name) {
+                        continue;
+                    }
+                    class.properties.push(PropertyDef {
+                        name: p.name.name.clone(),
+                        ty: None,
+                        doc_ty: Some(self.doc_cx(names).lower(&p.ty)),
+                        magic: true,
+                        mods: MemberMods::default(),
+                        immutable: p.access == stir_phpdoc::PropertyAccess::Read,
+                        has_default: false,
+                        doc: None,
+                        range: tag.range,
+                        ptr,
+                    });
+                }
+                TagKind::Method(m) => {
+                    if class
+                        .methods
+                        .iter()
+                        .any(|x| x.name.eq_ignore_ascii_case(&m.name.name))
+                    {
+                        continue;
+                    }
+                    let mut tps: Vec<TypeParamDef> = Vec::new();
+                    let mut mnames: Vec<SmolStr> =
+                        m.templates.iter().map(|t| t.name.name.clone()).collect();
+                    mnames.extend(names.iter().cloned());
+                    let dcx = self.doc_cx(&mnames);
+                    for t in &m.templates {
+                        tps.push(TypeParamDef {
+                            name: t.name.name.clone(),
+                            variance: Variance::Invariant,
+                            bound: t.bound.as_ref().map(|b| dcx.lower(b)),
+                            range: t.range,
+                        });
+                    }
+                    let params = m
+                        .params
+                        .iter()
+                        .map(|mp| ParamDef {
+                            name: mp.name.name.clone(),
+                            binding: Binding::Php,
+                            ty: None,
+                            doc_ty: mp.ty.as_ref().map(|t| dcx.lower(t)),
+                            has_default: mp.default.is_some(),
+                            variadic: mp.variadic,
+                            by_ref: mp.by_ref,
+                            promoted: None,
+                            range: mp.range,
+                            name_range: mp.name.range,
+                            ptr,
+                        })
+                        .collect();
+                    class.methods.push(MethodDef {
+                        name: m.name.name.clone(),
+                        mods: MemberMods {
+                            is_static: m.is_static,
+                            ..MemberMods::default()
+                        },
+                        sig: Signature {
+                            type_params: tps,
+                            params,
+                            ret: None,
+                            doc_ret: m.return_type.as_ref().map(|t| dcx.lower(t)),
+                            by_ref: false,
+                        },
+                        has_body: true,
+                        magic: true,
+                        expr_body: false,
+                        doc: None,
+                        ptr,
+                        name_range: m.name.range,
+                    });
+                }
+                _ => {}
+            }
+        }
     }
 
     fn member(&self, m: &SyntaxNode, class: &mut ClassDef, names: &[SmolStr]) {
@@ -707,16 +964,22 @@ impl Lowerer {
             .child(MODIFIERS)
             .map(|x| member_mods(&x))
             .unwrap_or_default();
+        let attrs = self.attrs(m);
+        if attrs.unavailable {
+            return;
+        }
+        let doc = self.doc_block(m);
         match m.kind() {
             METHOD_DECL => {
                 let Some(name_node) = m.child(NAME) else {
                     return;
                 };
-                let sig = self.signature(m, names, true);
+                let sig = self.signature(m, names, true, doc.as_ref());
                 class.methods.push(MethodDef {
                     name: SmolStr::new(name_node.text().to_string().trim()),
                     mods,
                     sig,
+                    magic: false,
                     has_body: m.child(BLOCK).is_some() || m.child(FUNCTION_BODY).is_some(),
                     expr_body: m.child(FUNCTION_BODY).is_some(),
                     doc: doc_of(m),
@@ -725,7 +988,11 @@ impl Lowerer {
                 });
             }
             PROPERTY_DECL => {
-                let ty = first_type(m).map(|t| self.ctx(names).lower(&t));
+                let mut ty = first_type(m).map(|t| self.ctx(names).lower(&t));
+                if let Some(t) = self.type_aware(&attrs, names) {
+                    ty = t;
+                }
+                let doc_vars = doc.as_ref().map(|d| d.vars()).unwrap_or_default();
                 let immutable = m.has_ident("val");
                 for elem in m.children_of(PROPERTY_ELEM) {
                     let name = match (elem.token(VARIABLE), elem.name_text()) {
@@ -737,9 +1004,15 @@ impl Lowerer {
                     let ty = ty
                         .clone()
                         .or_else(|| first_type(&elem).map(|t| self.ctx(names).lower(&t)));
+                    let doc_ty = doc_vars
+                        .iter()
+                        .find(|v| v.name.as_ref().is_none_or(|n| n.name == name))
+                        .map(|v| self.doc_cx(names).lower(&v.ty));
                     class.properties.push(PropertyDef {
                         name,
                         ty,
+                        doc_ty,
+                        magic: false,
                         mods: mods.clone(),
                         immutable,
                         has_default: elem.has_token(EQ),
@@ -754,9 +1027,13 @@ impl Lowerer {
                     let Some(name) = elem.name_text() else {
                         continue;
                     };
+                    let doc_ty = doc
+                        .as_ref()
+                        .and_then(|d| d.vars().first().map(|v| self.doc_cx(names).lower(&v.ty)));
                     class.consts.push(ClassConstDef {
                         name: SmolStr::new(name),
                         ty: first_type(&elem).map(|t| self.ctx(names).lower(&t)),
+                        doc_ty,
                         mods: mods.clone(),
                         value: value_ptr(&elem),
                         range: elem.text_range(),
@@ -783,9 +1060,31 @@ impl Lowerer {
                         range: n.text_range(),
                     });
                 }
+                if let Some(d) = &doc {
+                    let dcx = self.doc_cx(names);
+                    for tag in d.effective_tags() {
+                        if let TagKind::Use(t) = &tag.kind {
+                            refine_super(&mut class.traits, dcx.lower(&t.ty));
+                        }
+                    }
+                }
             }
             _ => {}
         }
+    }
+}
+
+/// Replaces the native supertype that `doc` (an `@extends`/`@implements` type)
+/// refines, giving it type arguments.
+fn refine_super(natives: &mut [TypeRef], doc: TypeRef) {
+    let TypeRefKind::Named(name, _) = &doc.kind else {
+        return;
+    };
+    if let Some(n) = natives
+        .iter_mut()
+        .find(|n| matches!(&n.kind, TypeRefKind::Named(m, _) if m.key() == name.key()))
+    {
+        n.kind = doc.kind;
     }
 }
 

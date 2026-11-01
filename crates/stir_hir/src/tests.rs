@@ -110,7 +110,7 @@ fn lowers_php_declarations_and_index() {
         "b.sphp",
         "namespace Foo\nfunction String.shout(): String = this\n",
     );
-    let ws = Workspace::new(&db, vec![a, b]);
+    let ws = Workspace::new(&db, vec![a, b], stir_db::Settings::default());
     let index = def_index(&db, ws);
     assert!(index.classes.contains_key("foo\\a"));
     assert!(index.functions.contains_key("foo\\g"));
@@ -123,4 +123,100 @@ fn lowers_php_declarations_and_index() {
     assert!(index.classes.contains_key("foo\\b"));
     assert!(!index.extensions.contains_key("shout"));
     let _ = Dialect::Php;
+}
+
+#[test]
+fn stub_attributes_select_the_target_version() {
+    let db = RootDatabase::default();
+    let f = file(
+        &db,
+        "s.php",
+        "<?php\nuse JetBrains\\PhpStorm\\Internal\\PhpStormStubsElementAvailable as Avail;\n\
+         use JetBrains\\PhpStorm\\Internal\\LanguageLevelTypeAware;\n\
+         function array_map(?callable $callback, #[Avail(from: '8.0')] array $array, \
+         #[Avail(from: '5.3', to: '7.4')] $arrays, array ...$arrays): array {}\n\
+         #[Avail('5.3', '7.4')] function old() {}\n\
+         #[Avail(from: '8.0')] function fresh() {}\n\
+         #[LanguageLevelTypeAware(['8.0' => 'string[]', '9.0' => 'int'], default: 'string[]|false')]\n\
+         function explode(string $s) {}\n\
+         /**\n * @param array $array\n * @param mixed $filter_value [optional] <p>x</p>\n */\n\
+         function array_keys(array $array, mixed $filter_value, bool $strict = false): array {}\n\
+         class C { #[Avail(to: '7.0')] const OLD = 1; #[Avail(from: '8.4')] public function m() {} \
+         #[LanguageLevelTypeAware(['8.1' => 'string'], default: '')] public $p; }\n",
+    );
+    let items = file_items(&db, f);
+    let names: Vec<_> = items.functions.iter().map(|f| f.name.to_string()).collect();
+    assert_eq!(names, ["array_map", "fresh", "explode", "array_keys"]);
+    let map = &items.functions[0].sig.params;
+    assert_eq!(map.len(), 3);
+    assert!(map[2].variadic && map[2].name == "arrays");
+    let explode = &items.functions[2];
+    assert!(matches!(
+        explode.sig.ret.as_ref().unwrap().kind,
+        type_ref::TypeRefKind::PhpArray { .. }
+    ));
+    let keys = &items.functions[3].sig.params;
+    assert!(!keys[0].has_default && keys[1].has_default && keys[2].has_default);
+    let c = &items.classes[0];
+    assert!(c.consts.is_empty());
+    assert_eq!(c.methods.len(), 1);
+    assert!(matches!(
+        c.properties[0].ty.as_ref().unwrap().kind,
+        type_ref::TypeRefKind::Php(type_ref::PhpBuiltin::String)
+    ));
+}
+
+#[test]
+fn phpdoc_types_templates_and_aliases() {
+    use type_ref::TypeRefKind as K;
+    let db = RootDatabase::default();
+    let f = file(
+        &db,
+        "a.php",
+        "<?php\nnamespace App;\nuse Lib\\Thing;\n\
+         /**\n * @template-covariant T of Thing\n * @extends Base<T>\n\
+          * @phpstan-type Row array{id: int, name?: string}\n\
+          * @phpstan-import-type Other from Thing as Imported\n\
+          * @property-read int $magic\n * @method static list<T> all(int $n = 1)\n */\n\
+         class Box extends Base {\n\
+             /** @var list<T> */ private array $items = [];\n\
+             /**\n * @param Row $r\n * @return Imported\n */\n public function f(array $r) {}\n\
+             /**\n * @template U\n * @param callable(T): U $fn\n * @return Box<U>\n */\n\
+             public function map(callable $fn): Box {}\n\
+         }\n",
+    );
+    let items = file_items(&db, f);
+    let c = &items.classes[0];
+    assert_eq!(c.type_params[0].name, "T");
+    assert_eq!(c.type_params[0].variance, Variance::Out);
+    assert!(
+        matches!(&c.type_params[0].bound.as_ref().unwrap().kind, K::Named(n, _) if n.as_str() == "Lib\\Thing")
+    );
+    assert!(
+        matches!(&c.extends[0].kind, K::Named(n, args) if n.as_str() == "App\\Base" && args.len() == 1)
+    );
+    assert_eq!(c.type_aliases[0].0, "Row");
+    let items_prop = c.properties.iter().find(|p| p.name == "items").unwrap();
+    assert!(
+        matches!(&items_prop.doc_ty.as_ref().unwrap().kind, K::PhpList { elem, .. } if matches!(elem.kind, K::Param(_)))
+    );
+    let magic = c.properties.iter().find(|p| p.name == "magic").unwrap();
+    assert!(magic.magic && magic.immutable);
+    let all = c.methods.iter().find(|m| m.name == "all").unwrap();
+    assert!(all.magic && all.mods.is_static && all.sig.params[0].has_default);
+    let fm = c.methods.iter().find(|m| m.name == "f").unwrap();
+    assert!(
+        matches!(&fm.sig.params[0].doc_ty.as_ref().unwrap().kind, K::Shape { fields, sealed: true } if fields.len() == 2 && fields[1].optional)
+    );
+    assert!(
+        matches!(&fm.sig.doc_ret.as_ref().unwrap().kind, K::ImportedAlias { class, name } if class.as_str() == "Lib\\Thing" && name == "Other")
+    );
+    let map = c.methods.iter().find(|m| m.name == "map").unwrap();
+    assert_eq!(map.sig.type_params[0].name, "U");
+    assert!(
+        matches!(&map.sig.params[0].doc_ty.as_ref().unwrap().kind, K::Callable { params, closure: false, .. } if params.len() == 1)
+    );
+    assert!(
+        matches!(&map.sig.doc_ret.as_ref().unwrap().kind, K::Named(n, args) if n.as_str() == "App\\Box" && matches!(args[0].kind, K::Param(_)))
+    );
 }

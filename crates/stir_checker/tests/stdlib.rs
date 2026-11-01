@@ -30,7 +30,7 @@ fn stdlib_checks_cleanly() {
         })
         .collect();
     files.extend(lib.iter().copied());
-    let ws = Workspace::new(&db, files);
+    let ws = Workspace::new(&db, files, stir_db::Settings::default());
     let mut report = String::new();
     let mut count = 0;
     for f in &lib {

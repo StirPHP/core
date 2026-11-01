@@ -1,0 +1,15 @@
+namespace App
+
+use Lib\Repo
+
+val repo = new Repo()
+val ids: List<Int> = repo->ids()
+val badIds: List<String> = repo->ids() // error: SPHP0005
+val name: String = repo->name()
+val n: Int = repo->count
+val s: String = repo->count // error: SPHP0005
+val size: Int = repo->size()
+val rows = repo->all()
+val row = repo->find(1)
+val rowsBad: Int = repo->all() // error: SPHP0005
+val rowBad: Int = repo->find(1) // error: SPHP0005

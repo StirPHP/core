@@ -2,6 +2,8 @@
 //! the program-wide index, as salsa queries.
 
 pub mod ast;
+pub mod attrs;
+pub mod doc;
 mod index;
 mod items;
 pub mod name;
@@ -19,7 +21,11 @@ pub use items::*;
 #[salsa::tracked(returns(ref))]
 pub fn file_items(db: &dyn Db, file: SourceFile) -> Arc<FileItems> {
     let parse = stir_db::parse(db, file);
-    Arc::new(items::lower_file(&parse.syntax(), file.dialect(db)))
+    Arc::new(items::lower_file(
+        &parse.syntax(),
+        file.dialect(db),
+        stir_db::DEFAULT_PHP_VERSION,
+    ))
 }
 
 /// Every declaration in the workspace.

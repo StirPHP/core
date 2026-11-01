@@ -9,17 +9,21 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smol_str::SmolStr;
 use stir_db::{Db, FileOrigin, SourceFile, Workspace};
 use stir_hir::name::Scope;
-use stir_hir::type_ref::{Literal as LitRef, PhpBuiltin, StirBuiltin, TypeRef, TypeRefKind};
+use stir_hir::type_ref::{
+    DocKeyword, Literal as LitRef, PhpBuiltin, ShapeKeyRef, StirBuiltin, TypeRef, TypeRefKind,
+};
 use stir_hir::{
     Binding, ClassDef, ClassKind, DefIndex, FileItems, FunctionDef, ItemLoc, MethodDef, ParamDef,
     PropertyDef, TypeParamDef, Variance as HirVariance, Visibility,
 };
 use stir_syntax::{Dialect, TextRange};
 use stir_types::{
-    Family, FnParam, FnTy, LitValue, ParamId, ParamKind, Ty, TyKind, TypeEnv, Variance,
+    Family, FnParam, FnTy, LitValue, ParamId, ParamKind, ShapeField, ShapeKey, Ty, TyKind, TypeEnv,
+    Variance,
 };
 
 use crate::codes;
+use crate::levels::PHPDOC_MISMATCH;
 
 /// A generic parameter with its id and bound.
 #[derive(Debug, Clone)]
@@ -161,6 +165,9 @@ pub struct Ctx<'db> {
     pub db: &'db dyn Db,
     pub ws: Workspace,
     pub index: &'db DefIndex,
+    /// The dialect of the code looking at declarations: external PHP
+    /// signatures are viewed in the StirPHP family only from `.sphp` code.
+    pub viewer: Dialect,
     params: RefCell<ParamTable>,
     classes: RefCell<FxHashMap<SmolStr, Option<Rc<ClassModel<'db>>>>>,
     supers: RefCell<FxHashMap<SmolStr, Rc<Supers>>>,
@@ -181,12 +188,20 @@ impl<'db> Ctx<'db> {
             db,
             ws,
             index: stir_hir::def_index(db, ws),
+            viewer: Dialect::Stir,
             params: RefCell::default(),
             classes: RefCell::default(),
             supers: RefCell::default(),
             fn_sigs: RefCell::default(),
             in_progress: RefCell::default(),
         }
+    }
+
+    /// A context for checking `file` (declarations are viewed from its dialect).
+    pub fn for_file(db: &'db dyn Db, ws: Workspace, file: SourceFile) -> Ctx<'db> {
+        let mut ctx = Ctx::new(db, ws);
+        ctx.viewer = file.dialect(db);
+        ctx
     }
 
     pub fn items(&self, file: SourceFile) -> &'db FileItems {
@@ -528,6 +543,171 @@ impl<'db> Ctx<'db> {
                 };
                 Ty::literal(value, family)
             }
+            TypeRefKind::PhpList { elem, non_empty } => {
+                let elem = self.lower(elem, cx, sink);
+                if *non_empty {
+                    Ty::non_empty_list(elem)
+                } else {
+                    Ty::php_list(elem)
+                }
+            }
+            TypeRefKind::PhpArray {
+                key,
+                value,
+                non_empty,
+            } => {
+                let key = match key {
+                    Some(k) => self.lower(k, cx, sink),
+                    None => Ty::array_key(),
+                };
+                let value = self.lower(value, cx, sink);
+                if *non_empty {
+                    Ty::non_empty_array(key, value)
+                } else {
+                    Ty::array(key, value)
+                }
+            }
+            TypeRefKind::Iterable { key, value } => {
+                let key = match key {
+                    Some(k) => self.lower(k, cx, sink),
+                    None => Ty::mixed(),
+                };
+                Ty::iterable(key, self.lower(value, cx, sink))
+            }
+            TypeRefKind::Shape { fields, sealed } => Ty::shape(
+                fields
+                    .iter()
+                    .map(|f| {
+                        let key = match &f.key {
+                            ShapeKeyRef::Int(i) => ShapeKey::Int(*i),
+                            ShapeKeyRef::Str(s) => ShapeKey::from_str_key(s),
+                        };
+                        let ty = self.lower(&f.ty, cx, sink);
+                        if f.optional {
+                            ShapeField::optional(key, ty)
+                        } else {
+                            ShapeField::new(key, ty)
+                        }
+                    })
+                    .collect(),
+                *sealed,
+            ),
+            TypeRefKind::IntRange { min, max } => Ty::int_range(*min, *max),
+            TypeRefKind::ClassString(of) => {
+                Ty::class_string(of.as_ref().map(|t| self.lower(t, cx, sink)))
+            }
+            TypeRefKind::Callable {
+                params,
+                ret,
+                closure,
+            } => {
+                let sig = FnTy::new(
+                    params
+                        .iter()
+                        .map(|p| FnParam {
+                            ty: self.lower(&p.ty, cx, sink),
+                            kind: if p.variadic {
+                                ParamKind::Variadic
+                            } else if p.optional {
+                                ParamKind::Optional
+                            } else {
+                                ParamKind::Required
+                            },
+                        })
+                        .collect(),
+                    self.lower(ret, cx, sink),
+                );
+                if *closure {
+                    Ty::closure(Some(sig))
+                } else {
+                    Ty::callable(Some(sig))
+                }
+            }
+            TypeRefKind::DocKeyword(k) => match k {
+                DocKeyword::ArrayKey => Ty::array_key(),
+                DocKeyword::Scalar => Ty::scalar(),
+                DocKeyword::Numeric => Ty::numeric(),
+                DocKeyword::Resource => Ty::resource(),
+                DocKeyword::NonEmptyString => Ty::non_empty_string(),
+                DocKeyword::NumericString => Ty::numeric_string(),
+            },
+            TypeRefKind::ImportedAlias { class, name } => {
+                self.imported_alias(class.as_str(), name, tr.range, sink)
+            }
+        }
+    }
+
+    /// `@phpstan-import-type name from class`.
+    fn imported_alias(
+        &self,
+        class: &str,
+        name: &str,
+        range: TextRange,
+        sink: &mut Vec<LowerError>,
+    ) -> Ty {
+        let Some(c) = self.class(class) else {
+            sink.push(LowerError {
+                range,
+                code: codes::UNKNOWN_TYPE,
+                message: format!("unknown class `{class}` in `@phpstan-import-type`"),
+            });
+            return Ty::error();
+        };
+        let Some((_, alias)) = c.def.type_aliases.iter().find(|(n, _)| n == name) else {
+            sink.push(LowerError {
+                range,
+                code: codes::UNKNOWN_TYPE,
+                message: format!("`{}` has no type alias `{name}`", c.name),
+            });
+            return Ty::error();
+        };
+        let guard = SmolStr::new(format!("import:{}:{name}", c.key));
+        if !self.in_progress.borrow_mut().insert(guard.clone()) {
+            return Ty::error();
+        }
+        let cx = LowerCx {
+            dialect: Some(c.def.dialect),
+            ..LowerCx::default()
+        };
+        let mut inner = Vec::new();
+        let ty = self.lower(alias, &cx, &mut inner);
+        self.in_progress.borrow_mut().remove(&guard);
+        ty
+    }
+
+    /// The type of a declaration with a native type and a PHPDoc type. Like
+    /// PHPStan, the PHPDoc type refines the native one when it is a subtype of
+    /// it; otherwise the native type wins and the PHPDoc type is reported.
+    /// Returns the type and whether it is (partly) known only from PHPDoc, i.e.
+    /// whether its StirPHP view differs from the native type's.
+    pub fn merged_ty(
+        &self,
+        native: Option<&TypeRef>,
+        doc: Option<&TypeRef>,
+        cx: &LowerCx,
+        sink: &mut Vec<LowerError>,
+    ) -> Option<(Ty, bool)> {
+        let n = native.map(|t| self.lower(t, cx, sink));
+        let Some(doc) = doc else {
+            return n.map(|t| (t, false));
+        };
+        let d = self.lower(doc, cx, sink);
+        match n {
+            None => Some((d, true)),
+            Some(n) if n == d || d.is_error() => Some((n, false)),
+            Some(n) if n.is_error() || stir_types::is_assignable(self, &d, &n) => {
+                // Only what PHPDoc adds on top of the native type is unchecked.
+                let refined = view(&d) != view(&n);
+                Some((d, refined))
+            }
+            Some(n) => {
+                sink.push(LowerError {
+                    range: doc.range,
+                    code: PHPDOC_MISMATCH,
+                    message: format!("PHPDoc type `{d}` is not a subtype of the native type `{n}`"),
+                });
+                Some((n, false))
+            }
         }
     }
 
@@ -627,6 +807,10 @@ impl<'db> Ctx<'db> {
     /// trusted and map onto the StirPHP family; `mixed`/untyped is `Any!`;
     /// types known only from PHPDoc (not enforced at runtime) are platform types.
     pub fn external_view(&self, ty: &Ty, from_doc: bool) -> Ty {
+        if self.viewer == Dialect::Php {
+            // PHP code sees PHP declarations as they are.
+            return ty.clone();
+        }
         let viewed = view(ty);
         if from_doc && !stir_types::is_nullable(self, &viewed) {
             Ty::platform(viewed)
@@ -689,21 +873,19 @@ impl<'db> Ctx<'db> {
             .iter()
             .map(|p| self.param_sig(p, &cx, sink))
             .collect();
-        let (ret, ret_declared) = match &sig.ret {
-            Some(r) => {
-                let t = self.lower(r, &cx, sink);
-                (
+        let (ret, ret_declared) =
+            match self.merged_ty(sig.ret.as_ref(), sig.doc_ret.as_ref(), &cx, sink) {
+                Some((t, from_doc)) => (
                     if external {
-                        self.external_view(&t, false)
+                        self.external_view(&t, from_doc)
                     } else {
                         t
                     },
                     true,
-                )
-            }
-            None if external => (Ty::any_platform(), false),
-            None => (Ty::unit(), false),
-        };
+                ),
+                None if external => (self.external_view(&Ty::mixed(), false), false),
+                None => (Ty::unit(), false),
+            };
         FnSig {
             name: SmolStr::new(name),
             type_params,
@@ -716,8 +898,8 @@ impl<'db> Ctx<'db> {
     }
 
     pub fn param_sig(&self, p: &ParamDef, cx: &LowerCx, sink: &mut Vec<LowerError>) -> ParamSig {
-        let ty = match &p.ty {
-            Some(t) => self.lower(t, cx, sink),
+        let ty = match self.merged_ty(p.ty.as_ref(), p.doc_ty.as_ref(), cx, sink) {
+            Some((t, _)) => t,
             None if cx.dialect() == Dialect::Php => Ty::mixed(),
             None => Ty::error(),
         };
@@ -786,7 +968,7 @@ impl<'db> Ctx<'db> {
             let cx = self.class_cx(&c);
             let mut sink = Vec::new();
             if let Some(p) = c.def.properties.iter().find(|p| p.name == name) {
-                let ty = p.ty.as_ref().map(|t| self.lower(t, &cx, &mut sink));
+                let ty = self.merged_ty(p.ty.as_ref(), p.doc_ty.as_ref(), &cx, &mut sink);
                 return Some(PropertyInfo::from_def(&c, p, ty, map, self));
             }
             let promoted = c
@@ -804,16 +986,16 @@ impl<'db> Ctx<'db> {
                 .find(|p| p.promoted.is_some() && p.name == name);
             if let Some(p) = promoted {
                 let promo = p.promoted.as_ref().unwrap();
-                let ty = p.ty.as_ref().map(|t| self.lower(t, &cx, &mut sink));
-                let mut ty = ty.unwrap_or_else(|| {
+                let merged = self.merged_ty(p.ty.as_ref(), p.doc_ty.as_ref(), &cx, &mut sink);
+                let (mut ty, from_doc) = merged.unwrap_or_else(|| {
                     if c.is_stir() {
-                        Ty::error()
+                        (Ty::error(), false)
                     } else {
-                        Ty::mixed()
+                        (Ty::mixed(), false)
                     }
                 });
                 if c.is_external() {
-                    ty = self.external_view(&ty, false);
+                    ty = self.external_view(&ty, from_doc);
                 }
                 return Some(PropertyInfo {
                     class: c.clone(),
@@ -841,17 +1023,18 @@ impl<'db> Ctx<'db> {
             if let Some(k) = c.def.consts.iter().find(|k| k.name == name) {
                 let cx = self.class_cx(&c);
                 let mut sink = Vec::new();
-                return Some(match &k.ty {
-                    Some(t) => {
-                        let t = self.lower(t, &cx, &mut sink);
-                        if c.is_external() {
-                            self.external_view(&t, false)
-                        } else {
-                            t
+                return Some(
+                    match self.merged_ty(k.ty.as_ref(), k.doc_ty.as_ref(), &cx, &mut sink) {
+                        Some((t, from_doc)) => {
+                            if c.is_external() {
+                                self.external_view(&t, from_doc)
+                            } else {
+                                t
+                            }
                         }
-                    }
-                    None => Ty::any_platform(),
-                });
+                        None => self.external_view(&Ty::mixed(), false),
+                    },
+                );
             }
         }
         None
@@ -894,19 +1077,19 @@ impl<'db> PropertyInfo<'db> {
     fn from_def(
         c: &Rc<ClassModel<'db>>,
         p: &PropertyDef,
-        ty: Option<Ty>,
+        ty: Option<(Ty, bool)>,
         map: FxHashMap<ParamId, Ty>,
         ctx: &Ctx<'db>,
     ) -> Self {
-        let mut ty = ty.unwrap_or_else(|| {
+        let (mut ty, from_doc) = ty.unwrap_or_else(|| {
             if c.is_stir() {
-                Ty::error()
+                (Ty::error(), false)
             } else {
-                Ty::mixed()
+                (Ty::mixed(), false)
             }
         });
         if c.is_external() {
-            ty = ctx.external_view(&ty, false);
+            ty = ctx.external_view(&ty, from_doc);
         }
         PropertyInfo {
             class: c.clone(),

@@ -111,13 +111,93 @@ pub enum TypeRefKind {
         ret: Box<TypeRef>,
     },
     Literal(Literal),
+    /// PHPStan `list<T>` / `non-empty-list<T>`.
+    PhpList {
+        elem: Box<TypeRef>,
+        non_empty: bool,
+    },
+    /// PHPStan `array<K, V>`, `array<V>`, `T[]`, `non-empty-array<…>`; a missing
+    /// key is `array-key`.
+    PhpArray {
+        key: Option<Box<TypeRef>>,
+        value: Box<TypeRef>,
+        non_empty: bool,
+    },
+    /// `iterable<K, V>` / `iterable<V>`.
+    Iterable {
+        key: Option<Box<TypeRef>>,
+        value: Box<TypeRef>,
+    },
+    /// Array shape `array{a: int, b?: string}` / `list{int, string}`.
+    Shape {
+        fields: Vec<ShapeFieldRef>,
+        sealed: bool,
+    },
+    /// `int<min, max>`, `positive-int`, … (`None` is unbounded).
+    IntRange {
+        min: Option<i64>,
+        max: Option<i64>,
+    },
+    /// `class-string` / `class-string<T>`.
+    ClassString(Option<Box<TypeRef>>),
+    /// `callable(A, B=): R` / `Closure(A): R`.
+    Callable {
+        params: Vec<CallableParamRef>,
+        ret: Box<TypeRef>,
+        closure: bool,
+    },
+    /// PHPStan keyword types without a native counterpart.
+    DocKeyword(DocKeyword),
+    /// `@phpstan-import-type Name from Class`: resolved against the class's
+    /// `type_aliases` by the checker.
+    ImportedAlias {
+        class: Fqn,
+        name: SmolStr,
+    },
     Error,
+}
+
+/// PHPStan-only keyword types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DocKeyword {
+    ArrayKey,
+    Scalar,
+    Numeric,
+    Resource,
+    NonEmptyString,
+    NumericString,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ShapeKeyRef {
+    Int(i64),
+    Str(SmolStr),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShapeFieldRef {
+    pub key: ShapeKeyRef,
+    pub optional: bool,
+    pub ty: TypeRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CallableParamRef {
+    pub ty: TypeRef,
+    pub optional: bool,
+    pub variadic: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeRef {
     pub kind: TypeRefKind,
     pub range: TextRange,
+}
+
+impl TypeRef {
+    pub fn new(kind: TypeRefKind, range: TextRange) -> TypeRef {
+        TypeRef { kind, range }
+    }
 }
 
 /// Context needed to lower a type node.

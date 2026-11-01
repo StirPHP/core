@@ -20,6 +20,8 @@ pub struct TypedFile {
     pub extension_calls: FxHashMap<TextRange, stir_hir::ItemLoc>,
     /// Types written in `is`/`as`/`when` patterns, by type-node range.
     pub pattern_types: FxHashMap<TextRange, Ty>,
+    /// Function calls and the fully-qualified function they call.
+    pub function_calls: FxHashMap<TextRange, smol_str::SmolStr>,
 }
 
 impl PartialEq for TypedFile {
@@ -28,6 +30,7 @@ impl PartialEq for TypedFile {
             && self.implicit_this == other.implicit_this
             && self.extension_calls == other.extension_calls
             && self.pattern_types == other.pattern_types
+            && self.function_calls == other.function_calls
     }
 }
 
@@ -45,5 +48,6 @@ pub fn typed_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> Arc<TypedFile
         implicit_this: checker.implicit_this,
         extension_calls: checker.extension_calls,
         pattern_types: checker.pattern_types,
+        function_calls: checker.function_calls,
     })
 }
