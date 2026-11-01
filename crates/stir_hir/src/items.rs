@@ -74,6 +74,8 @@ pub struct ParamDef {
     /// The PHPDoc `@param` type (`.php` files only); merged with `ty` by the checker.
     pub doc_ty: Option<TypeRef>,
     pub has_default: bool,
+    /// `= null`: a PHP parameter with this default implicitly accepts null.
+    pub default_is_null: bool,
     pub variadic: bool,
     pub by_ref: bool,
     /// Constructor promotion: `private int $x` / StirPHP `val x: Int` in a primary constructor.
@@ -657,6 +659,9 @@ impl Lowerer {
             ty: first_type(p).map(|t| self.ctx(names).lower(&t)),
             doc_ty: None,
             has_default: p.has_token(EQ),
+            default_is_null: p.children().any(|c| {
+                c.kind() == NAME_EXPR && c.text().to_string().trim().eq_ignore_ascii_case("null")
+            }),
             variadic: p.has_token(ELLIPSIS),
             by_ref: p.has_token(AMP),
             promoted,
@@ -925,6 +930,7 @@ impl Lowerer {
                             ty: None,
                             doc_ty: mp.ty.as_ref().map(|t| dcx.lower(t)),
                             has_default: mp.default.is_some(),
+                            default_is_null: false,
                             variadic: mp.variadic,
                             by_ref: mp.by_ref,
                             promoted: None,

@@ -915,6 +915,11 @@ impl<'db> Ctx<'db> {
             None if cx.dialect() == Dialect::Php => Ty::mixed(),
             None => Ty::error(),
         };
+        let ty = if p.default_is_null && cx.dialect() == Dialect::Php {
+            ty.nullable()
+        } else {
+            ty
+        };
         ParamSig {
             name: p.name.clone(),
             ty,
