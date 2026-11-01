@@ -14,7 +14,7 @@ fn closure_sig(params: Vec<Ty>, ret: Ty) -> FnTy {
 fn cases() -> Vec<(Ty, &'static str, &'static str)> {
     let bx = cls_args("App\\Box", vec![Ty::int()]);
     vec![
-        // Kotlin family
+        // StirPHP family
         (Ty::int(), "Int", "int"),
         (Ty::float(), "Float", "float"),
         (Ty::string(), "String", "string"),

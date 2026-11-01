@@ -72,7 +72,7 @@ pub struct ParamId(pub u32);
 /// Which of the two type families a type belongs to.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Family {
-    /// Kotlin-style ("safe") types: they have methods and never coerce.
+    /// StirPHP ("safe") types: they have methods and never coerce.
     Safe,
     /// PHP ("unsafe") types: no methods, PHP coercion semantics.
     Php,
@@ -120,7 +120,7 @@ pub enum LitValue {
 /// A literal type such as `5`, `"active"` or `true`.
 ///
 /// Literals written in `.sphp` source are [`Family::Safe`] and are assignable to both the
-/// Kotlin base type (`Int`) and the PHP one (`int`). Literals coming from PHPDoc are
+/// StirPHP base type (`Int`) and the PHP one (`int`). Literals coming from PHPDoc are
 /// [`Family::Php`] and only assignable to PHP types.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Literal {
@@ -275,7 +275,7 @@ impl FnParam {
     }
 }
 
-/// A function signature `(A, B) -> R`, shared by Kotlin function types and PHP
+/// A function signature `(A, B) -> R`, shared by StirPHP function types and PHP
 /// `callable(A, B): R` / `Closure(A, B): R`.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct FnTy {
@@ -366,7 +366,7 @@ pub enum TyKind {
     /// Error recovery: assignable to and from everything, never reported.
     Error,
 
-    // ----- Kotlin ("safe") family -----
+    // ----- StirPHP ("safe") family -----
     Int,
     Float,
     String,
@@ -383,7 +383,7 @@ pub enum TyKind {
     /// Mutable map, invariant.
     MutableMap(Ty, Ty),
     Record(RecordTy),
-    /// Kotlin function type `(A, B) -> R`.
+    /// StirPHP function type `(A, B) -> R`.
     Fn(FnTy),
 
     // ----- PHP ("unsafe") family -----
@@ -476,17 +476,17 @@ macro_rules! leaf_ctors {
 leaf_ctors! {
     /// The error-recovery type.
     error => Error;
-    /// Kotlin `Int`.
+    /// StirPHP `Int`.
     int => Int;
-    /// Kotlin `Float`.
+    /// StirPHP `Float`.
     float => Float;
-    /// Kotlin `String`.
+    /// StirPHP `String`.
     string => String;
-    /// Kotlin `Bool`.
+    /// StirPHP `Bool`.
     bool => Bool;
-    /// Kotlin `Unit`.
+    /// StirPHP `Unit`.
     unit => Unit;
-    /// Kotlin `Nothing`.
+    /// StirPHP `Nothing`.
     nothing => Nothing;
     /// PHP `int`.
     php_int => PhpInt;
@@ -558,22 +558,22 @@ impl Ty {
 
     // ----- composite constructors -----
 
-    /// Kotlin `List<T>`.
+    /// StirPHP `List<T>`.
     pub fn list(elem: Ty) -> Ty {
         Ty::raw(TyKind::List(elem))
     }
 
-    /// Kotlin `MutableList<T>`.
+    /// StirPHP `MutableList<T>`.
     pub fn mutable_list(elem: Ty) -> Ty {
         Ty::raw(TyKind::MutableList(elem))
     }
 
-    /// Kotlin `Map<K, V>`.
+    /// StirPHP `Map<K, V>`.
     pub fn map(key: Ty, value: Ty) -> Ty {
         Ty::raw(TyKind::Map(key, value))
     }
 
-    /// Kotlin `MutableMap<K, V>`.
+    /// StirPHP `MutableMap<K, V>`.
     pub fn mutable_map(key: Ty, value: Ty) -> Ty {
         Ty::raw(TyKind::MutableMap(key, value))
     }
@@ -611,12 +611,12 @@ impl Ty {
         })
     }
 
-    /// Kotlin function type.
+    /// StirPHP function type.
     pub fn func(params: Vec<FnParam>, ret: Ty) -> Ty {
         Ty::raw(TyKind::Fn(FnTy::new(params, ret)))
     }
 
-    /// Kotlin function type with only required parameters.
+    /// StirPHP function type with only required parameters.
     pub fn simple_func(params: impl IntoIterator<Item = Ty>, ret: Ty) -> Ty {
         Ty::func(params.into_iter().map(FnParam::required).collect(), ret)
     }
@@ -1018,7 +1018,7 @@ impl Ty {
         }
     }
 
-    /// Whether the outermost constructor is a Kotlin-family type.
+    /// Whether the outermost constructor is a StirPHP-family type.
     pub fn is_safe(&self) -> bool {
         self.family() == Some(Family::Safe)
     }

@@ -1,9 +1,9 @@
 //! Display for diagnostics ([`Ty`]'s `Display`) and PHPDoc rendering ([`to_phpdoc`]).
 //!
-//! Diagnostics use Kotlin syntax for Kotlin-family types (`Int?`, `List<String>`,
+//! Diagnostics use StirPHP syntax for StirPHP-family types (`Int?`, `List<String>`,
 //! `(Int) -> Bool`, `T!`, records by name or as `{ x: Int }`) and PHP syntax for PHP types
 //! (`?int`, `array<string, int>`, `array{a: int}`). A union is printed PHP-style
-//! (`int|string`, `?int`) when it has a PHP-family member and no Kotlin-family member.
+//! (`int|string`, `?int`) when it has a PHP-family member and no StirPHP-family member.
 
 use std::fmt::{self, Write};
 
@@ -42,7 +42,7 @@ impl fmt::Debug for Ty {
 
 /// Renders `ty` as a PHPStan-compatible PHPDoc type string, as used by the transpiler.
 ///
-/// Kotlin types lower to their runtime PHP types (`Int` → `int`, `List<T>` → `list<T>`,
+/// StirPHP types lower to their runtime PHP types (`Int` → `int`, `List<T>` → `list<T>`,
 /// `Map<K, V>` → `array<K, V>`, records → `array{...}`, `Unit` → `void`,
 /// `Nothing` → `never`, `(A) -> R` → `\Closure(A): R`), platform types to their inner type,
 /// `Any!` (and `Error`) to `mixed`, and classes to fully qualified `\Name<...>`.
@@ -54,7 +54,7 @@ pub fn to_phpdoc(ty: &Ty) -> String {
 
 fn print(w: &mut dyn Write, ty: &Ty, mode: Mode, prec: Prec) -> fmt::Result {
     let doc = mode == Mode::PhpDoc;
-    let name = |kotlin: &'static str, php: &'static str| if doc { php } else { kotlin };
+    let name = |stir: &'static str, php: &'static str| if doc { php } else { stir };
     match ty.kind() {
         K::Error => w.write_str(name("{error}", "mixed")),
         K::Int => w.write_str(name("Int", "int")),

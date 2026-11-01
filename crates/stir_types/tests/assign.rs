@@ -91,7 +91,7 @@ fn numeric_widening() {
     assert_assign_table(
         &e,
         &[
-            // Kotlin: no implicit widening.
+            // StirPHP: no implicit widening.
             (Ty::int(), Ty::float(), false),
             (Ty::lit_int(1), Ty::float(), false),
             (Ty::float(), Ty::int(), false),
@@ -397,7 +397,7 @@ fn classes_nominal_and_variance() {
 }
 
 #[test]
-fn kotlin_collections() {
+fn stir_collections() {
     let e = env();
     let ni = Ty::int().nullable();
     assert_assign_table(
@@ -911,7 +911,7 @@ fn function_types() {
             (
                 fun(vec![Ty::int()], Ty::string()),
                 Ty::closure(Some(FnTy::new(vec![req(Ty::php_int())], Ty::php_string()))),
-                // `int` is not assignable to the Kotlin parameter type `Int`
+                // `int` is not assignable to the StirPHP parameter type `Int`
                 false,
             ),
             (Ty::callable(None), fun(vec![], Ty::unit()), false),
@@ -979,7 +979,7 @@ fn mismatch_messages() {
     let msg = |a: &Ty, b: &Ty| check_assignable(&e, a, b).unwrap_err().to_string();
     assert_eq!(
         msg(&Ty::php_int(), &Ty::int()),
-        "int is not assignable to Int (a PHP type cannot be used as a Kotlin type; convert it explicitly)"
+        "int is not assignable to Int (a PHP type cannot be used as a StirPHP type; convert it explicitly)"
     );
     assert_eq!(
         msg(&Ty::list(Ty::int().nullable()), &Ty::list(Ty::int())),

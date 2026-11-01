@@ -12,9 +12,9 @@ use crate::ty::{Ty, TyKind as K};
 ///   pair of members does (so `Int` vs `Int?` and overlapping literal unions are fine), a
 ///   literal overlaps its base type, and related types (one assignable to the other)
 ///   overlap. `Int` vs `String` and `Int` vs `Float` do not.
-/// * A Kotlin type against a PHP type is checked through the Kotlin type's PHP view, with
+/// * A StirPHP type against a PHP type is checked through the StirPHP type's PHP view, with
 ///   strict (non-loose) overlap: `Int` vs `int` is fine, `Int` vs `string` is not.
-/// * Kotlin collections are compared by constructor only (`List<Int>` vs `List<String>` is
+/// * StirPHP collections are compared by constructor only (`List<Int>` vs `List<String>` is
 ///   allowed, both may be empty), unrelated interfaces/open classes may share a subclass,
 ///   `null` only overlaps nullable types, and `Error`, `mixed`, `Any!` and unbounded type
 ///   parameters overlap everything.

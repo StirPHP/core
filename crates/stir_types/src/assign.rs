@@ -11,11 +11,11 @@
 //!    a type parameter is replaced by its bound; `static`/`$this` by their class; an
 //!    intersection source needs some member assignable;
 //! 6. a platform target `T!` accepts what `T` or `T?` accepts;
-//! 7. structural rules. A Kotlin-family source used where a non-Kotlin type is expected is
+//! 7. structural rules. A StirPHP-family source used where a non-StirPHP type is expected is
 //!    first converted to its PHP view (`Int` → `int`, `List<T>` → `list<T>`,
 //!    `Map<K, V>` → `array<K, V>`, records → sealed array shapes, `(A) -> R` →
 //!    `Closure(A): R`), which is how "safe → unsafe is allowed" falls out. PHP-family
-//!    sources are never assignable to Kotlin-family targets (except a sealed array shape with
+//!    sources are never assignable to StirPHP-family targets (except a sealed array shape with
 //!    exactly a record's layout).
 
 use std::collections::VecDeque;
@@ -46,13 +46,13 @@ pub struct Mismatch {
 pub enum MismatchReason {
     /// No more specific explanation.
     Incompatible,
-    /// A PHP-family type was used where a Kotlin-family type is expected (`int` → `Int`).
+    /// A PHP-family type was used where a StirPHP-family type is expected (`int` → `Int`).
     UnsafeToSafe,
     /// `Any!` was used where something other than `mixed` is expected.
     AnyPlatformToSafe,
     /// A possibly-null value was used where null is not allowed.
     NullToNonNull,
-    /// Kotlin numeric types do not widen (`Int` → `Float`).
+    /// StirPHP numeric types do not widen (`Int` → `Float`).
     NoNumericWidening,
     /// The source class does not extend/implement the target class.
     NotSubtype,
@@ -168,7 +168,7 @@ impl fmt::Display for Mismatch {
             R::Incompatible | R::NotSubtype | R::NoUnionMember => base(f),
             R::UnsafeToSafe => {
                 base(f)?;
-                f.write_str(" (a PHP type cannot be used as a Kotlin type; convert it explicitly)")
+                f.write_str(" (a PHP type cannot be used as a StirPHP type; convert it explicitly)")
             }
             R::AnyPlatformToSafe => {
                 base(f)?;
@@ -180,7 +180,7 @@ impl fmt::Display for Mismatch {
             }
             R::NoNumericWidening => {
                 base(f)?;
-                f.write_str(" (Kotlin numbers are not widened implicitly)")
+                f.write_str(" (StirPHP numbers are not widened implicitly)")
             }
             R::RecordMissingField { name } => {
                 base(f)?;
@@ -274,8 +274,8 @@ pub fn is_equivalent(env: &dyn TypeEnv, a: &Ty, b: &Ty) -> bool {
     a == b || (is_assignable(env, a, b) && is_assignable(env, b, a))
 }
 
-/// The PHP-family view of a Kotlin-family type (shallow): what it is at runtime.
-/// Returns `None` for types that are not Kotlin-family.
+/// The PHP-family view of a StirPHP-family type (shallow): what it is at runtime.
+/// Returns `None` for types that are not StirPHP-family.
 pub fn php_view(ty: &Ty) -> Option<Ty> {
     Some(match ty.kind() {
         K::Int => Ty::php_int(),

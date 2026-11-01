@@ -46,7 +46,7 @@ pub fn without_null(ty: &Ty) -> Ty {
 
 /// Whether a value of type `ty` may be null: `null`, nullable unions, `mixed`, `Any!`, `T!`
 /// where `T` is nullable, and type parameters whose bound is nullable or absent (an
-/// unbounded parameter is implicitly bounded by `Any?`, as in Kotlin).
+/// unbounded parameter is implicitly bounded by `Any?`).
 pub fn is_nullable(env: &dyn TypeEnv, ty: &Ty) -> bool {
     match ty.kind() {
         K::Null | K::Mixed | K::AnyPlatform => true,

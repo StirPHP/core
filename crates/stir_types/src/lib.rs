@@ -3,7 +3,7 @@
 //! This crate defines the type representation shared by the checker and the transpiler,
 //! and the relations between types:
 //!
-//! * [`Ty`] / [`TyKind`]: the Kotlin ("safe") family (`Int`, `String`, `List<T>`, records,
+//! * [`Ty`] / [`TyKind`]: the StirPHP ("safe") family (`Int`, `String`, `List<T>`, records,
 //!   function types, ...), the PHP ("unsafe") family (`int`, `array<K, V>`, array shapes,
 //!   PHPStan refinements, ...), literals, unions, intersections, classes, type parameters
 //!   and platform types (`T!`, `Any!`). See [`ty`] for the representation and normalisation.

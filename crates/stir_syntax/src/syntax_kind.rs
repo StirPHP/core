@@ -297,7 +297,7 @@ pub enum SyntaxKind {
     RECEIVER_TYPE,
     EXTENDS_CLAUSE,
     IMPLEMENTS_CLAUSE,
-    /// Kotlin-style supertype list: `class A(...) : Base(), Iface`.
+    /// StirPHP supertype list: `class A(...) : Base(), Iface`.
     SUPERTYPE_LIST,
     SUPERTYPE,
     PRIMARY_CTOR,
@@ -351,7 +351,7 @@ pub enum SyntaxKind {
     POSTFIX_EXPR,
     ASSIGN_EXPR,
     TERNARY_EXPR,
-    /// Kotlin elvis (`a ?: b` in StirPHP) or PHP short ternary.
+    /// Elvis (`a ?: b` in StirPHP) or PHP short ternary.
     ELVIS_EXPR,
     /// Postfix `!!`
     NOT_NULL_EXPR,
