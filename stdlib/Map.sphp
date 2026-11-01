@@ -1,0 +1,119 @@
+namespace Stir
+
+// Extension functions on the read-only `Map<K, V>`. At runtime a Map is a PHP array, so
+// keys are PHP array keys: ints or strings, and numeric strings such as "1" become ints.
+// Iteration order is insertion order. Value comparisons are strict (===).
+//
+// Callbacks that take a key and a value receive them as (key, value); PHP's array_filter
+// and array_walk pass (value, key), so they are always wrapped in a lambda.
+
+/** A single key/value entry of a map, as produced by `entries()`. */
+record Entry<K, V> {
+    key: K
+    value: V
+}
+
+/** Returns the number of entries. */
+function <K, V> Map<K, V>.size(): Int = count(this)
+
+/** Returns true if the map has no entries. */
+function <K, V> Map<K, V>.isEmpty(): Bool = this === []
+
+/** Returns true if the map has at least one entry. */
+function <K, V> Map<K, V>.isNotEmpty(): Bool = this !== []
+
+/** Returns the value for `key`, or null if the key is absent. */
+function <K, V> Map<K, V>.get(key: K): V? = if (array_key_exists(key, this)) this[key] else null
+
+/** Returns the value for `key`, or `defaultValue` if the key is absent (a stored null is returned as null). */
+function <K, V> Map<K, V>.getOrDefault(key: K, defaultValue: V): V = if (array_key_exists(key, this)) this[key] else defaultValue
+
+/** Returns the value for `key`, or `defaultValue()` (evaluated lazily) if the key is absent. */
+function <K, V> Map<K, V>.getOrElse(key: K, defaultValue: () -> V): V = if (array_key_exists(key, this)) this[key] else defaultValue()
+
+/** Returns the value for `key`; throws \OutOfBoundsException if the key is absent. */
+function <K, V> Map<K, V>.getValue(key: K): V =
+    if (array_key_exists(key, this)) this[key]
+    else throw new \OutOfBoundsException("Key ${key} is missing in the map.")
+
+/** Returns true if the map has an entry for `key` (even if its value is null). */
+function <K, V> Map<K, V>.containsKey(key: K): Bool = array_key_exists(key, this)
+
+/** Returns true if some entry has the value `value` (strict comparison). */
+function <K, V> Map<K, V>.containsValue(value: V): Bool = in_array(value, this, true)
+
+/** Returns the keys in insertion order (numeric-string keys come back as Int). */
+function <K, V> Map<K, V>.keys(): List<K> = array_keys(this)
+
+/** Returns the values in insertion order. */
+function <K, V> Map<K, V>.values(): List<V> = array_values(this)
+
+/** Returns the entries as key/value records in insertion order. */
+function <K, V> Map<K, V>.entries(): List<Entry<K, V>> =
+    array_map({ k, v -> Entry { key = k, value = v } }, array_keys(this), array_values(this))
+
+/** Returns the entries as pairs (key, value) in insertion order. */
+function <K, V> Map<K, V>.toList(): List<Pair<K, V>> =
+    array_map({ k, v -> Pair { first = k, second = v } }, array_keys(this), array_values(this))
+
+/** Returns a list of `transform(key, value)` for each entry. */
+function <K, V, R> Map<K, V>.map(transform: (K, V) -> R): List<R> = array_map(transform, array_keys(this), array_values(this))
+
+/** Returns a map with the same keys and `transform(value)` as values. */
+function <K, V, R> Map<K, V>.mapValues(transform: (V) -> R): Map<K, R> = array_map(transform, this)
+
+/** Returns a map with `transform(key)` as keys and the same values; on key collisions the last entry wins. */
+function <K, V, R of Int | String> Map<K, V>.mapKeys(transform: (K) -> R): Map<R, V> = array_combine(array_map(transform, array_keys(this)), this)
+
+/** Returns the entries for which `predicate(key, value)` holds. */
+function <K, V> Map<K, V>.filter(predicate: (K, V) -> Bool): Map<K, V> = array_filter(this, { v, k -> predicate(k, v) }, ARRAY_FILTER_USE_BOTH)
+
+/** Returns the entries for which `predicate(key, value)` does not hold. */
+function <K, V> Map<K, V>.filterNot(predicate: (K, V) -> Bool): Map<K, V> = array_filter(this, { v, k -> !predicate(k, v) }, ARRAY_FILTER_USE_BOTH)
+
+/** Returns the entries whose key matches `predicate`. */
+function <K, V> Map<K, V>.filterKeys(predicate: (K) -> Bool): Map<K, V> = array_filter(this, { predicate(it) }, ARRAY_FILTER_USE_KEY)
+
+/** Returns the entries whose value matches `predicate`. */
+function <K, V> Map<K, V>.filterValues(predicate: (V) -> Bool): Map<K, V> = array_filter(this, { predicate(it) })
+
+/**
+ * Calls `action(key, value)` for each entry in insertion order.
+ * Block body: array_walk returns Bool, which must not leak out of a Unit function.
+ */
+function <K, V> Map<K, V>.forEach(action: (K, V) -> Unit): Unit {
+    array_walk(this, { v, k -> action(k, v) })
+}
+
+/** Returns true if at least one entry matches `predicate(key, value)`. */
+function <K, V> Map<K, V>.any(predicate: (K, V) -> Bool): Bool = array_any(this, { v, k -> predicate(k, v) })
+
+/** Returns true if every entry matches `predicate(key, value)` (true for an empty map). */
+function <K, V> Map<K, V>.all(predicate: (K, V) -> Bool): Bool = array_all(this, { v, k -> predicate(k, v) })
+
+/** Returns true if no entry matches `predicate(key, value)`. */
+function <K, V> Map<K, V>.none(predicate: (K, V) -> Bool): Bool = !array_any(this, { v, k -> predicate(k, v) })
+
+/** Returns the number of entries matching `predicate(key, value)`. */
+function <K, V> Map<K, V>.count(predicate: (K, V) -> Bool): Int = count(array_filter(this, { v, k -> predicate(k, v) }, ARRAY_FILTER_USE_BOTH))
+
+/** Returns the key of the first entry whose value is `value` (strict comparison), or null. */
+function <K, V> Map<K, V>.keyOf(value: V): K? = nullIfFalse(array_search(value, this, true))
+
+/** Returns this map with the entries of `other` added; entries of `other` replace equal keys (Int keys are kept, not renumbered). */
+function <K, V> Map<K, V>.plus(other: Map<K, V>): Map<K, V> = array_replace(this, other)
+
+/** Returns this map with `key` set to `value`. */
+function <K, V> Map<K, V>.plusEntry(key: K, value: V): Map<K, V> = array_replace(this, [key => value])
+
+/** Returns this map without the entry for `key`. */
+function <K, V> Map<K, V>.minusKey(key: K): Map<K, V> = array_diff_key(this, [key => true])
+
+/** Returns this map without the entries for `keys`. */
+function <K, V> Map<K, V>.minusKeys(keys: List<K>): Map<K, V> = array_diff_key(this, array_flip(keys))
+
+/** Returns a mutable copy of the map (PHP arrays are copied by value). */
+function <K, V> Map<K, V>.toMutableMap(): MutableMap<K, V> = this
+
+/** Returns a read-only copy of the map. */
+function <K, V> Map<K, V>.toMap(): Map<K, V> = this

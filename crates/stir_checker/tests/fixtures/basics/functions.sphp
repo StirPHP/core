@@ -1,0 +1,36 @@
+namespace App
+
+function greet(name: String, mut times: Int = 1): String {
+    var $out = ""
+    while (times > 0) {
+        $out = $out . "Hello, ${name}! "
+        times -= 1
+    }
+    return $out
+}
+
+function bad(x: Int): String {
+    x = 2 // error: SPHP0010
+    return x // error: SPHP0005
+}
+
+function untyped(x) { // error: SPHP0004
+}
+
+function noReturn(): Int { // error: SPHP0022
+    val y = 1
+}
+
+function double(x: Int): Int = x * 2
+function inferred(x: Int) = x * 2
+
+echo greet("world")
+echo greet("world", 3)
+echo greet() // error: SPHP0014
+echo greet("a", "b") // error: SPHP0005
+echo greet("a", 1, 2) // error: SPHP0014
+val d: Int = double(2)
+val e: String = inferred(2) // error: SPHP0005
+greet(name: "x", times: 2)
+greet(nme: "x") // error: SPHP0014
+nope() // error: SPHP0007

@@ -1,0 +1,75 @@
+namespace Stir
+
+// Extension functions on `Float` (a PHP float: IEEE 754 double).
+
+/** Returns PHP's string form: 1.0 gives "1", 0.1 gives "0.1", NAN gives "NAN", INF gives "INF" (same as "${x}"). */
+function Float.toString(): String = strval(this)
+
+/** Truncates toward zero; NaN gives 0 and values beyond the Int range clamp to PHP_INT_MIN / PHP_INT_MAX. */
+function Float.toInt(): Int =
+    if (is_nan(this)) 0
+    else if (this >= 9.2233720368547758E18) PHP_INT_MAX
+    else if (this <= -9.2233720368547758E18) PHP_INT_MIN
+    else intval(this)
+
+/** Rounds to the nearest Int, ties away from zero (PHP round: -2.5 gives -3); clamps to the Int range; throws \ValueError for NaN. */
+function Float.roundToInt(): Int =
+    if (is_nan(this)) throw new \ValueError("Cannot round NaN to Int.")
+    else if (this >= 9.2233720368547758E18) PHP_INT_MAX
+    else if (this <= -9.2233720368547758E18) PHP_INT_MIN
+    else intval(round(this))
+
+/** Rounds to `decimals` digits after the point, ties away from zero. */
+function Float.round(decimals: Int = 0): Float = round(this, decimals)
+
+/** Returns the largest integral Float not greater than this value. */
+function Float.floor(): Float = floor(this)
+
+/** Returns the smallest integral Float not less than this value. */
+function Float.ceil(): Float = ceil(this)
+
+/** Returns the absolute value. */
+function Float.abs(): Float = abs(this)
+
+/** Returns this value, or `minimumValue` if this is smaller. */
+function Float.coerceAtLeast(minimumValue: Float): Float = if (this < minimumValue) minimumValue else this
+
+/** Returns this value, or `maximumValue` if this is larger. */
+function Float.coerceAtMost(maximumValue: Float): Float = if (this > maximumValue) maximumValue else this
+
+/** Clamps this value into [minimumValue, maximumValue] (NaN stays NaN); throws \InvalidArgumentException if the range is empty. */
+function Float.coerceIn(minimumValue: Float, maximumValue: Float): Float =
+    if (minimumValue > maximumValue) throw new \InvalidArgumentException("Cannot coerce value to an empty range: maximum ${maximumValue} is less than minimum ${minimumValue}.")
+    else if (this < minimumValue) minimumValue
+    else if (this > maximumValue) maximumValue
+    else this
+
+/** Raises this value to `exponent`. */
+function Float.pow(exponent: Float): Float = this ** exponent
+
+/** Returns the square root (NaN for negative values). */
+function Float.sqrt(): Float = sqrt(this)
+
+/** Returns -1.0, 0.0 or 1.0 according to the sign, or NaN for NaN. */
+function Float.sign(): Float = if (is_nan(this)) NAN else floatval(this <=> 0.0)
+
+/** Returns the smaller of this value and `other` (NaN if either is NaN). */
+function Float.min(other: Float): Float = if (is_nan(this) || is_nan(other)) NAN else min(this, other)
+
+/** Returns the larger of this value and `other` (NaN if either is NaN). */
+function Float.max(other: Float): Float = if (is_nan(this) || is_nan(other)) NAN else max(this, other)
+
+/** Compares with `other`: -1, 0 or 1 (comparisons involving NaN are unspecified in PHP). */
+function Float.compareTo(other: Float): Int = this <=> other
+
+/** Remainder of truncating division (sign follows this value); NaN for a zero divisor. */
+function Float.rem(other: Float): Float = fmod(this, other)
+
+/** Returns true if the value is NaN. */
+function Float.isNaN(): Bool = is_nan(this)
+
+/** Returns true if the value is neither infinite nor NaN. */
+function Float.isFinite(): Bool = is_finite(this)
+
+/** Returns true if the value is positive or negative infinity. */
+function Float.isInfinite(): Bool = is_infinite(this)

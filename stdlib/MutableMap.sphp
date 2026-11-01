@@ -1,0 +1,50 @@
+namespace Stir
+
+// Mutating extension functions on `MutableMap<K, V>`. All read-only operations come from
+// Map.sphp, since MutableMap<K, V> is a subtype of Map<K, V>.
+//
+// BY-REFERENCE RECEIVER ASSUMPTION: same as MutableList.sphp. `this` is bound by reference
+// to the caller's variable, which must be an assignable place; assigning to `this` or to
+// `this[key]` mutates the caller's map. A Unit return type discards the value of an
+// expression body.
+//
+// `put` and `remove` return the previous value with no local variable: the array literal
+// `[old, mutation][0]` evaluates its elements left to right, so `old` is read before the
+// mutation runs, and `[0]` selects it.
+
+// TODO(stir): needs by-reference receiver
+/** Sets `key` to `value`. */
+function <K, V> MutableMap<K, V>.set(key: K, value: V): Unit = this[key] = value
+
+// TODO(stir): needs by-reference receiver
+/** Sets `key` to `value` and returns the previous value, or null if the key was absent. */
+function <K, V> MutableMap<K, V>.put(key: K, value: V): V? =
+    [if (array_key_exists(key, this)) this[key] else null, this[key] = value][0]
+
+// TODO(stir): needs by-reference receiver
+/** Copies every entry of `from` into this map, replacing equal keys. */
+function <K, V> MutableMap<K, V>.putAll(from: Map<K, V>): Unit = this = array_replace(this, from)
+
+// TODO(stir): needs by-reference receiver
+/** Removes the entry for `key` and returns its value, or null if the key was absent. */
+function <K, V> MutableMap<K, V>.remove(key: K): V? =
+    [if (array_key_exists(key, this)) this[key] else null, this = array_diff_key(this, [key => true])][0]
+
+// TODO(stir): needs by-reference receiver
+/** Returns the value for `key`; if absent, stores `defaultValue()` under `key` and returns it. */
+function <K, V> MutableMap<K, V>.getOrPut(key: K, defaultValue: () -> V): V =
+    if (array_key_exists(key, this)) this[key] else (this[key] = defaultValue())
+
+// TODO(stir): needs by-reference receiver
+/** Removes every entry matching `predicate(key, value)`. */
+function <K, V> MutableMap<K, V>.removeAll(predicate: (K, V) -> Bool): Unit =
+    this = array_filter(this, { v, k -> !predicate(k, v) }, ARRAY_FILTER_USE_BOTH)
+
+// TODO(stir): needs by-reference receiver
+/** Keeps only the entries matching `predicate(key, value)`. */
+function <K, V> MutableMap<K, V>.retainAll(predicate: (K, V) -> Bool): Unit =
+    this = array_filter(this, { v, k -> predicate(k, v) }, ARRAY_FILTER_USE_BOTH)
+
+// TODO(stir): needs by-reference receiver
+/** Removes all entries. */
+function <K, V> MutableMap<K, V>.clear(): Unit = this = []

@@ -296,7 +296,10 @@ fn param(p: &mut Parser<'_>) {
             n = 1;
         }
         let name = p.nth(n);
-        (name == IDENT || name == VARIABLE || name.is_keyword()) && p.nth(n + 1) == COLON
+        (name == IDENT || name == VARIABLE || name.is_keyword())
+            && (p.nth(n + 1) == COLON
+                // an untyped StirPHP parameter (`f(x)`): reported by the checker
+                || (p.stir() && name != VARIABLE && matches!(p.nth(n + 1), COMMA | R_PAREN | EQ)))
     };
     if stir_style {
         p.eat(ELLIPSIS);
@@ -305,8 +308,9 @@ fn param(p: &mut Parser<'_>) {
         } else {
             member_name(p);
         }
-        p.bump(COLON);
-        type_(p);
+        if p.eat(COLON) {
+            type_(p);
+        }
     } else {
         if !p.at(VARIABLE) && !p.at(AMP) && !p.at(ELLIPSIS) {
             type_(p);

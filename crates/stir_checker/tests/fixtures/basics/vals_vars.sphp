@@ -1,0 +1,15 @@
+namespace App
+
+val name: String = "x"
+var $count = 0
+$count += 1
+$count = "no" // error: SPHP0005
+name = "y" // error: SPHP0010
+$undeclared = 1 // error: SPHP0017
+val total: Int = $count * 2
+val wrong: String = 1 // error: SPHP0005
+echo $name // error: SPHP0016
+echo count // error: SPHP0016
+var $name = 2 // error: SPHP0011
+val s = "Hi ${name}, you have ${count}"
+echo s

@@ -1,0 +1,22 @@
+namespace Stir
+
+// Extension functions on `Bool`. Unlike the operators, `and`/`or` evaluate both
+// operands (the argument is evaluated before the call), like the non-short-circuit forms.
+
+/** Returns "true" or "false" (note: "${b}" uses PHP's "1" / ""). */
+function Bool.toString(): String = if (this) "true" else "false"
+
+/** Returns the negation of this value. */
+function Bool.not(): Bool = !this
+
+/** Logical and; `other` is always evaluated. */
+function Bool.and(other: Bool): Bool = this && other
+
+/** Logical or; `other` is always evaluated. */
+function Bool.or(other: Bool): Bool = this || other
+
+/** Logical exclusive or. */
+function Bool.xor(other: Bool): Bool = this !== other
+
+/** Compares with `other`, false < true: -1, 0 or 1. */
+function Bool.compareTo(other: Bool): Int = this <=> other

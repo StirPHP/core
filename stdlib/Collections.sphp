@@ -1,0 +1,101 @@
+namespace Stir
+
+// Top-level constructors for collections, pairs, comparison and precondition helpers.
+
+/** Two values; lowers to the PHP array ["first" => ..., "second" => ...]. */
+record Pair<A, B> {
+    first: A
+    second: B
+}
+
+/** Three values; lowers to the PHP array ["first" => ..., "second" => ..., "third" => ...]. */
+record Triple<A, B, C> {
+    first: A
+    second: B
+    third: C
+}
+
+/** Creates a Pair of this value and `other`: `"a"->to(1)`. */
+function <A, B> A.to(other: B): Pair<A, B> = Pair { first = this, second = other }
+
+/** Returns the two components of a homogeneous pair as a list. */
+function <T> Pair<T, T>.toList(): List<T> = [this->first, this->second]
+
+/** Returns a read-only list of the given elements. */
+function <T> listOf(...elements: T): List<T> = array_values(elements)
+
+/** Returns an empty read-only list. */
+function <T> emptyList(): List<T> = []
+
+/** Returns a read-only list of the given elements that are not null. */
+function <T> listOfNotNull(...elements: T? ): List<T> = array_values(array_filter(elements, { it !== null }))
+
+/** Returns a mutable list of the given elements. */
+function <T> mutableListOf(...elements: T): MutableList<T> = array_values(elements)
+
+/** Returns a list of `size` elements where element i is `init(i)`; throws \ValueError if `size` is negative. */
+function <T> listOfSize(size: Int, init: (Int) -> T): List<T> =
+    if (size < 0) throw new \ValueError("Negative list size ${size}.")
+    else if (size === 0) []
+    else array_map(init, range(0, size - 1))
+
+/** Returns a read-only map built from `pairs`; on duplicate keys the last pair wins. */
+function <K of Int | String, V> mapOf(...pairs: Pair<K, V>): Map<K, V> = array_column(pairs, "second", "first")
+
+/** Returns an empty read-only map. */
+function <K of Int | String, V> emptyMap(): Map<K, V> = []
+
+/** Returns a mutable map built from `pairs`; on duplicate keys the last pair wins. */
+function <K of Int | String, V> mutableMapOf(...pairs: Pair<K, V>): MutableMap<K, V> = array_column(pairs, "second", "first")
+
+/** Compares two scalars: null sorts first, strings by code point (strcmp, never numeric-string), numbers numerically; returns -1, 0 or 1. */
+function <T of Int | Float | String> compareValues(a: T?, b: T?): Int =
+    if (a === b) 0
+    else if (a === null) -1
+    else if (b === null) 1
+    else if (a is String && b is String) strcmp(a, b) <=> 0
+    else a <=> b
+
+/**
+ * Calls `action(index)` for index 0 until `times`; does nothing if `times` <= 0.
+ * Block body: a loop needs a mutable counter.
+ */
+function repeat(times: Int, action: (Int) -> Unit): Unit {
+    for ($index = 0; $index < times; $index++) {
+        action($index)
+    }
+}
+
+/**
+ * Throws \InvalidArgumentException with `message` if `condition` is false (argument validation).
+ * Named `requireThat` because `require` is a reserved word in PHP. Block body: a Unit function with a conditional throw.
+ */
+function requireThat(condition: Bool, message: String = "Failed requirement."): Unit {
+    if (!condition) {
+        throw new \InvalidArgumentException(message)
+    }
+}
+
+/** Returns `value` if it is not null; otherwise throws \InvalidArgumentException with `message`. */
+function <T> requireNotNull(value: T?, message: String = "Required value was null."): T =
+    value ?: throw new \InvalidArgumentException(message)
+
+/**
+ * Throws \RuntimeException with `message` if `condition` is false (state validation).
+ * Block body: a Unit function with a conditional throw.
+ */
+function check(condition: Bool, message: String = "Check failed."): Unit {
+    if (!condition) {
+        throw new \RuntimeException(message)
+    }
+}
+
+/** Returns `value` if it is not null; otherwise throws \RuntimeException with `message`. */
+function <T> checkNotNull(value: T?, message: String = "Required value was null."): T =
+    value ?: throw new \RuntimeException(message)
+
+/** Always throws \RuntimeException with `message`. */
+function error(message: String): Nothing = throw new \RuntimeException(message)
+
+/** Always throws \LogicException marking unimplemented code, optionally with `reason`. */
+function TODO(reason: String = "Not implemented."): Nothing = throw new \LogicException("An operation is not implemented: ${reason}")

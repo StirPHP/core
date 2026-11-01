@@ -1,0 +1,20 @@
+namespace App
+
+class User(val name: String)
+
+function find(id: Int): User? = null
+
+val u = find(1)
+echo u->name // error: SPHP0012
+echo u?->name ?: "anon"
+echo u!!->name
+val n: String = u?->name // error: SPHP0005
+if (u != null) {
+    echo u->name
+}
+if (u == null) {
+    return
+}
+echo u->name
+val v = 1
+val w = v ?: 2 // warning: SPHP0021

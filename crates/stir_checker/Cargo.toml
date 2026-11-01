@@ -16,3 +16,11 @@ stir_types = { version = "0.1.0", path = "../stir_types" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+libtest-mimic = "0.8.2"
+stir_stubs = { path = "../stir_stubs" }
+
+[[test]]
+name = "fixtures"
+harness = false

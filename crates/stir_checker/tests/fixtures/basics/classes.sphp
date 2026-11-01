@@ -1,0 +1,29 @@
+namespace App
+
+open class Base(val id: Int) {
+    function describe(): String = "base ${id}"
+    private function secret(): Int = 1
+}
+
+class User(id: Int, var $name: String) : Base(id) {
+    val created: Int = 0
+    function rename(to: String): Unit {
+        $this->name = to
+    }
+    function bad(): Unit {
+        $this->created = 1 // error: SPHP0010
+        $this->secret() // error: SPHP0024
+    }
+}
+
+class Final
+class Child : Final() // error: SPHP0023
+
+val u = new User(1, "a")
+echo u->describe()
+echo u->name
+u->nope() // error: SPHP0009
+echo u->missing // error: SPHP0009
+val bad = new User("x", "a") // error: SPHP0005
+interface Shape { function area(): Float }
+new Shape() // error: SPHP0023
