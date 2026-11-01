@@ -1,0 +1,18 @@
+---
+source: crates/stir_emit/tests/programs.rs
+expression: out.code
+---
+<?php
+
+declare(strict_types=1);
+
+echo \strlen("\x04") . "\n";
+echo \bin2hex("\x04\x00AJA") . "\n";
+echo "a\tb\n";
+echo \strlen('\\xZZ') . "\n";
+echo \strlen('😀') . "\n";
+$m = [];
+$m['k'] = 'v';
+echo isset($m['k']) ? "set\n" : "unset\n";
+echo isset($m['nope']) ? "set\n" : "unset\n";
+echo empty($m['nope']) ? "empty\n" : "full\n";

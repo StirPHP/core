@@ -2050,7 +2050,8 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                 Expr::isset(
                     es.into_iter()
                         .filter_map(|a| match a {
-                            Arg::Positional(e) => Some(e),
+                            // `isset` needs the variable itself, and tolerates a missing key
+                            Arg::Positional(e) => Some(crate::builders::strip_null_defaults(e)),
                             _ => None,
                         })
                         .collect(),
@@ -2061,7 +2062,7 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                     .child(ARG_LIST)
                     .and_then(|a| a.child(ARG))
                     .and_then(|a| exprs_of(&a).into_iter().next());
-                e.map(|e| self.expr(&e).empty())
+                e.map(|e| crate::builders::strip_null_defaults(self.expr(&e)).empty())
                     .unwrap_or_else(|| Expr::bool(true))
             }
             EXIT_EXPR => {

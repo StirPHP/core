@@ -339,6 +339,70 @@ pub fn parse_int(text: &str) -> Option<i64> {
 }
 
 /// The value of a simple quoted string literal (handles the common escapes).
+/// PHP's `\x41`, `\101` and `\u{1F600}`, with `chars` just after the backslash. A byte above
+/// 0x7F isn't valid text on its own, so it stays as written.
+fn decode_numeric_escape(
+    first: char,
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    out: &mut String,
+) -> bool {
+    let mut lookahead = chars.clone();
+    let (digits, radix, max) = match first {
+        'x' => {
+            lookahead.next();
+            (
+                lookahead
+                    .clone()
+                    .take(2)
+                    .take_while(char::is_ascii_hexdigit)
+                    .count(),
+                16,
+                2,
+            )
+        }
+        '0'..='7' => (
+            lookahead
+                .clone()
+                .take(3)
+                .take_while(|c| ('0'..='7').contains(c))
+                .count(),
+            8,
+            3,
+        ),
+        'u' => {
+            lookahead.next();
+            if lookahead.next() != Some('{') {
+                return false;
+            }
+            let hex: String = lookahead.clone().take_while(|c| *c != '}').collect();
+            let Some(c) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) else {
+                return false;
+            };
+            out.push(c);
+            for _ in 0..hex.chars().count() + 3 {
+                chars.next();
+            }
+            return true;
+        }
+        _ => return false,
+    };
+    if digits == 0 || digits > max {
+        return false;
+    }
+    let digits_text: String = lookahead.take(digits).collect();
+    let Some(value) = u32::from_str_radix(&digits_text, radix)
+        .ok()
+        .filter(|v| *v < 0x80)
+    else {
+        return false;
+    };
+    out.push(char::from_u32(value).expect("ASCII"));
+    for _ in 0..digits + usize::from(first == 'x') {
+        chars.next();
+    }
+    true
+}
+
 pub fn unquote(text: &str) -> String {
     let text = text.strip_prefix(['b', 'B']).unwrap_or(text);
     if text.len() < 2 {
@@ -358,6 +422,7 @@ pub fn unquote(text: &str) -> String {
                 out.push(n);
                 chars.next();
             }
+            (b'"', Some(n)) if decode_numeric_escape(n, &mut chars, &mut out) => {}
             (b'"', Some(n)) => {
                 let mapped = match n {
                     'n' => Some('\n'),
@@ -366,7 +431,6 @@ pub fn unquote(text: &str) -> String {
                     'v' => Some('\u{b}'),
                     'e' => Some('\u{1b}'),
                     'f' => Some('\u{c}'),
-                    '0' => Some('\0'),
                     '\\' | '"' | '$' => Some(n),
                     _ => None,
                 };

@@ -1098,7 +1098,7 @@ impl File {
 
 /// `??` tolerates missing keys and nulls along a whole index chain, so
 /// `($a['x'] ?? null)['y']` on its left side is just `$a['x']['y']`.
-fn strip_null_defaults(e: Expr) -> Expr {
+pub(crate) fn strip_null_defaults(e: Expr) -> Expr {
     let Expr { kind, origin } = e;
     let kind = match kind {
         ExprKind::Binary {

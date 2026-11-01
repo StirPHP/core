@@ -1,0 +1,10 @@
+echo "${strlen("\x04")}\n"
+echo bin2hex("\x04\0\101\x4A\u{41}") . "\n"
+echo "a\tb\n"
+echo "${strlen("\xZZ")}\n"
+echo "${strlen("\u{1F600}")}\n"
+var $m = mutableMapOf<String, String>()
+$m["k"] = "v"
+echo if (isset($m["k"])) "set\n" else "unset\n"
+echo if (isset($m["nope"])) "set\n" else "unset\n"
+echo if (empty($m["nope"])) "empty\n" else "full\n"
