@@ -59,6 +59,6 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "StirPHP ${{ needs.version.outputs.version }}" \
+            --title "StirPHP $GITHUB_REF_NAME" \
             --generate-notes \
             --verify-tag
