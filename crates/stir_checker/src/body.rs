@@ -92,6 +92,8 @@ pub struct Checker<'a, 'db> {
     pub items: &'db FileItems,
     pub diags: Vec<Diagnostic>,
     conditional_depth: u32,
+    /// Inside `isset`, `empty` or the left of `??`: the value is allowed not to exist.
+    probing: u32,
     frames: Vec<FxHashMap<SmolStr, Local>>,
     fns: Vec<FnCx>,
     class: Option<Rc<ClassModel<'db>>>,
@@ -246,6 +248,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             items: ctx.items(file),
             diags: Vec::new(),
             conditional_depth: 0,
+            probing: 0,
             frames: vec![FxHashMap::default()],
             fns: Vec::new(),
             class: None,
@@ -2229,6 +2232,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             WHEN_EXPR => self.when_expr(node, expected),
             IF_EXPR => self.if_expr(node, expected),
             ISSET_EXPR | EMPTY_EXPR => {
+                self.probing += 1;
                 if let Some(args) = node.child(ARG_LIST) {
                     for a in args.children_of(ARG) {
                         for e in exprs_of(&a) {
@@ -2236,6 +2240,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                         }
                     }
                 }
+                self.probing -= 1;
                 if self.stir() {
                     Ty::bool()
                 } else {
@@ -2379,7 +2384,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 if let Some(t) = self.implicit_property(node, name, true) {
                     return t;
                 }
-                if is_superglobal(name) {
+                if is_superglobal(name) || (self.probing > 0 && !self.stir()) {
                     return Ty::any_platform();
                 }
                 if self.stir() || self.fns.len() > 1 {
@@ -2538,7 +2543,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                 (l, r)
             }
             QUESTION2 => {
+                self.probing += 1;
                 let l = self.expr(&es[0], expected.map(|e| e.clone().nullable()).as_ref());
+                self.probing -= 1;
                 let r = self.expr(&es[1], expected);
                 (l, r)
             }
@@ -4155,6 +4162,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                         TyKind::Callable { sig: None, .. } | TyKind::Mixed
                     )
                     && !(ct.is_any_platform() && !self.stir())
+                    && !(!self.stir() && php_callable_value(&ct))
                 {
                     self.error(
                         node.text_range(),
@@ -5580,6 +5588,22 @@ fn unquoted_literal(node: &SyntaxNode) -> Option<String> {
         .and_then(|t| t.strip_suffix('\''))
         .or_else(|| text.strip_prefix('"').and_then(|t| t.strip_suffix('"')))?;
     (!inner.contains(['\\', '$'])).then(|| inner.to_owned())
+}
+
+/// A PHP string or array in a variable may name a function: `$callback()`.
+fn php_callable_value(ty: &Ty) -> bool {
+    ty.members().iter().any(|m| {
+        matches!(
+            m.kind(),
+            TyKind::PhpString
+                | TyKind::NonEmptyString
+                | TyKind::ClassString(_)
+                | TyKind::PhpList { .. }
+                | TyKind::Array { .. }
+                | TyKind::Shape(_)
+                | TyKind::Callable { .. }
+        ) || matches!(m.kind(), TyKind::Literal(l) if matches!(l.value, LitValue::String(_)))
+    })
 }
 
 fn is_php_scalar(ty: &Ty) -> bool {
