@@ -349,6 +349,13 @@ impl<'a, 'db> Checker<'a, 'db> {
             .push(Diagnostic::error(self.path.clone(), range, code, msg));
     }
 
+    /// The last diagnostic is about only some members of a union: a level 7 problem.
+    fn tag_partial_union(&mut self) {
+        if let Some(d) = self.diags.last_mut() {
+            d.php_level = Some(7);
+        }
+    }
+
     fn warn(&mut self, range: TextRange, code: &'static str, msg: impl Into<String>) {
         self.diags.push(
             Diagnostic::error(self.path.clone(), range, code, msg).with_severity(Severity::Warning),
@@ -397,7 +404,11 @@ impl<'a, 'db> Checker<'a, 'db> {
             if from.is_any_platform() {
                 msg.push_str("; narrow the untyped value first (`is` / `as`)");
             }
+            let partial = from.is_union() && from.members().iter().any(|m| self.assignable(m, to));
             self.error(range, codes::TYPE_MISMATCH, msg);
+            if partial {
+                self.tag_partial_union();
+            }
         }
     }
 
@@ -968,6 +979,29 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     fn iter_types(&mut self, range: TextRange, ty: &Ty) -> (Ty, Ty) {
         let ty = strip_platform(ty);
+        if !self.stir() && ty.is_union() {
+            let start = self.diags.len();
+            let (mut keys, mut vals, mut missing) = (Vec::new(), Vec::new(), false);
+            for m in ty.members().to_vec() {
+                let before = self.diags.len();
+                let (k, v) = self.iter_types(range, &m);
+                if self.diags.len() > before {
+                    missing = true;
+                } else {
+                    keys.push(k);
+                    vals.push(v);
+                }
+            }
+            self.diags.truncate(start);
+            if missing {
+                self.error(range, codes::INVALID_OPERAND, format!("`{ty}` is not iterable"));
+                if keys.is_empty() {
+                    return (Ty::error(), Ty::error());
+                }
+                self.tag_partial_union();
+            }
+            return (Ty::union(keys), Ty::union(vals));
+        }
         match ty.kind() {
             TyKind::List(e) | TyKind::MutableList(e) => (Ty::int(), e.clone()),
             TyKind::Map(k, v) | TyKind::MutableMap(k, v) => (k.clone(), v.clone()),
@@ -2095,7 +2129,28 @@ impl<'a, 'db> Checker<'a, 'db> {
                         format!("indexing a nullable value of type `{bt}`; check for null first"),
                     );
                 }
-                match self.index_type(&strip_platform(&stir_types::without_null(&bt)), it.as_ref())
+                let indexed = strip_platform(&stir_types::without_null(&bt));
+                if !self.stir() && indexed.is_union() {
+                    let (ok, bad): (Vec<Ty>, Vec<Ty>) = indexed
+                        .members()
+                        .iter()
+                        .cloned()
+                        .partition(|m| self.index_type(m, it.as_ref()).is_some());
+                    if !ok.is_empty() {
+                        if !bad.is_empty() {
+                            self.error(
+                                base.text_range(),
+                                codes::INVALID_OPERAND,
+                                format!("`{bt}` can't be indexed"),
+                            );
+                            self.tag_partial_union();
+                        }
+                        return Ty::union(
+                            ok.iter().filter_map(|m| self.index_type(m, it.as_ref())),
+                        );
+                    }
+                }
+                match self.index_type(&indexed, it.as_ref())
                 {
                     Some(t) => t,
                     None => {
@@ -4021,6 +4076,9 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     fn member_type(&mut self, recv: &Ty, name: &str, range: TextRange) -> Ty {
         let recv = &stir_types::unfold(self.ctx, &self.bound_of(recv));
+        if !self.stir() && recv.is_union() {
+            return self.union_member_type(recv, name, range);
+        }
         match recv.kind() {
             TyKind::Error => Ty::error(),
             TyKind::Nothing | TyKind::Never => Ty::nothing(),
@@ -4095,6 +4153,39 @@ impl<'a, 'db> Checker<'a, 'db> {
                 );
                 Ty::error()
             }
+        }
+    }
+
+    /// A property of a PHP union: fine on every member, a level 7 problem on some.
+    fn union_member_type(&mut self, recv: &Ty, name: &str, range: TextRange) -> Ty {
+        let start = self.diags.len();
+        let mut found = Vec::new();
+        let mut missing = false;
+        for m in recv.members().to_vec() {
+            let before = self.diags.len();
+            let t = self.member_type(&m, name, range);
+            if self.diags.len() > before {
+                self.diags.truncate(before);
+                missing = true;
+            } else {
+                found.push(t);
+            }
+        }
+        self.diags.truncate(start);
+        if missing {
+            self.error(
+                range,
+                codes::UNDEFINED_MEMBER,
+                format!("`{recv}` has no property `{name}`"),
+            );
+            if !found.is_empty() {
+                self.tag_partial_union();
+            }
+        }
+        if found.is_empty() {
+            Ty::error()
+        } else {
+            Ty::union(found)
         }
     }
 
@@ -4199,6 +4290,9 @@ impl<'a, 'db> Checker<'a, 'db> {
             self.check_args_untyped(node);
             return Ty::error();
         }
+        if !self.stir() && recv.is_union() {
+            return self.union_method_call(node, recv, name, range, expected);
+        }
         let cls = class_of(recv);
         if matches!(cls.kind(), TyKind::Class { .. })
             && let Some((owner, m, map)) = self.ctx.find_method(&cls, name)
@@ -4255,6 +4349,59 @@ impl<'a, 'db> Checker<'a, 'db> {
         );
         self.check_args_untyped(node);
         Ty::error()
+    }
+
+    /// A method of a PHP union: fine on every member, a level 7 problem on some.
+    /// Each member checks the call, so only the first one's diagnostics are kept.
+    fn union_method_call(
+        &mut self,
+        node: &SyntaxNode,
+        recv: &Ty,
+        name: &str,
+        range: TextRange,
+        expected: Option<&Ty>,
+    ) -> Ty {
+        let (has, lacks): (Vec<Ty>, Vec<Ty>) = recv
+            .members()
+            .iter()
+            .cloned()
+            .partition(|m| self.responds_to(m, name));
+        if has.is_empty() {
+            self.check_args_untyped(node);
+            self.error(
+                range,
+                codes::UNDEFINED_MEMBER,
+                format!("`{recv}` has no method `{name}`"),
+            );
+            return Ty::error();
+        }
+        let mut results = Vec::new();
+        for (i, m) in has.iter().enumerate() {
+            let before = self.diags.len();
+            results.push(self.call_member(node, m, name, range, expected));
+            if i > 0 {
+                self.diags.truncate(before);
+            }
+        }
+        if !lacks.is_empty() {
+            self.error(
+                range,
+                codes::UNDEFINED_MEMBER,
+                format!("`{recv}` has no method `{name}`"),
+            );
+            self.tag_partial_union();
+        }
+        Ty::union(results)
+    }
+
+    fn responds_to(&self, ty: &Ty, name: &str) -> bool {
+        let cls = class_of(ty);
+        matches!(cls.kind(), TyKind::Class { .. })
+            && (self.ctx.find_method(&cls, name).is_some()
+                || self.has_magic(&cls, "__call")
+                || !self.class_known(&cls))
+            || matches!(ty.kind(), TyKind::Mixed | TyKind::Object | TyKind::Error)
+            || ty.is_any_platform()
     }
 
     /// Calls `recv->name(...)` through an extension function, if one applies.

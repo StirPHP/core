@@ -29,7 +29,9 @@ pub fn min_level(d: &Diagnostic) -> u8 {
     if let Some(l) = d.php_level {
         return l;
     }
-    let untyped = d.message.contains("untyped") || d.message.contains("Any!");
+    let untyped = d.message.contains("untyped")
+        || d.message.contains("Any!")
+        || d.message.contains("mixed");
     match d.code {
         codes::TYPE_MISMATCH if untyped => 9,
         codes::TYPE_MISMATCH if d.message.contains("in argument") => 5,
