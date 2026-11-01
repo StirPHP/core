@@ -6,7 +6,11 @@ on:
   workflow_call:
     inputs:
       version:
-        description: Version reported by `sphp --version` and used in file names
+        description: Version reported by `sphp --version`
+        required: true
+        type: string
+      name:
+        description: Used in file names (`sphp-<name>-<target>`); the version for releases, `nightly` for nightlies
         required: true
         type: string
 
@@ -64,9 +68,9 @@ jobs:
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
-          VERSION: ${{ inputs.version }}
+          NAME: ${{ inputs.name }}
         run: |
-          name="sphp-$VERSION-$TARGET"
+          name="sphp-$NAME-$TARGET"
           mkdir -p "dist/$name"
           cp LICENSE README.md "dist/$name/"
           if [[ "$TARGET" == *windows* ]]; then
@@ -96,7 +100,7 @@ jobs:
         working-directory: editors/vscode
         run: |
           npm ci
-          npx vsce package --allow-missing-repository --out ../../stirphp-vscode-${{ inputs.version }}.vsix
+          npx vsce package --allow-missing-repository --out ../../stirphp-vscode-${{ inputs.name }}.vsix
       - uses: actions/upload-artifact@v4
         with:
           name: vscode

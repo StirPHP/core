@@ -31,6 +31,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       version: ${{ needs.version.outputs.version }}
+      name: ${{ needs.version.outputs.version }}
 
   publish:
     needs: [version, build]

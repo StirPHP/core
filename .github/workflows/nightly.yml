@@ -30,6 +30,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       version: ${{ needs.version.outputs.version }}
+      name: nightly
 
   publish:
     needs: [version, build]
@@ -39,14 +40,9 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Stable file names
+      - name: Checksums
         working-directory: dist
-        run: |
-          # `sphp-<version>-<target>.tar.gz` → `sphp-nightly-<target>.tar.gz`, so
-          # https://github.com/StirPHP/core/releases/download/nightly/... links keep working
-          for f in *; do mv "$f" "$(echo "$f" | sed -E 's/-[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]+\+[0-9a-f]+/-nightly/')"; done
-          sha256sum -- * > SHA256SUMS
-          ls -la
+        run: sha256sum -- * > SHA256SUMS
       - name: Replace the nightly release
         env:
           GH_TOKEN: ${{ github.token }}
