@@ -876,13 +876,15 @@ impl<'a, 'db> Checker<'a, 'db> {
                 _ => {}
             }
         }
-        // After the if: types are those of the fall-through path.
+        // After the if: types are those of the fall-through path, and
+        // variables assigned on a path that falls through lose narrowings.
         self.restore_types(&snap);
-        if !has_else {
-            if let Some(ff) = falls_through_facts {
-                self.apply_facts(&ff);
-            }
-        } else if !all_diverge {
+        if !has_else
+            && let Some(ff) = falls_through_facts
+        {
+            self.apply_facts(&ff);
+        }
+        if !all_diverge {
             self.widen_assigned_in(node);
         }
     }
@@ -1232,6 +1234,15 @@ impl<'a, 'db> Checker<'a, 'db> {
                     range: node.text_range(),
                 },
             );
+        }
+        // default values, checked against their parameter types
+        if let Some(list) = node.child(PARAM_LIST) {
+            for (p, pnode) in sig.params.iter().zip(list.children_of(PARAM)) {
+                if let Some(d) = exprs_of(&pnode).into_iter().next() {
+                    let dt = self.expr(&d, Some(&p.ty));
+                    self.check_assign(d.text_range(), &dt, &p.ty, "default value");
+                }
+            }
         }
         for p in &sig.params {
             let mut ty = p.ty.clone();
@@ -1985,17 +1996,20 @@ impl<'a, 'db> Checker<'a, 'db> {
                     && !src.is_any_platform()
                     && !matches!(src.kind(), TyKind::Platform(_))
                 {
+                    // array types overlap with each other (a map may hold a list)
                     let arrays = |t: &Ty| {
-                        stir_types::php_view(t)
-                            .or_else(|| Some(t.clone()))
-                            .is_some_and(|v| {
-                                matches!(
-                                    v.kind(),
-                                    TyKind::Array { .. }
-                                        | TyKind::PhpList { .. }
-                                        | TyKind::Shape(_)
-                                )
-                            })
+                        t.members().iter().all(|m| {
+                            stir_types::php_view(m)
+                                .or_else(|| Some(m.clone()))
+                                .is_some_and(|v| {
+                                    matches!(
+                                        v.kind(),
+                                        TyKind::Array { .. }
+                                            | TyKind::PhpList { .. }
+                                            | TyKind::Shape(_)
+                                    )
+                                })
+                        })
                     };
                     let overlap = (arrays(&src) && arrays(&target))
                         || stir_types::is_assignable(self.ctx, &target, &src)
@@ -3579,7 +3593,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         {
             // bidirectional: `val xs: List<Int> = emptyList()`
             let mut probe = inf.clone();
-            probe.unify(self.ctx, &subst_cls(&sig.ret), e);
+            probe.unify_expected(self.ctx, &subst_cls(&sig.ret), e);
             inf = probe;
         }
         let args = self.args_of(call);
@@ -3756,10 +3770,13 @@ impl<'a, 'db> Checker<'a, 'db> {
         };
         if callee.kind() == NAME_EXPR {
             let text = text_of(&callee);
-            // a local function value
+            // a local function value (a bare name never means a `$` binding)
             if self.stir()
                 && !text.contains('\\')
-                && let Some(l) = self.lookup(&text).cloned()
+                && let Some(l) = self
+                    .lookup(&text)
+                    .cloned()
+                    .filter(|l| !l.kind.dollar() && maybe_callable(&l.ty))
             {
                 self.types.insert(callee.text_range(), l.ty.clone());
                 self.def(callee.text_range(), Def::Local { decl: l.range });
@@ -5225,5 +5242,22 @@ fn widen_refinements(t: &Ty) -> Ty {
             non_empty: true,
         } => Some(Ty::array(widen_refinements(key), widen_refinements(value))),
         _ => None,
+    })
+}
+
+/// Can a value of type `ty` be called (so `name(...)` may mean the local)?
+fn maybe_callable(ty: &Ty) -> bool {
+    ty.members().iter().any(|m| {
+        matches!(
+            strip_platform(m).kind(),
+            TyKind::Fn(_)
+                | TyKind::Callable { .. }
+                | TyKind::Class { .. }
+                | TyKind::Param { .. }
+                | TyKind::AnyPlatform
+                | TyKind::Mixed
+                | TyKind::Object
+                | TyKind::Error
+        )
     })
 }

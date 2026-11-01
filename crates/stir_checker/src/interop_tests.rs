@@ -47,8 +47,9 @@ fn stub_signatures_follow_attributes_and_phpdoc() {
     let cases = [
         // `$arrays` (PHP <= 7.4 only) is dropped, leaving the variadic.
         "array_map(?callable $callback, array $array, array ...$arrays): Any!",
-        // `[optional]` in the PHPDoc; `int[]|string[]` refines `array` (unchecked).
-        "array_keys(array $array, mixed $filter_value?, bool $strict?): (Map<Int | String, Int> | Map<Int | String, String>)!",
+        // `[optional]` in the PHPDoc; `int[]|string[]` refines `array`, whose
+        // nullability the native type settles (not a platform type).
+        "array_keys(array $array, mixed $filter_value?, bool $strict?): Map<Int | String, Int> | Map<Int | String, String>",
         "str_contains(string $haystack, string $needle): Bool",
         "json_decode(string $json, ?bool $associative?, int $depth?, int $flags?): Any!",
         // `#[LanguageLevelTypeAware(['8.0' => 'string[]'])]` is the native type.

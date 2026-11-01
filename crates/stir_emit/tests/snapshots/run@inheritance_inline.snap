@@ -1,0 +1,49 @@
+---
+source: crates/stir_emit/tests/programs.rs
+assertion_line: 72
+expression: out.code
+---
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+abstract class Shape
+{
+    public int $hits = 0;
+
+    abstract public function area(): int;
+}
+
+final class Square extends \App\Shape
+{
+    public function __construct(
+        private readonly int $side,
+    ) {
+    }
+
+    /** @var list<string> */
+    private array $log = [];
+
+    public function area(): int
+    {
+        $this->hits += 1;
+        $__i1 = &$this->log;
+        \array_push($__i1, 'area');
+        return $this->side * $this->side;
+    }
+
+    /** @param list<string> $extra */
+    public function logged(string $sep = ', ', array $extra = []): string
+    {
+        $__i2 = $this->log;
+        $__i3 = \array_merge($__i2, $extra);
+        return \implode($sep, $__i3);
+    }
+}
+
+$s = new \App\Square(3);
+echo "{$s->area()} {$s->area()} {$s->hits}\n";
+echo $s->logged() . "\n";
+echo $s->logged(' | ', ['done']) . "\n";

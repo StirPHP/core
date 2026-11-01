@@ -8,6 +8,8 @@ use stir_types::{Family, LitValue, ParamId, Ty, TyKind, TypeEnv};
 pub struct Inference {
     pub vars: FxHashSet<ParamId>,
     pub solved: FxHashMap<ParamId, Ty>,
+    /// Bind literal types as they are (when unifying with an expected type).
+    exact: bool,
 }
 
 impl Inference {
@@ -15,6 +17,7 @@ impl Inference {
         Inference {
             vars: vars.into_iter().collect(),
             solved: FxHashMap::default(),
+            exact: false,
         }
     }
 
@@ -38,10 +41,22 @@ impl Inference {
     }
 
     fn bind(&mut self, env: &dyn TypeEnv, id: ParamId, ty: &Ty) {
-        let ty = widen_literals(ty);
         if ty.is_error() {
             return;
         }
+        // a literal argument fits a solution from the expected type as it is
+        if let Some(old) = self.solved.get(&id)
+            && stir_types::is_assignable(env, ty, old)
+        {
+            return;
+        }
+        // `listOf("a")` is a List<String>, but a declared literal union
+        // (`List<"a" | "b">`) is kept
+        let ty = if self.exact || !matches!(ty.kind(), TyKind::Literal(_)) {
+            ty.clone()
+        } else {
+            widen_literals(ty)
+        };
         let new = match self.solved.get(&id) {
             Some(old) if stir_types::is_assignable(env, &ty, old) => old.clone(),
             Some(old) if stir_types::is_assignable(env, old, &ty) => ty,
@@ -54,6 +69,14 @@ impl Inference {
     /// Unifies a parameter type (mentioning variables) with an argument type.
     pub fn unify(&mut self, env: &dyn TypeEnv, param: &Ty, arg: &Ty) {
         self.unify_depth(env, param, arg, 0);
+    }
+
+    /// Unifies a return type with the type the call is expected to have:
+    /// literal types are kept (`val k: List<"a" | "b"> = listOf("a")`).
+    pub fn unify_expected(&mut self, env: &dyn TypeEnv, ret: &Ty, expected: &Ty) {
+        let saved = std::mem::replace(&mut self.exact, true);
+        self.unify_depth(env, ret, expected, 0);
+        self.exact = saved;
     }
 
     fn unify_depth(&mut self, env: &dyn TypeEnv, param: &Ty, arg: &Ty, depth: u32) {

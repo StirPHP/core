@@ -1,0 +1,48 @@
+---
+source: crates/stir_emit/tests/programs.rs
+assertion_line: 72
+expression: out.code
+---
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+require_once __DIR__ . '/stir-runtime.php';
+
+abstract class Shape
+{
+    public int $hits = 0;
+
+    abstract public function area(): int;
+}
+
+final class Square extends \App\Shape
+{
+    public function __construct(
+        private readonly int $side,
+    ) {
+    }
+
+    /** @var list<string> */
+    private array $log = [];
+
+    public function area(): int
+    {
+        $this->hits += 1;
+        \Stir\MutableList_add($this->log, 'area');
+        return $this->side * $this->side;
+    }
+
+    /** @param list<string> $extra */
+    public function logged(string $sep = ', ', array $extra = []): string
+    {
+        return \Stir\List_joinToString(\Stir\List_plus($this->log, $extra), $sep);
+    }
+}
+
+$s = new \App\Square(3);
+echo "{$s->area()} {$s->area()} {$s->hits}\n";
+echo $s->logged() . "\n";
+echo $s->logged(' | ', ['done']) . "\n";

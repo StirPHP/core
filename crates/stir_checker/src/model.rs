@@ -699,10 +699,13 @@ impl<'db> Ctx<'db> {
         match n {
             None => Some((d, true)),
             Some(n) if n == d || d.is_error() => Some((n, false)),
-            Some(n) if n.is_error() || stir_types::is_assignable(self, &d, &n) => {
-                // Only what PHPDoc adds on top of the native type is unchecked.
-                let refined = view(&d) != view(&n);
-                Some((d, refined))
+            Some(n) if n.is_error() => Some((d, true)),
+            Some(n) if stir_types::is_assignable(self, &d, &n) => {
+                // PHPDoc refines a native type (`string[]` for `array`): the
+                // native type is enforced, so nullability is known and the
+                // value is not a platform type.
+                let _ = n;
+                Some((d, false))
             }
             Some(n) => {
                 sink.push(LowerError {
@@ -1041,7 +1044,15 @@ impl<'db> Ctx<'db> {
                                 t
                             }
                         }
-                        None => self.external_view(&Ty::mixed(), false),
+                        None => k
+                            .value
+                            .as_ref()
+                            .filter(|_| c.is_stir())
+                            .and_then(|v| {
+                                let root = stir_db::parse(self.db, c.file).syntax();
+                                literal_ty(&v.to_node(&root))
+                            })
+                            .unwrap_or_else(|| self.external_view(&Ty::mixed(), false)),
                     },
                 );
             }
@@ -1268,5 +1279,48 @@ impl TypeEnv for Ctx<'_> {
                 .collect(),
             stir_types::subst(&f.ret, &map),
         ))
+    }
+}
+
+/// The type of a constant expression made of literals (StirPHP constants
+/// declared without a type), or `None`.
+fn literal_ty(node: &stir_syntax::SyntaxNode) -> Option<Ty> {
+    use stir_syntax::SyntaxKind::*;
+    let token = || {
+        node.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| !t.kind().is_trivia())
+            .map(|t| t.kind())
+    };
+    match node.kind() {
+        LITERAL => match token()? {
+            INT_NUMBER => Some(Ty::int()),
+            FLOAT_NUMBER => Some(Ty::float()),
+            _ => None,
+        },
+        STRING_LITERAL => Some(Ty::string()),
+        NAME_EXPR => match node.text().to_string().to_ascii_lowercase().as_str() {
+            "true" | "false" => Some(Ty::bool()),
+            _ => None,
+        },
+        PAREN_EXPR => node.children().next().as_ref().and_then(literal_ty),
+        BIN_EXPR if token() == Some(DOT) => {
+            let all = node.children().all(|c| literal_ty(&c).is_some());
+            all.then(Ty::string)
+        }
+        ARRAY_EXPR => {
+            let elems: Vec<Ty> = node
+                .children()
+                .filter(|c| c.kind() == ARRAY_ELEM)
+                .map(|e| {
+                    let parts: Vec<_> = e.children().collect();
+                    // keyed elements make it a map: not inferred
+                    if parts.len() == 1 { literal_ty(&parts[0]) } else { None }
+                })
+                .collect::<Option<_>>()?;
+            let elem = elems.first().cloned().unwrap_or_else(Ty::nothing);
+            elems.iter().all(|t| *t == elem).then(|| Ty::list(elem))
+        }
+        _ => None,
     }
 }

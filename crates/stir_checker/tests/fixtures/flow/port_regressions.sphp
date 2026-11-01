@@ -1,0 +1,67 @@
+// Found while porting Parsedown.
+
+// an `if` without `else` that assigns widens the variable afterwards
+function align(c: Bool): String {
+    var $a: String? = null
+    if (c) {
+        $a = "left"
+    }
+    return if ($a === "left") "x" else "y"
+}
+
+// class constants take the type of their literal value
+final class Patterns {
+    const NAME = "[a-z]+"
+    const ALL = ["a", "b"]
+
+    static function full(): String = "/" . self::NAME . "/"
+    static function count(): Int = self::ALL->size()
+}
+
+// expected types keep declared literal unions
+typealias Kind = "a" | "b"
+val kinds: List<Kind> = listOf("a")
+val table: Map<String, List<Kind>> = mapOf("x" to listOf("a", "b"))
+function pick(k: Kind): Int = 1
+foreach (kinds->plus(table["x"] ?: listOf()) as $k) {
+    pick($k)
+}
+val bad: List<Kind> = listOf("c") // error: SPHP0005
+
+// a bare name in call position is not a `$` binding or a non-callable local
+class Render {
+    function element(x: Int): Int = x
+
+    function all(xs: List<Int>): Int {
+        var $sum = 0
+        foreach (xs as $element) {
+            $sum += element($element)
+        }
+        val element = 3
+        return $sum + element(element)
+    }
+}
+
+// parameter and record field defaults are checked
+function withDefault(xs: List<String> = listOf()): Int = xs->size()
+function badDefault(n: Int = "x"): Int = n // error: SPHP0005
+record Point {
+    x: Int = 0
+    y: Int = "zero" // error: SPHP0005
+}
+
+// a native type settles the nullability of its PHPDoc refinement
+function pieces(s: String): Int {
+    val parts = preg_split("/,/", s, 2)
+    if (parts === false) {
+        return 0
+    }
+    return count(parts)
+}
+
+// recursive records
+record Tree {
+    label: String
+    children: List<Tree> = listOf()
+}
+function size(t: Tree): Int = 1 + t->children->sumOf { c -> size(c) }

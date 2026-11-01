@@ -1156,7 +1156,13 @@ impl<'a, 'db> Lowerer<'a, 'db> {
             if let Some(list) = node.child(SUPERTYPE_LIST) {
                 for st in list.children_of(SUPERTYPE) {
                     if let Some(args) = st.child(ARG_LIST) {
-                        parent_call = Some(self.args(&args));
+                        let args = self.args(&args);
+                        // `: Base()` with a parent that has no constructor in PHP
+                        let parent = self.ctx.supers(&model).parent.clone();
+                        let parent_has_ctor = parent.is_none_or(|t| self.emits_ctor(&t, 0));
+                        if !args.is_empty() || parent_has_ctor {
+                            parent_call = Some(args);
+                        }
                     }
                 }
             }
@@ -1446,6 +1452,59 @@ impl<'a, 'db> Lowerer<'a, 'db> {
             body: if interface { None } else { body },
             origin: self.origin(m),
         }));
+    }
+
+    /// Does class type `ty` have a constructor in the emitted PHP (its own
+    /// or inherited)? Mirrors the constructor rules of `class_decl`.
+    fn emits_ctor(&mut self, ty: &Ty, depth: u32) -> bool {
+        let TyKind::Class { name, .. } = ty.kind() else {
+            return true;
+        };
+        let Some(model) = self.ctx.class(name) else {
+            return true;
+        };
+        if depth > 32 {
+            return true;
+        }
+        let def = model.def;
+        if def.methods.iter().any(|m| m.name.eq_ignore_ascii_case("__construct") && !m.magic)
+            || def.primary_ctor.as_ref().is_some_and(|p| !p.is_empty())
+        {
+            return true;
+        }
+        if !model.is_stir() {
+            // PHP classes: an inherited constructor
+            return self.ctx.find_method(&model.self_ty(), "__construct").is_some();
+        }
+        // properties initialized in the constructor (readonly or non-constant defaults)
+        let root = stir_db::parse(self.db, model.file).syntax();
+        let node = def.ptr.to_node(&root);
+        let typed = stir_checker::typed_file(self.db, self.ctx.ws, model.file);
+        let opts = EmitOptions {
+            inline_extensions: self.inline,
+            ..EmitOptions::default()
+        };
+        let mut sub = Lowerer::new(self.db, self.ctx, model.file, typed, &opts);
+        for p in node.descendants().filter(|d| d.kind() == PROPERTY_DECL) {
+            let mods = p.child(MODIFIERS);
+            if mods.as_ref().is_some_and(|x| x.has_token(STATIC_KW)) {
+                continue;
+            }
+            let readonly = p.has_ident("val") || mods.as_ref().is_some_and(|x| x.has_token(READONLY_KW));
+            for e in p.children_of(PROPERTY_ELEM) {
+                if let Some(d) = exprs_of(&e).into_iter().next()
+                    && (readonly || !is_constant_expr(&sub.expr(&d)))
+                {
+                    return true;
+                }
+            }
+        }
+        // a parent constructor it calls
+        let supers = self.ctx.supers(&model);
+        supers
+            .parent
+            .clone()
+            .is_some_and(|p| self.emits_ctor(&p, depth + 1))
     }
 
     fn class_qname(&self, name: &str, node: &SyntaxNode) -> QName {
@@ -2196,7 +2255,13 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                 let args = self.call_args(node);
                 return Expr::this().method(t.as_str(), args);
             }
+            // the checker resolved it to a function or method, not a local
+            let resolved_global = matches!(
+                self.typed.defs.get(&callee.text_range()),
+                Some(stir_checker::Def::Function(_) | stir_checker::Def::Member { .. })
+            );
             if !t.contains('\\')
+                && !resolved_global
                 && (self.visible(&t).is_some() || self.renamed(&t).is_some() || t == "it")
             {
                 let f = self.name_expr(&callee);
@@ -2438,7 +2503,12 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                 }
             }
         }
-        // bind non-trivial values to temporaries
+        // bind non-trivial values to temporaries; a by-reference receiver
+        // (`MutableList.add`) is bound by reference so the body mutates it
+        let by_ref_receiver = stir_checker::model_api::fn_sig_view(self.ctx, loc)
+            .receiver
+            .as_ref()
+            .is_some_and(stir_checker::is_by_ref_receiver);
         let mut map = FxHashMap::default();
         let mut binds = Vec::new();
         for (i, v) in values.into_iter().enumerate() {
@@ -2451,7 +2521,11 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                 map.insert(name, v);
             } else {
                 let tmp = self.fresh("i");
-                binds.push(Expr::var(tmp.as_str()).assign(v));
+                binds.push(if i == 0 && by_ref_receiver {
+                    Expr::var(tmp.as_str()).assign_ref(v)
+                } else {
+                    Expr::var(tmp.as_str()).assign(v)
+                });
                 map.insert(name, Expr::var(tmp.as_str()));
             }
         }

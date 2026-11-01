@@ -1,0 +1,27 @@
+namespace App
+
+// the parent has no constructor in PHP: `: Shape()` must not call one
+abstract class Shape {
+    var $hits: Int = 0
+
+    abstract function area(): Int
+}
+
+final class Square(private val side: Int) : Shape() {
+    private var $log: MutableList<String> = mutableListOf()
+
+    override function area(): Int {
+        $hits += 1
+        // inlined, `add` must still modify the property
+        $log->add("area")
+        return side * side
+    }
+
+    function logged(sep: String = ", ", extra: List<String> = listOf()): String =
+        $log->plus(extra)->joinToString(sep)
+}
+
+val s = new Square(3)
+echo "${s->area()} ${s->area()} ${s->hits}\n"
+echo s->logged() . "\n"
+echo s->logged(" | ", listOf("done")) . "\n"
