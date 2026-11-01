@@ -237,3 +237,57 @@ async fn editing_session() {
 
     let _ = c.request("shutdown", Value::Null).await;
 }
+
+/// Opening generated output (the runtime: the stdlib as PHP) must not replace
+/// the stdlib's declarations, even with `checkPhp` on.
+#[tokio::test(flavor = "multi_thread")]
+async fn opened_build_output_does_not_shadow_the_stdlib() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    write(
+        &root.join("sphp.toml"),
+        "srcDir = \"src\"\noutDir = \"build\"\ncheckPhp = true\n",
+    );
+    let main = root.join("src/main.sphp");
+    let fixed = "class Registry {\n    private static var $all: MutableMap<String, Registry> = mutableMapOf()\n}\n";
+    let broken = format!("{fixed}val n: Int = \"x\"\n");
+    write(&main, &broken);
+    let runtime = root.join("build/stir-runtime.php");
+    let runtime_text = "<?php\n\nnamespace Stir;\n\n/**\n * @template K of int|string\n * @template V\n * @return array<K, V>\n */\nfunction mutableMapOf(array ...$pairs): array\n{\n    return \\array_column($pairs, 'second', 'first');\n}\n";
+    write(&runtime, runtime_text);
+    let (main_uri, runtime_uri) = (uri(&main), uri(&runtime));
+
+    let mut c = Client::start();
+    c.request(
+        "initialize",
+        json!({"processId": null, "rootUri": uri(&root), "capabilities": {}}),
+    )
+    .await;
+    c.notify("initialized", json!({})).await;
+    c.notify(
+        "textDocument/didOpen",
+        json!({"textDocument": {"uri": main_uri, "languageId": "sphp", "version": 1, "text": broken}}),
+    )
+    .await;
+    assert_eq!(c.diagnostics(&main_uri).await.len(), 1);
+
+    c.notify(
+        "textDocument/didOpen",
+        json!({"textDocument": {"uri": runtime_uri, "languageId": "php", "version": 1, "text": runtime_text}}),
+    )
+    .await;
+    c.notify(
+        "textDocument/didChange",
+        json!({"textDocument": {"uri": main_uri, "version": 2}, "contentChanges": [{"text": fixed}]}),
+    )
+    .await;
+    let diags = c.diagnostics(&main_uri).await;
+    assert!(diags.is_empty(), "{diags:?}");
+    // generated code is not checked
+    assert!(
+        !c.backlog
+            .iter()
+            .any(|m| m["params"]["uri"] == runtime_uri.as_str() && !m["params"]["diagnostics"].as_array().unwrap().is_empty())
+    );
+    let _ = c.request("shutdown", Value::Null).await;
+}

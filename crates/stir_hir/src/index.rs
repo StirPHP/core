@@ -3,6 +3,7 @@
 use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
 use stir_db::{FileOrigin, SourceFile};
+use stir_syntax::Dialect;
 
 /// Where a declaration lives: a file and its index in that file's item list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -25,17 +26,29 @@ pub struct DefIndex {
     pub type_aliases: FxHashMap<SmolStr, Vec<ItemLoc>>,
     /// Files by origin, for diagnostics filtering.
     pub origins: FxHashMap<SourceFile, FileOrigin>,
+    /// Files by precedence when declarations collide (lower wins).
+    pub ranks: FxHashMap<SourceFile, u8>,
 }
 
 impl DefIndex {
-    /// Prefer project declarations over vendor ones, and those over stubs.
+    /// The precedence of a file's declarations: project `.sphp` sources, then
+    /// the StirPHP stdlib, project `.php` files, vendor files and PHP stubs. The
+    /// stdlib outranks project PHP so that its generated PHP image (the
+    /// runtime) never replaces it.
+    pub fn rank(origin: FileOrigin, dialect: Dialect) -> u8 {
+        match (origin, dialect) {
+            (FileOrigin::Source, Dialect::Stir) => 0,
+            (FileOrigin::Stub, Dialect::Stir) => 1,
+            (FileOrigin::Source, Dialect::Php) => 2,
+            (FileOrigin::Vendor, _) => 3,
+            (FileOrigin::Stub, Dialect::Php) => 4,
+        }
+    }
+
+    /// Orders every declaration list by [`DefIndex::rank`].
     pub fn sort(&mut self) {
-        let origins = self.origins.clone();
-        let rank = |l: &ItemLoc| match origins.get(&l.file) {
-            Some(FileOrigin::Source) => 0,
-            Some(FileOrigin::Vendor) => 1,
-            _ => 2,
-        };
+        let ranks = self.ranks.clone();
+        let rank = |l: &ItemLoc| ranks.get(&l.file).copied().unwrap_or(u8::MAX);
         for map in [
             &mut self.classes,
             &mut self.functions,

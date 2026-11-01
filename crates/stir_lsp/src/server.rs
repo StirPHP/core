@@ -35,6 +35,9 @@ struct State {
     open: FxHashMap<PathBuf, i32>,
     /// The project root (directory of `sphp.toml`, else the workspace folder).
     root: Option<PathBuf>,
+    /// Directories whose files are not project sources (generated output,
+    /// `vendor/`): opened files there are dependencies, never checked.
+    foreign: Vec<PathBuf>,
 }
 
 impl State {
@@ -50,6 +53,7 @@ impl State {
             ws,
             files,
             open: FxHashMap::default(),
+            foreign: root.iter().map(|r| r.join("vendor")).collect(),
             root,
         }
     }
@@ -71,7 +75,12 @@ impl State {
             return file;
         }
         let dialect = dialect_of(path);
-        let file = SourceFile::new(&self.db, path.to_owned(), text, dialect, FileOrigin::Source);
+        let origin = if self.foreign.iter().any(|d| path.starts_with(d)) {
+            FileOrigin::Vendor
+        } else {
+            FileOrigin::Source
+        };
+        let file = SourceFile::new(&self.db, path.to_owned(), text, dialect, origin);
         let mut files = self.ws.files(&self.db).clone();
         files.push(file);
         self.ws.set_files(&mut self.db).to(files);
@@ -90,6 +99,12 @@ impl State {
                 .collect();
             self.ws.set_files(&mut self.db).to(files);
         }
+    }
+
+    /// Is `path` a project source location (in the project, not generated or vendored)?
+    fn is_project_path(&self, path: &Path) -> bool {
+        self.root.as_ref().is_some_and(|r| path.starts_with(r))
+            && !self.foreign.iter().any(|d| path.starts_with(d))
     }
 
     fn sources(&self) -> Vec<SourceFile> {
@@ -307,7 +322,11 @@ impl Server {
                 .filter_map(|(p, v)| s.files.get(p).map(|f| (p.clone(), *v, f.text(&s.db).clone())))
                 .collect();
             let mut state = match loaded {
-                Some((db, ws, root)) => State::new(db, ws, Some(root)),
+                Some((db, ws, root, out_dir)) => {
+                    let mut st = State::new(db, ws, Some(root));
+                    st.foreign.push(out_dir);
+                    st
+                }
                 None => {
                     let mut st = State::empty();
                     st.root = folder.clone();
@@ -325,7 +344,7 @@ impl Server {
     }
 }
 
-async fn load_project(dir: &Path) -> Option<(RootDatabase, Workspace, PathBuf)> {
+async fn load_project(dir: &Path) -> Option<(RootDatabase, Workspace, PathBuf, PathBuf)> {
     let project = match Project::load(dir).await {
         Ok(p) => p,
         Err(error) => {
@@ -339,7 +358,11 @@ async fn load_project(dir: &Path) -> Option<(RootDatabase, Workspace, PathBuf)> 
         }
     };
     match load_workspace(&project, LoadOptions::default()).await {
-        Ok(l) => Some((l.db, l.workspace, project.root.clone())),
+        Ok(l) => {
+            let out_dir = project.out_dir();
+            let out_dir = std::fs::canonicalize(&out_dir).unwrap_or(out_dir);
+            Some((l.db, l.workspace, project.root.clone(), out_dir))
+        }
         Err(error) => {
             tracing::error!(%error, "failed to load the project");
             None
@@ -641,7 +664,7 @@ impl LanguageServer for Server {
         let disk = tokio::fs::read_to_string(&path).await.ok();
         self.write(|s| {
             s.open.remove(&path);
-            let in_project = s.root.as_ref().is_some_and(|r| path.starts_with(r));
+            let in_project = s.is_project_path(&path);
             match disk {
                 Some(text) if in_project => {
                     s.set_text(&path, text);
@@ -682,7 +705,7 @@ impl LanguageServer for Server {
                 if s.open.contains_key(&path) {
                     continue;
                 }
-                let in_project = s.root.as_ref().is_some_and(|r| path.starts_with(r));
+                let in_project = s.is_project_path(&path);
                 match text {
                     Some(text) if s.files.contains_key(&path) || in_project => {
                         s.set_text(&path, text);
