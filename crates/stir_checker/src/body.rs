@@ -1074,6 +1074,10 @@ impl<'a, 'db> Checker<'a, 'db> {
             // `this` in extension functions is a val; `$this` in methods
             let kind = if self.class.is_some() {
                 LocalKind::This
+            } else if is_by_ref_receiver(&t) {
+                // mutable collections are values in PHP: their extension
+                // functions take the receiver by reference
+                LocalKind::Param(Binding::Mut)
             } else {
                 LocalKind::Val
             };
@@ -1411,7 +1415,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 };
                 let test = match node.kind() {
                     IS_EXPR => match stir_hir::first_type(node) {
-                        Some(t) => self.lower_type_node_quiet(&t),
+                        Some(t) => self.pattern_type(&t, Some(&local.ty.clone())),
                         None => return Default::default(),
                     },
                     _ => match node.children().nth(1) {
@@ -1546,6 +1550,61 @@ impl<'a, 'db> Checker<'a, 'db> {
             _ => return None,
         };
         self.lookup(&name).map(|l| (SmolStr::new(&name), l.clone()))
+    }
+
+    /// The type tested by `is T` / `when { is T -> }` against `subject`. A
+    /// generic class written without arguments (`is Ok`) takes them from the
+    /// subject (`Result<Int>` → `Ok<Int>`).
+    fn pattern_type(&mut self, node: &SyntaxNode, subject: Option<&Ty>) -> Ty {
+        if node.kind() == NAMED_TYPE
+            && node.child(GENERIC_ARG_LIST).is_none()
+            && let Some(name_ref) = node.child(NAME_REF)
+        {
+            let text = text_of(&name_ref);
+            let fqn = self.scope(node).resolve_class(&text);
+            if let Some(model) = self.ctx.class(fqn.as_str())
+                && !model.params.is_empty()
+            {
+                let mut candidates: Vec<Ty> = Vec::new();
+                if let Some(s) = subject {
+                    for m in strip_platform(s)
+                        .members()
+                        .iter()
+                        .cloned()
+                        .chain(std::iter::once(strip_platform(s)))
+                    {
+                        if let TyKind::Class { name, args } = m.kind()
+                            && let Some(subs) =
+                                stir_types::TypeEnv::sealed_subclasses(self.ctx, name, args)
+                        {
+                            candidates.extend(subs);
+                        }
+                        candidates.push(m);
+                    }
+                }
+                for c in candidates {
+                    let same = match c.kind() {
+                        TyKind::Class { name, .. } => name.eq_ignore_ascii_case(&model.name),
+                        TyKind::Record(r) => r
+                            .name
+                            .as_deref()
+                            .is_some_and(|n| n.eq_ignore_ascii_case(&model.name)),
+                        _ => false,
+                    };
+                    if same {
+                        return c;
+                    }
+                }
+                // not derivable: the class with unknown arguments
+                let args = model.params.iter().map(|_| Ty::error()).collect();
+                return if model.kind() == ClassKind::Record {
+                    self.ctx.record_ty(&model, args)
+                } else {
+                    Ty::class(model.name.clone(), args)
+                };
+            }
+        }
+        self.lower_type_node(node)
     }
 
     fn lower_type_node_quiet(&mut self, node: &SyntaxNode) -> Ty {
@@ -1749,11 +1808,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                 strip_platform(&stir_types::without_null(&t))
             }
             IS_EXPR => {
-                if let Some(e) = exprs_of(node).first() {
-                    self.expr(e, None);
-                }
+                let st = exprs_of(node).first().map(|e| self.expr(e, None));
                 if let Some(t) = stir_hir::first_type(node) {
-                    self.lower_type_node(&t);
+                    self.pattern_type(&t, st.as_ref());
                 }
                 Ty::bool()
             }
@@ -3238,6 +3295,7 @@ impl<'a, 'db> Checker<'a, 'db> {
     fn member_type(&mut self, recv: &Ty, name: &str, range: TextRange) -> Ty {
         match recv.kind() {
             TyKind::Error => Ty::error(),
+            TyKind::Nothing | TyKind::Never => Ty::nothing(),
             TyKind::Record(r) => match r.field(name) {
                 Some(f) => f.ty.clone(),
                 None => {
@@ -3452,7 +3510,37 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
         }
         let sig = best?;
+        if sig.receiver.as_ref().is_some_and(is_by_ref_receiver)
+            && let Some(base) = node
+                .children()
+                .next()
+                .and_then(|f| exprs_of(&f).into_iter().next())
+        {
+            self.check_by_ref_receiver(&base, name);
+        }
         Some(self.check_args(node, &sig, &FxHashMap::default(), Some(recv), expected, &[]))
+    }
+
+    /// `xs->add(1)` modifies `xs` in place: it must be a mutable variable or property.
+    fn check_by_ref_receiver(&mut self, base: &SyntaxNode, method: &str) {
+        let ok = match base.kind() {
+            VARIABLE_EXPR | NAME_EXPR => {
+                match self.local_name(base).and_then(|n| self.lookup(&n).cloned()) {
+                    Some(l) => l.kind.mutable(),
+                    // implicit `$this->prop`
+                    None => self.implicit_this.contains(&base.text_range()),
+                }
+            }
+            PROPERTY_FETCH_EXPR | STATIC_PROPERTY_FETCH_EXPR | INDEX_EXPR => true,
+            _ => false,
+        };
+        if !ok {
+            self.error(
+                base.text_range(),
+                codes::REASSIGN_IMMUTABLE,
+                format!("`{method}` modifies its receiver in place; call it on a mutable variable (`var $x`) or property"),
+            );
+        }
     }
 
     // ------------------------------------------------------------ static access
@@ -4154,7 +4242,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             for c in &conds {
                 if let Some(tn) = stir_hir::first_type(c) {
                     // `is T` / `!is T`
-                    let test = self.lower_type_node(&tn);
+                    let test = self.pattern_type(&tn, remaining.as_ref());
                     let neg = c.has_token(BANG);
                     if let Some(cur) = &remaining {
                         let (yes, no) = (
@@ -4362,4 +4450,12 @@ impl NullableLike for Ty {
     fn is_nullable_like(&self, env: &dyn stir_types::TypeEnv) -> bool {
         !self.is_error() && stir_types::is_nullable(env, self)
     }
+}
+
+/// Extension receivers of these types are passed by reference.
+pub fn is_by_ref_receiver(ty: &Ty) -> bool {
+    matches!(
+        stir_types::without_null(ty).kind(),
+        TyKind::MutableList(_) | TyKind::MutableMap(_, _)
+    )
 }
