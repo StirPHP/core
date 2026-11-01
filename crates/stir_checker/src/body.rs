@@ -100,6 +100,10 @@ pub struct Checker<'a, 'db> {
     pub types: FxHashMap<TextRange, Ty>,
     /// Names resolved as members of `$this` (`id` → `$this->id`), for the transpiler.
     pub implicit_this: rustc_hash::FxHashSet<TextRange>,
+    /// The extension function whose body is being checked.
+    current_ext: Option<stir_hir::ItemLoc>,
+    /// Extension → extension calls (for the no-recursion rule).
+    ext_calls: Vec<(stir_hir::ItemLoc, stir_hir::ItemLoc, TextRange)>,
 }
 
 fn is_stmt_kind(k: SyntaxKind) -> bool {
@@ -236,6 +240,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             in_template: 0,
             types: FxHashMap::default(),
             implicit_this: Default::default(),
+            current_ext: None,
+            ext_calls: Vec::new(),
         }
     }
 
@@ -423,6 +429,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         });
         self.stmt_list(root);
         self.fns.pop();
+        self.check_extension_recursion();
     }
 
     /// Declaration-level rules (types written on signatures).
@@ -1064,8 +1071,71 @@ impl<'a, 'db> Checker<'a, 'db> {
                 .map(|p| (p.name.clone(), p.ty.clone())),
         );
         let this = sig.receiver.clone();
+        let loc = stir_hir::ItemLoc {
+            file: self.file,
+            index: idx as u32,
+        };
+        if this.is_some() && self.stir() {
+            self.check_inlinable(node);
+            self.current_ext = Some(loc);
+        }
         self.function_body(node, &sig, this, f.expr_body);
+        self.current_ext = None;
         self.lower_cx = saved_cx;
+    }
+
+    /// Extension functions are inlined at call sites: their bodies may only use
+    /// globals and their own parameters, and may only `return` at the end.
+    fn check_inlinable(&mut self, node: &SyntaxNode) {
+        let Some(block) = node.child(BLOCK) else {
+            return;
+        };
+        let last = block.children().filter(|c| is_stmt_kind(c.kind())).last();
+        let mut stack: Vec<SyntaxNode> = block.children().collect();
+        while let Some(n) = stack.pop() {
+            match n.kind() {
+                // nested function values have their own scope
+                LAMBDA_EXPR | CLOSURE_EXPR | ARROW_FN_EXPR => continue,
+                RETURN_STMT if Some(&n) != last.as_ref() => {
+                    self.error(n.text_range(), codes::NOT_INLINABLE, "extension functions are inlined: `return` is only allowed as the last statement");
+                }
+                GLOBAL_STMT | STATIC_VAR_STMT => {
+                    self.error(n.text_range(), codes::NOT_INLINABLE, "extension functions are inlined: `global`/`static` variables are not allowed");
+                }
+                _ => {}
+            }
+            stack.extend(n.children());
+        }
+    }
+
+    /// Reports recursion among the extension functions of this file.
+    fn check_extension_recursion(&mut self) {
+        let edges = std::mem::take(&mut self.ext_calls);
+        for (from, to, range) in &edges {
+            // is `from` reachable from `to`?
+            let mut seen = vec![*to];
+            let mut queue = vec![*to];
+            let mut cyclic = false;
+            while let Some(n) = queue.pop() {
+                if n == *from {
+                    cyclic = true;
+                    break;
+                }
+                for (a, b, _) in &edges {
+                    if *a == n && !seen.contains(b) {
+                        seen.push(*b);
+                        queue.push(*b);
+                    }
+                }
+            }
+            if cyclic {
+                self.error(
+                    *range,
+                    codes::NOT_INLINABLE,
+                    "extension functions are inlined and can't be recursive",
+                );
+            }
+        }
     }
 
     /// Checks a function/method body against its signature.
@@ -1164,6 +1234,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
         self.check_class_header(&model);
         self.check_variance(&model);
+        self.check_class_rules(&model);
         // primary constructor defaults
         if let Some(ctor) = node.child(PRIMARY_CTOR) {
             for p in ctor.descendants().filter(|d| d.kind() == PARAM) {
@@ -2975,6 +3046,173 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
+    /// Data classes, sealed hierarchies, abstract members and overrides.
+    fn check_class_rules(&mut self, model: &Rc<ClassModel<'db>>) {
+        let def = model.def;
+        if !self.stir() && model.origin != stir_db::FileOrigin::Source {
+            return;
+        }
+        if def.mods.is_data {
+            match &def.primary_ctor {
+                None => self.error(
+                    def.name_range,
+                    codes::DATA_CLASS,
+                    "a data class needs a primary constructor: `data class Name(val x: T)`",
+                ),
+                Some(params) => {
+                    for p in params {
+                        if p.promoted.as_ref().is_none_or(|pr| !pr.immutable) {
+                            self.error(
+                                p.range,
+                                codes::DATA_CLASS,
+                                format!(
+                                    "data class properties are immutable: declare `{}` as `val`",
+                                    p.name
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let supers = self.ctx.supers(model);
+        // sealed supertypes must be declared in the same file
+        for sup in supers.parent.iter().chain(&supers.interfaces) {
+            if let TyKind::Class { name, .. } = sup.kind()
+                && let Some(sc) = self.ctx.class(name)
+                && sc.def.mods.is_sealed
+                && sc.file != model.file
+            {
+                self.error(
+                    def.name_range,
+                    codes::INSTANTIATION,
+                    format!(
+                        "`{}` is sealed: it can only be extended in the file that declares it",
+                        sc.name
+                    ),
+                );
+            }
+        }
+        let concrete = def.kind == ClassKind::Class && !def.mods.is_abstract && !def.mods.is_sealed
+            || def.kind == ClassKind::Enum;
+        let self_ty = model.self_ty();
+        let ancestors = self.ctx.ancestors(&self_ty);
+        // methods visible on the class: name -> (declaring class, def, map, is_abstract)
+        let mut impls: Vec<SmolStr> = Vec::new();
+        let mut abstracts: Vec<(SmolStr, SmolStr)> = Vec::new();
+        for anc in &ancestors {
+            let TyKind::Class { name, .. } = anc.kind() else {
+                continue;
+            };
+            let Some(c) = self.ctx.class(name) else {
+                continue;
+            };
+            for m in &c.def.methods {
+                let lname = SmolStr::new(m.name.to_ascii_lowercase());
+                let is_abstract = c.kind() == ClassKind::Interface
+                    || m.mods.is_abstract
+                    || !m.has_body && c.kind() != ClassKind::Trait;
+                if is_abstract {
+                    if !impls.contains(&lname) && !abstracts.iter().any(|(n, _)| *n == lname) {
+                        abstracts.push((lname, SmolStr::new(format!("{}::{}", c.name, m.name))));
+                    }
+                } else if !impls.contains(&lname) {
+                    impls.push(lname);
+                }
+            }
+        }
+        if concrete {
+            let missing: Vec<String> = abstracts
+                .iter()
+                .filter(|(n, _)| !impls.contains(n))
+                .filter(|(n, _)| {
+                    !(def.kind == ClassKind::Enum
+                        && matches!(n.as_str(), "cases" | "from" | "tryfrom"))
+                })
+                .map(|(_, full)| format!("`{full}`"))
+                .collect();
+            if !missing.is_empty() && model.is_stir() {
+                self.error(
+                    def.name_range,
+                    codes::MISSING_IMPLEMENTATION,
+                    format!("`{}` must implement {}", model.name, missing.join(", ")),
+                );
+            }
+        }
+        // overrides must be compatible with what they override
+        for m in &def.methods {
+            if m.name.eq_ignore_ascii_case("__construct") {
+                continue;
+            }
+            let sub = self.ctx.method_sig(model, m);
+            for anc in ancestors.iter().skip(1) {
+                let TyKind::Class { name, args } = anc.kind() else {
+                    continue;
+                };
+                let Some(c) = self.ctx.class(name) else {
+                    continue;
+                };
+                let Some(sm) = c
+                    .def
+                    .methods
+                    .iter()
+                    .find(|x| x.name.eq_ignore_ascii_case(&m.name))
+                else {
+                    continue;
+                };
+                if sm.mods.visibility == Visibility::Private {
+                    continue;
+                }
+                let map = self.ctx.subst_map(&c, args);
+                let sup = self.ctx.method_sig(&c, sm);
+                let required = |s: &FnSig| {
+                    s.params
+                        .iter()
+                        .filter(|p| !p.optional && !p.variadic)
+                        .count()
+                };
+                if required(&sub) > required(&sup)
+                    || (sub.params.len() < sup.params.len()
+                        && !sub.params.last().is_some_and(|p| p.variadic))
+                {
+                    self.error(
+                        m.name_range,
+                        codes::INCOMPATIBLE_OVERRIDE,
+                        format!(
+                            "`{}` doesn't accept the same parameters as `{}::{}`",
+                            m.name, c.name, sm.name
+                        ),
+                    );
+                    break;
+                }
+                for (sp, bp) in sub.params.iter().zip(&sup.params) {
+                    let want = stir_types::subst(&bp.ty, &map);
+                    if !sp.ty.is_error() && !want.is_error() && !self.assignable(&want, &sp.ty) {
+                        self.error(
+                            sp.range,
+                            codes::INCOMPATIBLE_OVERRIDE,
+                            format!(
+                                "parameter `{}` must accept `{want}` (overriding `{}::{}`)",
+                                sp.name, c.name, sm.name
+                            ),
+                        );
+                    }
+                }
+                let sup_ret = stir_types::subst(&sup.ret, &map);
+                let sup_ret = resolve_self(&sup_ret, &self_ty);
+                let sub_ret = resolve_self(&sub.ret, &self_ty);
+                if sup.ret_declared
+                    && !sub_ret.is_error()
+                    && !sup_ret.is_error()
+                    && !self.assignable(&sub_ret, &sup_ret)
+                {
+                    self.error(m.name_range, codes::INCOMPATIBLE_OVERRIDE, format!("return type `{sub_ret}` is not compatible with `{sup_ret}` of `{}::{}`", c.name, sm.name));
+                }
+                break;
+            }
+        }
+    }
+
     /// Declaration-site variance: `out T` only in output positions, `in T` only in inputs.
     fn check_variance(&mut self, model: &Rc<ClassModel<'db>>) {
         use stir_types::Variance;
@@ -3695,8 +3933,9 @@ impl<'a, 'db> Checker<'a, 'db> {
         expected: Option<&Ty>,
     ) -> Option<Ty> {
         let candidates = self.ctx.extensions(name);
-        let mut best: Option<Rc<FnSig>> = None;
+        let mut best: Option<(Rc<FnSig>, stir_hir::ItemLoc)> = None;
         for loc in candidates {
+            let here = loc;
             let sig = self.ctx.function_sig(loc);
             let Some(r) = &sig.receiver else { continue };
             let mut inf = Inference::new(sig.type_params.iter().map(|p| p.id));
@@ -3708,16 +3947,19 @@ impl<'a, 'db> Checker<'a, 'db> {
                 let better = match &best {
                     None => true,
                     Some(b) => {
-                        let br = b.receiver.clone().unwrap();
+                        let br = b.0.receiver.clone().unwrap();
                         self.assignable(&want, &br) && !self.assignable(&br, &want)
                     }
                 };
                 if better {
-                    best = Some(sig);
+                    best = Some((sig, here));
                 }
             }
         }
-        let sig = best?;
+        let (sig, loc) = best?;
+        if let Some(cur) = self.current_ext {
+            self.ext_calls.push((cur, loc, node.text_range()));
+        }
         if sig.receiver.as_ref().is_some_and(is_by_ref_receiver)
             && let Some(base) = node
                 .children()

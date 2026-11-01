@@ -1,0 +1,24 @@
+namespace App
+
+function String.shout(): String = this->uppercase() . "!"
+function Int.twice(): Int = this * 2
+
+function Int.fact(): Int = if (this <= 1) 1 else this * (this - 1)->fact() // error: SPHP0029
+
+function Int.ping(): Int = this->pong() // error: SPHP0029
+function Int.pong(): Int = this->ping() // error: SPHP0029
+
+function String.early(): String { // ok: single return at the end
+    val t = trim(this)
+    return t
+}
+
+function String.middle(): String {
+    if (this == "") {
+        return "empty" // error: SPHP0029
+    }
+    return this
+}
+
+val s: String = "hi"->shout()
+val n: Int = 2->twice()

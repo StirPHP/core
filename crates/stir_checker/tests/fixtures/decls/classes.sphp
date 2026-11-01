@@ -1,0 +1,45 @@
+namespace App
+
+interface Shape {
+    function area(): Float
+    function name(): String
+}
+
+class Circle(val r: Float) : Shape {
+    function area(): Float = 3.14 * r * r
+    function name(): String = "circle"
+}
+
+class Broken : Shape { // error: SPHP0030
+    function area(): Float = 1.0
+}
+
+abstract class Animal {
+    abstract function sound(): String
+    function describe(): String = "says ${sound()}"
+}
+
+class Dog : Animal() {
+    function sound(): String = "woof"
+}
+
+class Cat : Animal() { // error: SPHP0030
+}
+
+open class Base {
+    function make(x: Int): Int = x
+}
+
+class Narrow : Base() {
+    function make(x: String): Int = 1 // error: SPHP0031
+}
+
+class WrongRet : Base() {
+    function make(x: Int): String = "a" // error: SPHP0031
+}
+
+data class Point(val x: Int, val y: Int)
+data class Bad(val x: Int, var $y: Int) // error: SPHP0032
+
+val p = new Point(1, 2)
+echo p->x

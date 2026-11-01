@@ -29,3 +29,7 @@ pub const DUPLICATE_DECLARATION: &str = "SPHP0025";
 pub const UNSUPPORTED_SYNTAX: &str = "SPHP0026";
 pub const VARIANCE: &str = "SPHP0027";
 pub const TYPE_BOUND: &str = "SPHP0028";
+pub const NOT_INLINABLE: &str = "SPHP0029";
+pub const MISSING_IMPLEMENTATION: &str = "SPHP0030";
+pub const INCOMPATIBLE_OVERRIDE: &str = "SPHP0031";
+pub const DATA_CLASS: &str = "SPHP0032";
