@@ -2465,16 +2465,27 @@ impl<'a, 'db> Checker<'a, 'db> {
         let root = stir_db::parse(self.ctx.db, loc.file).syntax();
         let node = ptr.to_node(&root);
         // literal constants only (no evaluation)
-        let stir = loc.file.dialect(self.ctx.db) == Dialect::Stir;
+        // the using file's family: `.sphp` code sees PHP's constants as `Int`, `String`, ...
+        let stir = self.stir();
+        let (int, float, boolean) = if stir {
+            (Ty::int(), Ty::float(), Ty::bool())
+        } else {
+            (Ty::php_int(), Ty::php_float(), Ty::php_bool())
+        };
         let ty = match node.kind() {
             LITERAL => match op_token(&node).map(|t| (t.kind(), t.text().to_owned())) {
-                Some((INT_NUMBER, _)) => Ty::int(),
-                Some((FLOAT_NUMBER, _)) => Ty::float(),
+                Some((INT_NUMBER, _)) => int,
+                Some((FLOAT_NUMBER, _)) => float,
                 _ => Ty::any_platform(),
             },
+            STRING_LITERAL if !stir => match unquoted_literal(&node) {
+                Some(value) => Ty::literal(LitValue::String(value.into()), Family::Php),
+                None => Ty::php_string(),
+            },
+            INTERP_STRING if !stir => Ty::php_string(),
             STRING_LITERAL | INTERP_STRING => Ty::string(),
             NAME_EXPR => match text_of(&node).to_ascii_lowercase().as_str() {
-                "true" | "false" => Ty::bool(),
+                "true" | "false" => boolean,
                 "null" => Ty::null(),
                 _ => Ty::any_platform(),
             },
@@ -2486,15 +2497,14 @@ impl<'a, 'db> Checker<'a, 'db> {
                     .and_then(op_token)
                     .map(|t| (t.kind(), t.text().to_owned()));
                 match lit {
-                    Some((INT_NUMBER, _)) => Ty::int(),
-                    Some((FLOAT_NUMBER, t)) if t == "9223372036854775808" => Ty::int(),
-                    Some((FLOAT_NUMBER, _)) => Ty::float(),
-                    _ => Ty::union([Ty::int(), Ty::float()]),
+                    Some((INT_NUMBER, _)) => int,
+                    Some((FLOAT_NUMBER, t)) if t == "9223372036854775808" => int,
+                    Some((FLOAT_NUMBER, _)) => float,
+                    _ => Ty::union([int, float]),
                 }
             }
             _ => Ty::any_platform(),
         };
-        let _ = stir;
         ty
     }
 
@@ -2692,12 +2702,16 @@ impl<'a, 'db> Checker<'a, 'db> {
         let is_float =
             |t: &Ty| self.assignable(t, &Ty::float()) || self.assignable(t, &Ty::php_float());
         let is_int = |t: &Ty| self.assignable(t, &Ty::int()) || self.assignable(t, &Ty::php_int());
+        let unknown =
+            |t: &Ty| t.is_any_platform() || matches!(t.kind(), TyKind::Mixed | TyKind::Error);
         let (int, float) = if php {
             (Ty::php_int(), Ty::php_float())
         } else {
             (Ty::int(), Ty::float())
         };
-        if is_int(l) && is_int(r) {
+        if unknown(l) || unknown(r) {
+            Ty::union([int, float])
+        } else if is_int(l) && is_int(r) {
             match op {
                 // StirPHP integer division truncates (lowered to `intdiv`); PHP's `/` may produce a float.
                 SLASH if php => Ty::union([int, float]),
@@ -2705,7 +2719,13 @@ impl<'a, 'db> Checker<'a, 'db> {
                 _ => int,
             }
         } else if (is_float(l) || is_int(l)) && (is_float(r) || is_int(r)) {
-            if op == PERCENT { int } else { float }
+            if op == PERCENT {
+                int
+            } else if l.is_union() || r.is_union() {
+                Ty::union([int, float])
+            } else {
+                float
+            }
         } else {
             Ty::union([int, float])
         }
@@ -5527,6 +5547,16 @@ fn resolve_self(ret: &Ty, recv: &Ty) -> Ty {
 }
 
 /// After assigning `value` to a variable declared `declared`, its current type.
+/// The value of a string literal without escapes or interpolation.
+fn unquoted_literal(node: &SyntaxNode) -> Option<String> {
+    let text = text_of(node);
+    let inner = text
+        .strip_prefix('\'')
+        .and_then(|t| t.strip_suffix('\''))
+        .or_else(|| text.strip_prefix('"').and_then(|t| t.strip_suffix('"')))?;
+    (!inner.contains(['\\', '$'])).then(|| inner.to_owned())
+}
+
 fn is_superglobal(name: &str) -> bool {
     matches!(
         name,
