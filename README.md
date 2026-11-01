@@ -7,11 +7,36 @@ TypeScript treats `.js` + JSDoc.
 
 The toolchain is written in Rust; the binary is `sphp`.
 
+## Install
+
+Linux and macOS:
+
+```sh
+curl -fsSL https://stirphp.github.io/core/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://stirphp.github.io/core/install.ps1 | iex
+```
+
+This installs the latest release for your platform, after checking it against the
+release's `SHA256SUMS`, and needs no admin rights. Set `SPHP_VERSION` to a version
+or to `nightly`, and `SPHP_INSTALL_DIR` to choose where it goes. The scripts are
+[`install.sh`](install.sh) and [`install.ps1`](install.ps1); archives for every
+platform are on the [releases page](https://github.com/StirPHP/core/releases).
+
+To build from source:
+
+```sh
+git submodule update --init --depth 1 crates/stir_stubs/phpstorm-stubs
+cargo install --path crates/stir_cli
+```
+
 ## Usage
 
 ```sh
-cargo build --release -p stir_cli      # produces target/release/sphp
-
 sphp init                  # create sphp.toml and src/main.sphp (interactive; --yes for defaults)
 sphp check                 # type-check the project (--format json, --max-errors N)
 sphp build                 # transpile src/ to build/ (+ source maps)
