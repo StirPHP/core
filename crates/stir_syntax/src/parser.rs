@@ -74,6 +74,8 @@ pub(crate) struct Parser<'s> {
     nl_sensitive: Vec<bool>,
     /// Inside `when` conditions a `->` followed by whitespace ends the expression.
     spaced_arrow_stops: Vec<bool>,
+    /// In a `foreach (... as ...)` subject, `as` is not a cast.
+    no_as: Vec<bool>,
     fuel: std::cell::Cell<u32>,
 }
 
@@ -115,6 +117,7 @@ impl<'s> Parser<'s> {
             events: Vec::new(),
             nl_sensitive: vec![dialect == Dialect::Stir],
             spaced_arrow_stops: vec![false],
+            no_as: vec![false],
             fuel: std::cell::Cell::new(256),
         }
     }
@@ -234,6 +237,17 @@ impl<'s> Parser<'s> {
         let r = f(self);
         self.spaced_arrow_stops.pop();
         r
+    }
+
+    pub(crate) fn with_no_as<T>(&mut self, on: bool, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.no_as.push(on);
+        let r = f(self);
+        self.no_as.pop();
+        r
+    }
+
+    pub(crate) fn as_allowed(&self) -> bool {
+        !*self.no_as.last().unwrap()
     }
 
     /// Is the current `->` an arm/lambda arrow rather than member access?

@@ -89,6 +89,15 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         ));
         stub_count += 1;
     }
+    for lib in stir_stubs::stdlib_files() {
+        files.push(SourceFile::new(
+            &db,
+            PathBuf::from(format!("stdlib://{}", lib.path)),
+            lib.text.to_owned(),
+            Dialect::Stir,
+            FileOrigin::Stub,
+        ));
+    }
 
     let vendor_count = vendor_texts.len();
     for (path, text) in vendor_texts {

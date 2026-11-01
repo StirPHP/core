@@ -24,25 +24,17 @@ fn stubs(db: &RootDatabase) -> Vec<SourceFile> {
 }
 
 fn stdlib(db: &RootDatabase) -> Vec<SourceFile> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stdlib");
-    let mut out = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
-        paths.sort();
-        for p in paths {
-            if p.extension().is_some_and(|e| e == "sphp") {
-                let text = std::fs::read_to_string(&p).unwrap();
-                out.push(SourceFile::new(
-                    db,
-                    p,
-                    text,
-                    Dialect::Stir,
-                    FileOrigin::Vendor,
-                ));
-            }
-        }
-    }
-    out
+    stir_stubs::stdlib_files()
+        .map(|f| {
+            SourceFile::new(
+                db,
+                format!("stdlib://{}", f.path).into(),
+                f.text.to_owned(),
+                Dialect::Stir,
+                FileOrigin::Stub,
+            )
+        })
+        .collect()
 }
 
 fn expected(text: &str) -> Vec<(usize, String, String)> {

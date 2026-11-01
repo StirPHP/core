@@ -228,7 +228,7 @@ pub(crate) fn expr_bp(p: &mut Parser<'_>, min_bp: u8) -> Option<CompletedMarker>
             continue;
         }
 
-        if p.stir() && p.at(AS_KW) {
+        if p.stir() && p.at(AS_KW) && p.as_allowed() {
             if bp::AS < min_bp {
                 break;
             }
@@ -664,7 +664,7 @@ fn primary(p: &mut Parser<'_>) -> Option<CompletedMarker> {
         L_PAREN => {
             let m = p.start();
             p.bump(L_PAREN);
-            p.with_newlines(false, |p| expr(p));
+            p.with_no_as(false, |p| p.with_newlines(false, |p| expr(p)));
             p.expect(R_PAREN);
             m.complete(p, PAREN_EXPR)
         }
@@ -748,6 +748,16 @@ fn primary(p: &mut Parser<'_>) -> Option<CompletedMarker> {
         IDENT | NAME_QUALIFIED | NAME_FULLY_QUALIFIED | NAME_RELATIVE | STATIC_KW => {
             let m = p.start();
             name_ref(p);
+            m.complete(p, NAME_EXPR)
+        }
+        LIST_KW | ARRAY_KW | PRINT_KW | DEFAULT_KW | CLASS_KW | MATCH_KW | EMPTY_KW
+            if stir && !matches!(p.nth(1), L_PAREN) =>
+        {
+            // reserved words can name StirPHP values (`val list = ...`)
+            let m = p.start();
+            let n = p.start();
+            p.bump_remap(IDENT);
+            n.complete(p, NAME_REF);
             m.complete(p, NAME_EXPR)
         }
         k if k.is_keyword()
@@ -949,7 +959,11 @@ fn arrow_fn(p: &mut Parser<'_>, m: Option<crate::parser::Marker>) -> CompletedMa
 pub(super) fn lambda(p: &mut Parser<'_>) -> CompletedMarker {
     let m = p.start();
     p.bump(L_CURLY);
-    if at_lambda_params(p) {
+    if p.at(ARROW) {
+        let params = p.start();
+        params.complete(p, LAMBDA_PARAM_LIST);
+        p.bump(ARROW);
+    } else if at_lambda_params(p) {
         let params = p.start();
         loop {
             let prm = p.start();

@@ -337,7 +337,7 @@ fn foreach_stmt(p: &mut Parser<'_>) {
     p.bump(FOREACH_KW);
     p.expect(L_PAREN);
     p.with_newlines(false, |p| {
-        expr(p);
+        p.with_no_as(true, |p| expr(p));
         p.expect(AS_KW);
         p.eat(AMP);
         expr(p);

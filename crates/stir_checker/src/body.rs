@@ -2196,7 +2196,11 @@ impl<'a, 'db> Checker<'a, 'db> {
                     let both_num = self.is_numeric(&l) && self.is_numeric(&r);
                     let both_str =
                         self.assignable(&l, &Ty::string()) && self.assignable(&r, &Ty::string());
-                    if !both_num && !both_str {
+                    let orderable = Ty::union([Ty::int(), Ty::float(), Ty::string()]);
+                    let both_orderable = self.assignable(&l, &orderable)
+                        && self.assignable(&r, &orderable)
+                        && stir_types::are_comparable(self.ctx, &l, &r);
+                    if !both_num && !both_str && !both_orderable {
                         self.error(
                             op_range,
                             codes::INCOMPATIBLE_COMPARISON,
@@ -3968,21 +3972,17 @@ impl<'a, 'db> Checker<'a, 'db> {
         let mut last = Ty::unit();
         let n = stmts.len();
         for (i, s) in stmts.iter().enumerate() {
-            if i + 1 == n && s.kind() == EXPR_STMT {
-                if let Some(e) = exprs_of(s).first() {
-                    let unit_expected = exp_ret
-                        .as_ref()
-                        .is_some_and(|r| matches!(r.kind(), TyKind::Unit));
-                    let t = self.expr(
-                        e,
-                        if unit_expected {
-                            None
-                        } else {
-                            exp_ret.as_ref()
-                        },
-                    );
-                    last = if unit_expected { Ty::unit() } else { t };
-                }
+            if i + 1 == n && matches!(s.kind(), EXPR_STMT | IF_STMT) {
+                let unit_expected = exp_ret
+                    .as_ref()
+                    .is_some_and(|r| matches!(r.kind(), TyKind::Unit));
+                let exp = if unit_expected {
+                    None
+                } else {
+                    exp_ret.as_ref()
+                };
+                let t = self.stmt_value(s, exp);
+                last = if unit_expected { Ty::unit() } else { t };
             } else {
                 self.stmt(s);
             }
@@ -4007,10 +4007,8 @@ impl<'a, 'db> Checker<'a, 'db> {
                 let mut last = Ty::unit();
                 let n = stmts.len();
                 for (i, s) in stmts.iter().enumerate() {
-                    if i + 1 == n && s.kind() == EXPR_STMT {
-                        if let Some(e) = exprs_of(s).first() {
-                            last = self.expr(e, expected);
-                        }
+                    if i + 1 == n && matches!(s.kind(), EXPR_STMT | IF_STMT) {
+                        last = self.stmt_value(s, expected);
                     } else {
                         self.stmt(s);
                         if self.diverges(s) {
@@ -4030,6 +4028,74 @@ impl<'a, 'db> Checker<'a, 'db> {
                 }
             }
             _ => self.expr(node, expected),
+        }
+    }
+
+    /// The value of a statement used in value position (last statement of a
+    /// lambda or branch block): an expression, or an `if`/`else` chain.
+    fn stmt_value(&mut self, s: &SyntaxNode, expected: Option<&Ty>) -> Ty {
+        match s.kind() {
+            EXPR_STMT => match exprs_of(s).first() {
+                Some(e) => self.expr(e, expected),
+                None => Ty::unit(),
+            },
+            IF_STMT if s.child(ELSE_CLAUSE).is_some() => {
+                let cond = exprs_of(s).into_iter().next();
+                let (t, f) = cond.as_ref().map(|c| self.condition(c)).unwrap_or_default();
+                let snap = self.snapshot();
+                self.apply_facts(&t);
+                let mut values = Vec::new();
+                if let Some(body) = s.children().find(|c| is_stmt_kind(c.kind())) {
+                    values.push(self.branch_stmt_value(&body, expected));
+                }
+                self.restore_types(&snap);
+                self.apply_facts(&f);
+                for clause in s.children() {
+                    match clause.kind() {
+                        ELSEIF_CLAUSE => {
+                            let c = exprs_of(&clause).into_iter().next();
+                            let (t2, f2) =
+                                c.as_ref().map(|c| self.condition(c)).unwrap_or_default();
+                            let snap2 = self.snapshot();
+                            self.apply_facts(&t2);
+                            if let Some(body) = clause.children().find(|c| is_stmt_kind(c.kind())) {
+                                values.push(self.branch_stmt_value(&body, expected));
+                            }
+                            self.restore_types(&snap2);
+                            self.apply_facts(&f2);
+                        }
+                        ELSE_CLAUSE => {
+                            if let Some(body) = clause.children().find(|c| is_stmt_kind(c.kind())) {
+                                values.push(self.branch_stmt_value(&body, expected));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                self.restore_types(&snap);
+                values
+                    .into_iter()
+                    .reduce(|a, b| stir_types::join(self.ctx, &a, &b))
+                    .unwrap_or_else(Ty::unit)
+            }
+            _ => {
+                self.stmt(s);
+                Ty::unit()
+            }
+        }
+    }
+
+    fn branch_stmt_value(&mut self, body: &SyntaxNode, expected: Option<&Ty>) -> Ty {
+        match body.kind() {
+            BLOCK => self.branch_value(body, expected),
+            _ => {
+                let t = self.stmt_value(body, expected);
+                if self.diverges(body) {
+                    Ty::nothing()
+                } else {
+                    t
+                }
+            }
         }
     }
 

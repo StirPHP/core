@@ -154,7 +154,15 @@ pub(super) fn stmt_end(p: &mut Parser<'_>) {
     if p.eat(SEMI) || p.at(CLOSE_TAG) {
         return;
     }
-    if p.stir() && (p.newline_before() || p.at(R_CURLY) || p.at(EOF)) {
+    if p.stir()
+        && (p.newline_before()
+            || p.at(R_CURLY)
+            || p.at(EOF)
+            // `if (c) a else b` on one line
+            || p.at(ELSE_KW)
+            || p.at(ELSEIF_KW)
+            || p.at(R_PAREN))
+    {
         return;
     }
     if p.at(EOF) {

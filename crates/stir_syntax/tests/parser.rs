@@ -200,3 +200,5 @@ fn recovers_from_garbage() {
 fn errors_snapshot() {
     insta::assert_snapshot!(parse("<?php $a = ; if ($b { }", Dialect::Php).debug_tree());
 }
+
+stir!(stir_stdlib_gaps, "function <T> List<T?>.filterNotNull(): List<T> = []\nforeach (xs as $x) { echo $x }\nforeach (m as $k => $v) {}\nval f = { x: Int -> if (x > 0) 1 else 2 }\nval g = { -> 1 }\nval list = xs\necho list->size()\n");

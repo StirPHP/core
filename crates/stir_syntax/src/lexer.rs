@@ -430,11 +430,8 @@ impl<'a> Lexer<'a> {
             return;
         }
 
-        // close tag
-        if c == b'?' && b.get(1) == Some(&b'>') {
-            if self.dialect == Dialect::Stir {
-                self.error("`?>` is not allowed in StirPHP files");
-            }
+        // close tag (StirPHP files have no inline HTML: `List<T?>` is a type)
+        if c == b'?' && b.get(1) == Some(&b'>') && self.dialect == Dialect::Php {
             let mut len = 2;
             if b.get(2) == Some(&b'\n') {
                 len = 3;

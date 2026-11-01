@@ -75,7 +75,20 @@ pub struct StubFile {
     pub text: &'static str,
 }
 
+/// A file of the StirPHP standard library (`stdlib/` at the repository root).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StdlibFile {
+    /// File name, e.g. `"String.sphp"`.
+    pub path: &'static str,
+    pub text: &'static str,
+}
+
 include!(concat!(env!("OUT_DIR"), "/stubs.rs"));
+
+/// The embedded StirPHP standard library sources.
+pub fn stdlib_files() -> impl Iterator<Item = StdlibFile> {
+    STDLIB.iter().copied()
+}
 
 /// All embedded stub files, grouped by extension in [`EXTENSIONS`] order and
 /// sorted by path within each extension.
