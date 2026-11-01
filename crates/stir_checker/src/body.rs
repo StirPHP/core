@@ -354,6 +354,16 @@ impl<'a, 'db> Checker<'a, 'db> {
             .push(Diagnostic::error(self.path.clone(), range, code, msg));
     }
 
+    /// In a `.php` file, an override's types are mostly PHPDoc, which PHP doesn't
+    /// enforce: reported only above the level WordPress-style projects run at.
+    fn tag_php_override(&mut self) {
+        if !self.stir()
+            && let Some(d) = self.diags.last_mut()
+        {
+            d.php_level = Some(6);
+        }
+    }
+
     /// The last diagnostic is about only some members of a union: a level 7 problem.
     fn tag_partial_union(&mut self) {
         if let Some(d) = self.diags.last_mut() {
@@ -402,6 +412,24 @@ impl<'a, 'db> Checker<'a, 'db> {
     /// Reports a mismatch if `from` is not assignable to `to`.
     fn check_assign(&mut self, range: TextRange, from: &Ty, to: &Ty, what: &str) {
         if from.is_error() || to.is_error() {
+            return;
+        }
+        // PHP code isn't asked to prove `non-empty-string`, `non-negative-int`, ...
+        let widened;
+        let to = if self.stir() {
+            to
+        } else {
+            widened = widen_refinements(to);
+            &widened
+        };
+        // `$this` in a trait is whichever class uses it
+        if !self.stir()
+            && self
+                .class
+                .as_ref()
+                .is_some_and(|c| c.kind() == ClassKind::Trait)
+            && matches!(from.kind(), TyKind::SelfType { .. })
+        {
             return;
         }
         if let Err(m) = stir_types::check_assignable(self.ctx, from, to) {
@@ -2405,7 +2433,12 @@ impl<'a, 'db> Checker<'a, 'db> {
                 if let Some(t) = self.implicit_property(node, name, true) {
                     return t;
                 }
-                if is_superglobal(name) || (self.probing > 0 && !self.stir()) {
+                if is_superglobal(name) {
+                    return Ty::any_platform();
+                }
+                if self.probing > 0 && !self.stir() {
+                    // from here on, it may exist
+                    self.declare(name, Ty::any_platform(), LocalKind::Php, node.text_range());
                     return Ty::any_platform();
                 }
                 if self.stir() || self.fns.len() > 1 {
@@ -3655,6 +3688,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                                 sp.name, c.name, sm.name
                             ),
                         );
+                        self.tag_php_override();
                     }
                 }
                 let sup_ret = stir_types::subst(&sup.ret, &map);
@@ -3666,6 +3700,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     && !self.assignable(&sub_ret, &sup_ret)
                 {
                     self.error(m.name_range, codes::INCOMPATIBLE_OVERRIDE, format!("return type `{sub_ret}` is not compatible with `{sup_ret}` of `{}::{}`", c.name, sm.name));
+                    self.tag_php_override();
                 }
                 break;
             }
