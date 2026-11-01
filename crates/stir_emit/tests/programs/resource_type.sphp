@@ -1,0 +1,25 @@
+class Reader(private val stream: resource) {
+    function all(): string = stream_get_contents($this->stream) as string
+}
+
+function write(stream: resource, text: string): Unit {
+    fwrite(stream, text)
+    rewind(stream)
+}
+
+function kind(v: unknown): string {
+    if (v is resource) {
+        return "resource"
+    }
+    return "other"
+}
+
+val stream = fopen("php://memory", "w+") as resource
+write(stream, "hello\n")
+echo new Reader(stream)->all()
+echo kind(stream) . "\n"
+echo kind("x") . "\n"
+val checked = (stream as unknown) as resource
+echo kind(checked) . "\n"
+fclose(stream)
+echo kind(stream) . "\n"

@@ -273,6 +273,9 @@ impl TypeCtx<'_> {
             if stir && text == "unknown" {
                 return TypeRefKind::Php(PhpBuiltin::Unknown);
             }
+            if stir && text == "resource" {
+                return TypeRefKind::DocKeyword(DocKeyword::Resource);
+            }
             let php = if stir {
                 PhpBuiltin::from_name(text)
             } else {

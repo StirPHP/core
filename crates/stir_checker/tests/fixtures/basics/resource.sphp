@@ -1,0 +1,42 @@
+class Reader {
+    private var $stream: resource? = null
+
+    function open(path: string): bool {
+        val handle = fopen(path, "rb")
+        if (handle === false) {
+            return false
+        }
+        $this->stream = handle
+        return true
+    }
+
+    function read(n: int): string|false {
+        val stream = $this->stream
+        if (stream === null) {
+            return false
+        }
+        return fread(stream, n)
+    }
+}
+
+function write(stream: resource): Unit {
+    fwrite(stream, "x")
+}
+
+function rejected(path: string): Unit {
+    write(path) // error: SPHP0005
+    write(fopen(path, "rb")) // error: SPHP0005
+    fwrite(path, "x") // error: SPHP0005
+    val s: string = fopen(path, "rb") // error: SPHP0005
+}
+
+function narrowed(v: unknown): Unit {
+    if (is_resource(v)) {
+        write(v)
+    }
+    if (v is resource) {
+        write(v)
+    }
+    write(v as resource)
+    write(v) // error: SPHP0005
+}

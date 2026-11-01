@@ -2716,6 +2716,7 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                 call("\\is_string")
             }
             TyKind::Bool | TyKind::PhpBool => call("\\is_bool"),
+            TyKind::Resource => call("\\is_resource"),
             TyKind::Null | TyKind::Unit | TyKind::Void => v.clone().identical(Expr::null()),
             TyKind::List(_) | TyKind::MutableList(_) | TyKind::PhpList { .. } => call("\\is_array")
                 .and(Expr::call_fn(

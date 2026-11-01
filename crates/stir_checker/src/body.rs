@@ -1884,6 +1884,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     "is_null" => Ty::null(),
                     "is_array" => Ty::php_array(),
                     "is_object" => Ty::object(),
+                    "is_resource" => Ty::resource(),
                     _ => return Default::default(),
                 };
                 let Some(arg) = node

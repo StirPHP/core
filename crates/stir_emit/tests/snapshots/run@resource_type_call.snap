@@ -1,0 +1,49 @@
+---
+source: crates/stir_emit/tests/programs.rs
+expression: out.code
+---
+<?php
+
+declare(strict_types=1);
+
+final class Reader
+{
+    /** @param resource $stream */
+    public function __construct(
+        private readonly mixed $stream,
+    ) {
+    }
+
+    public function all(): string
+    {
+        $__c1 = \stream_get_contents($this->stream);
+        return \is_string($__c1) ? $__c1 : throw new \TypeError('cast to string failed');
+    }
+}
+
+/** @param resource $stream */
+function write($stream, string $text): void
+{
+    \fwrite($stream, $text);
+    \rewind($stream);
+}
+
+function kind(mixed $v): string
+{
+    if (\is_resource($v)) {
+        return 'resource';
+    }
+    return 'other';
+}
+
+$__c2 = \fopen('php://memory', 'w+');
+$stream = \is_resource($__c2) ? $__c2 : throw new \TypeError('cast to resource failed');
+\write($stream, "hello\n");
+echo (new \Reader($stream))->all();
+echo \kind($stream) . "\n";
+echo \kind('x') . "\n";
+$__c3 = $stream;
+$checked = \is_resource($__c3) ? $__c3 : throw new \TypeError('cast to resource failed');
+echo \kind($checked) . "\n";
+\fclose($stream);
+echo \kind($stream) . "\n";

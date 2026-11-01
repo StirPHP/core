@@ -139,6 +139,9 @@ if (raw is Map<String, Int>) { echo raw->size() }
 // `unknown` holds any value (PHP's `mixed`), and can't be used until it's narrowed
 function describe(v: unknown): String = if (v is String) v else "other"
 
+// `resource` is PHP's stream or handle. PHP has no native type for it, so it's checked here but not at runtime
+function firstLine(stream: resource): String = fgets(stream) as String
+
 // Generics with bounds and variance
 interface Source<out T> { function next(): T }
 interface Shape { function area(): Float }
