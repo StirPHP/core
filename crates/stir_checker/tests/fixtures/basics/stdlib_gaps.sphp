@@ -1,0 +1,18 @@
+namespace App
+
+function <K of Int | String, T> group(xs: List<T>, key: (T) -> K): MutableMap<K, MutableList<T>> {
+    var $g: MutableMap<K, MutableList<T>> = []
+    foreach (xs as $x) {
+        val k = key($x)
+        if ($g[k] == null) {
+            $g[k] = []
+        }
+        $g[k][] = $x
+    }
+    return $g
+}
+
+val parts = explode(",", "a,b") as List<String>
+val minInt: Int = PHP_INT_MIN
+val pos = mb_strpos("abc", "b", 1)
+echo parts[0]

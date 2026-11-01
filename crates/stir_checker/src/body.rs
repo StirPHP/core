@@ -108,6 +108,9 @@ pub struct Checker<'a, 'db> {
     pub pattern_types: FxHashMap<TextRange, Ty>,
     /// The extension function whose body is being checked.
     current_ext: Option<stir_hir::ItemLoc>,
+    /// The call being checked targets an external (PHP) function: its PHPDoc
+    /// bounds are PHPStan-level information StirPHP values can't express.
+    bounds_external: bool,
     /// Extension → extension calls (for the no-recursion rule).
     ext_calls: Vec<(stir_hir::ItemLoc, stir_hir::ItemLoc, TextRange)>,
 }
@@ -248,6 +251,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             types: FxHashMap::default(),
             implicit_this: Default::default(),
             current_ext: None,
+            bounds_external: false,
             ext_calls: Vec::new(),
             extension_calls: FxHashMap::default(),
             function_calls: FxHashMap::default(),
@@ -1913,7 +1917,20 @@ impl<'a, 'db> Checker<'a, 'db> {
                     && !src.is_any_platform()
                     && !matches!(src.kind(), TyKind::Platform(_))
                 {
-                    let overlap = stir_types::is_assignable(self.ctx, &target, &src)
+                    let arrays = |t: &Ty| {
+                        stir_types::php_view(t)
+                            .or_else(|| Some(t.clone()))
+                            .is_some_and(|v| {
+                                matches!(
+                                    v.kind(),
+                                    TyKind::Array { .. }
+                                        | TyKind::PhpList { .. }
+                                        | TyKind::Shape(_)
+                                )
+                            })
+                    };
+                    let overlap = (arrays(&src) && arrays(&target))
+                        || stir_types::is_assignable(self.ctx, &target, &src)
                         || stir_types::is_assignable(self.ctx, &src, &target)
                         || stir_types::are_comparable(self.ctx, &src, &target);
                     if !overlap {
@@ -1974,7 +1991,18 @@ impl<'a, 'db> Checker<'a, 'db> {
                 let bt = self.expr(base, None);
                 let idx = es.get(1);
                 let it = idx.map(|i| self.expr(i, None));
-                if self.stir() && (bt.is_nullable_like(self.ctx)) {
+                // `$g[k][] = x`: the inner `$g[k]` is written through, not read
+                let written_through = node.parent().is_some_and(|p| {
+                    p.kind() == INDEX_EXPR
+                        && exprs_of(&p).first().is_some_and(|f| f == node)
+                        && is_write_target(&p)
+                });
+                let bt = if written_through {
+                    stir_types::without_null(&bt)
+                } else {
+                    bt
+                };
+                if self.stir() && (bt.is_nullable_like(self.ctx)) && !is_write_target(node) {
                     self.error(
                         base.text_range(),
                         codes::NULLABLE_ACCESS,
@@ -2261,7 +2289,20 @@ impl<'a, 'db> Checker<'a, 'db> {
                 "null" => Ty::null(),
                 _ => Ty::any_platform(),
             },
-            PREFIX_EXPR => Ty::union([Ty::int(), Ty::float()]),
+            PREFIX_EXPR => {
+                // `-9223372036854775808` (PHP_INT_MIN) is an int, not a float
+                let inner = node.children().next();
+                let lit = inner
+                    .as_ref()
+                    .and_then(op_token)
+                    .map(|t| (t.kind(), t.text().to_owned()));
+                match lit {
+                    Some((INT_NUMBER, _)) => Ty::int(),
+                    Some((FLOAT_NUMBER, t)) if t == "9223372036854775808" => Ty::int(),
+                    Some((FLOAT_NUMBER, _)) => Ty::float(),
+                    _ => Ty::union([Ty::int(), Ty::float()]),
+                }
+            }
             _ => Ty::any_platform(),
         };
         let _ = stir;
@@ -2728,6 +2769,18 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     /// The declared (un-narrowed) type of an assignment target.
     fn declared_target_type(&self, node: &SyntaxNode) -> Option<Ty> {
+        if node.kind() == INDEX_EXPR {
+            // writing `m[k] = v`: the element type, without the read's `?`
+            let base = exprs_of(node).into_iter().next()?;
+            let bt = strip_platform(&stir_types::without_null(
+                self.types.get(&base.text_range())?,
+            ));
+            return match bt.kind() {
+                TyKind::MutableList(e) | TyKind::List(e) => Some(e.clone()),
+                TyKind::MutableMap(_, v) | TyKind::Map(_, v) => Some(v.clone()),
+                _ => None,
+            };
+        }
         let n = self.local_name(node)?;
         self.lookup(&n).map(|l| l.declared.clone())
     }
@@ -3018,6 +3071,9 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     /// Inferred type arguments must satisfy their bounds.
     fn check_bounds(&mut self, range: TextRange, inf: &Inference, vars: &[stir_types::ParamId]) {
+        if self.bounds_external {
+            return;
+        }
         for id in vars {
             let (Some(arg), Some(bound)) = (
                 inf.solved.get(id),
@@ -3539,6 +3595,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             arg_tys[i] = Some(t);
         }
         inf.finish(&Ty::nothing());
+        self.bounds_external = sig.external;
         self.check_bounds(
             call.text_range(),
             &inf,
@@ -3582,6 +3639,13 @@ impl<'a, 'db> Checker<'a, 'db> {
             if sig.external && t.is_any_platform() {
                 continue;
             }
+            // PHPStan refinements (`non-negative-int`, `non-empty-string`, ...) on external
+            // parameters can't be expressed in StirPHP: check against the base type
+            let want = if sig.external {
+                widen_refinements(&want)
+            } else {
+                want
+            };
             self.check_assign(
                 range,
                 t,
@@ -4992,4 +5056,35 @@ pub fn is_by_ref_receiver(ty: &Ty) -> bool {
         stir_types::without_null(ty).kind(),
         TyKind::MutableList(_) | TyKind::MutableMap(_, _)
     )
+}
+
+/// Is `node` (an index/property chain) the target of an assignment?
+fn is_write_target(node: &SyntaxNode) -> bool {
+    let mut cur = node.clone();
+    loop {
+        let Some(p) = cur.parent() else { return false };
+        match p.kind() {
+            ASSIGN_EXPR => return p.children().next().as_ref() == Some(&cur),
+            INDEX_EXPR if exprs_of(&p).first() == Some(&cur) => cur = p,
+            _ => return false,
+        }
+    }
+}
+
+/// `int<0, max>` → `int`, `non-empty-string` → `string`, `non-empty-list<T>` → `list<T>`.
+fn widen_refinements(t: &Ty) -> Ty {
+    t.transform(&mut |x| match x.kind() {
+        TyKind::IntRange { .. } => Some(Ty::php_int()),
+        TyKind::NonEmptyString | TyKind::NumericString => Some(Ty::php_string()),
+        TyKind::PhpList {
+            elem,
+            non_empty: true,
+        } => Some(Ty::php_list(widen_refinements(elem))),
+        TyKind::Array {
+            key,
+            value,
+            non_empty: true,
+        } => Some(Ty::array(widen_refinements(key), widen_refinements(value))),
+        _ => None,
+    })
 }
