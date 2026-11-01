@@ -91,6 +91,7 @@ pub struct Checker<'a, 'db> {
     pub dialect: Dialect,
     pub items: &'db FileItems,
     pub diags: Vec<Diagnostic>,
+    conditional_depth: u32,
     frames: Vec<FxHashMap<SmolStr, Local>>,
     fns: Vec<FnCx>,
     class: Option<Rc<ClassModel<'db>>>,
@@ -244,6 +245,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             dialect: file.dialect(ctx.db),
             items: ctx.items(file),
             diags: Vec::new(),
+            conditional_depth: 0,
             frames: vec![FxHashMap::default()],
             fns: Vec::new(),
             class: None,
@@ -462,6 +464,27 @@ impl<'a, 'db> Checker<'a, 'db> {
         );
     }
 
+    /// PHP has no block scope: a variable set in a block outlives it.
+    fn push_block_frame(&mut self) {
+        if self.stir() {
+            self.push_frame();
+        }
+    }
+
+    fn pop_block_frame(&mut self) {
+        if self.stir() {
+            self.pop_frame();
+        }
+    }
+
+    /// Runs `f` for code that may not execute: a PHP variable assigned in it keeps
+    /// the types it had as well.
+    fn conditional(&mut self, f: impl FnOnce(&mut Self)) {
+        self.conditional_depth += 1;
+        f(self);
+        self.conditional_depth -= 1;
+    }
+
     fn push_frame(&mut self) {
         self.frames.push(FxHashMap::default());
     }
@@ -668,11 +691,16 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             RETURN_STMT => self.return_stmt(node),
             BLOCK => {
-                self.push_frame();
+                self.push_block_frame();
                 self.block_stmts(node);
-                self.pop_frame();
+                self.pop_block_frame();
             }
-            IF_STMT => self.if_stmt(node),
+            IF_STMT => self.conditional(|this| this.if_stmt(node)),
+            WHILE_STMT | DO_WHILE_STMT | FOR_STMT | FOREACH_STMT | SWITCH_STMT | TRY_STMT
+                if self.conditional_depth == 0 && !self.stir() =>
+            {
+                self.conditional(|this| this.stmt(node));
+            }
             WHILE_STMT => {
                 let cond = exprs_of(node).into_iter().next();
                 self.widen_all();
@@ -740,7 +768,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                         BLOCK => self.stmt(&c),
                         CATCH_CLAUSE => {
                             self.restore_types(&snap);
-                            self.push_frame();
+                            self.push_block_frame();
                             let tys: Vec<Ty> = c
                                 .children_of(NAME_REF)
                                 .iter()
@@ -757,7 +785,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                             if let Some(b) = c.child(BLOCK) {
                                 self.stmt(&b);
                             }
-                            self.pop_frame();
+                            self.pop_block_frame();
                         }
                         FINALLY_CLAUSE => {
                             if let Some(b) = c.child(BLOCK) {
@@ -922,7 +950,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         let Some(subject) = es.first() else { return };
         let st = self.expr(subject, None);
         let (key_ty, val_ty) = self.iter_types(subject.text_range(), &st);
-        self.push_frame();
+        self.push_block_frame();
         let bindings = &es[1..];
         let (key, val) = match bindings.len() {
             2 => (Some(&bindings[0]), Some(&bindings[1])),
@@ -939,7 +967,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         for s in node.children().filter(|c| is_stmt_kind(c.kind())) {
             self.stmt(&s);
         }
-        self.pop_frame();
+        self.pop_block_frame();
         self.widen_all();
     }
 
@@ -994,7 +1022,11 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             self.diags.truncate(start);
             if missing {
-                self.error(range, codes::INVALID_OPERAND, format!("`{ty}` is not iterable"));
+                self.error(
+                    range,
+                    codes::INVALID_OPERAND,
+                    format!("`{ty}` is not iterable"),
+                );
                 if keys.is_empty() {
                     return (Ty::error(), Ty::error());
                 }
@@ -2150,8 +2182,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                         );
                     }
                 }
-                match self.index_type(&indexed, it.as_ref())
-                {
+                match self.index_type(&indexed, it.as_ref()) {
                     Some(t) => t,
                     None => {
                         if bt.is_any_platform() && self.stir() {
@@ -2834,6 +2865,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                             self.def(lhs.text_range(), Def::Local { decl: l.range });
                         }
                         let vt = self.expr(rhs, Some(&l.declared));
+                        let conditional = self.conditional_depth > 0;
                         if n == "this" {
                             self.check_mutable_target(lhs);
                         } else if self.stir() {
@@ -2852,7 +2884,11 @@ impl<'a, 'db> Checker<'a, 'db> {
                         } else if let Some(loc) = self.lookup_mut(&n) {
                             // PHP variables are dynamically typed
                             loc.ty = widen_literals(&vt);
-                            loc.declared = loc.ty.clone();
+                            loc.declared = if conditional {
+                                Ty::union([loc.declared.clone(), loc.ty.clone()])
+                            } else {
+                                loc.ty.clone()
+                            };
                         }
                         self.types.insert(lhs.text_range(), l.declared.clone());
                         vt
