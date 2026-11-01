@@ -1043,6 +1043,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             TyKind::Shape(_) => (Ty::array_key(), Ty::mixed()),
             TyKind::Error | TyKind::Mixed => (Ty::error(), Ty::error()),
+            TyKind::Never | TyKind::Nothing if !self.stir() => (Ty::never(), Ty::never()),
             TyKind::Class { name, args } => {
                 // Traversable / Iterator / IteratorAggregate
                 for anc in self.ctx.ancestors(&Ty::class(name.clone(), args.clone())) {
@@ -2919,6 +2920,11 @@ impl<'a, 'db> Checker<'a, 'db> {
                 self.bind_target(lhs, vt.clone());
                 vt
             }
+            INDEX_EXPR if !self.stir() && self.php_array_write(lhs, rhs, op).is_some() => self
+                .types
+                .get(&rhs.text_range())
+                .cloned()
+                .unwrap_or_else(Ty::mixed),
             _ => {
                 let lt = self.expr(lhs, None);
                 self.check_mutable_target(lhs);
@@ -2970,6 +2976,88 @@ impl<'a, 'db> Checker<'a, 'db> {
                 result
             }
         }
+    }
+
+    /// `$a[] = v` / `$a[k] = v` / `$a[k][l] = v` on a PHP array in a variable (which
+    /// may not exist yet): the array's type grows. Returns `None` if `lhs` isn't that.
+    fn php_array_write(
+        &mut self,
+        lhs: &SyntaxNode,
+        rhs: &SyntaxNode,
+        op: SyntaxKind,
+    ) -> Option<()> {
+        let mut indexes = Vec::new();
+        let mut root = lhs.clone();
+        while root.kind() == INDEX_EXPR {
+            let parts = exprs_of(&root);
+            indexes.push(parts.get(1).cloned());
+            root = parts.first()?.clone();
+        }
+        if root.kind() != VARIABLE_EXPR {
+            return None;
+        }
+        let text = text_of(&root);
+        let name = text.trim_start_matches('$');
+        if is_superglobal(name) || name == "this" {
+            return None;
+        }
+        let current = self.lookup(name).map(|l| l.ty.clone());
+        let array_like = |t: &Ty| matches!(t.kind(), TyKind::Array { .. } | TyKind::PhpList { .. });
+        let grows = match &current {
+            None => true,
+            Some(t) if t.is_union() => t.members().iter().any(array_like),
+            Some(t) => array_like(t) || matches!(t.kind(), TyKind::Null),
+        };
+        if !grows {
+            return None;
+        }
+        let keys: Vec<Option<Ty>> = indexes
+            .iter()
+            .map(|i| i.as_ref().map(|i| widen_literals(&self.expr(i, None))))
+            .collect();
+        let vt = widen_literals(&self.expr(rhs, None));
+        self.types.insert(rhs.text_range(), vt.clone());
+        let value = match op {
+            EQ => vt,
+            _ => Ty::mixed(),
+        };
+        // an empty array takes the shape of what is written to it
+        let existing = current.as_ref().filter(|t| {
+            !matches!(t.kind(), TyKind::PhpList { elem, .. } if matches!(elem.kind(), TyKind::Never))
+        });
+        let grown = match (keys.as_slice(), existing.map(Ty::kind)) {
+            ([None], None | Some(TyKind::Null)) => Ty::php_list(value),
+            ([None], Some(TyKind::PhpList { elem, .. })) => {
+                Ty::php_list(Ty::union([elem.clone(), value]))
+            }
+            ([Some(k)], Some(TyKind::PhpList { elem, .. })) => Ty::array(
+                Ty::union([Ty::php_int(), k.clone()]),
+                Ty::union([elem.clone(), value]),
+            ),
+            ([None], Some(TyKind::Array { key, value: v, .. })) => Ty::array(
+                Ty::union([key.clone(), Ty::php_int()]),
+                Ty::union([v.clone(), value]),
+            ),
+            ([Some(k)], Some(TyKind::Array { key, value: v, .. })) => Ty::array(
+                Ty::union([key.clone(), k.clone()]),
+                Ty::union([v.clone(), value]),
+            ),
+            ([Some(k)], None | Some(TyKind::Null)) => Ty::array(k.clone(), value),
+            _ => Ty::array(Ty::array_key(), Ty::mixed()),
+        };
+        let conditional = self.conditional_depth > 0;
+        match self.lookup_mut(name) {
+            Some(l) => {
+                l.ty = grown.clone();
+                l.declared = if conditional {
+                    Ty::union([l.declared.clone(), grown])
+                } else {
+                    grown
+                };
+            }
+            None => self.declare(name, grown, LocalKind::Php, root.text_range()),
+        }
+        Some(())
     }
 
     /// A variable passed by reference in PHP code may be written by the callee, and
@@ -3098,6 +3186,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             TyKind::Literal(l) if matches!(l.value, LitValue::String(_)) => Some(Ty::string()),
             TyKind::Shape(_) | TyKind::Mixed => Some(Ty::mixed()),
             TyKind::Error => Some(Ty::error()),
+            TyKind::Never | TyKind::Nothing if !self.stir() => Some(Ty::never()),
             TyKind::Class { .. } => Some(Ty::any_platform()),
             _ => None,
         }
