@@ -1,0 +1,116 @@
+{
+  "name": "stirphp",
+  "displayName": "StirPHP",
+  "description": "StirPHP language support: diagnostics, completion, navigation and highlighting via the sphp language server.",
+  "version": "0.1.0",
+  "publisher": "stirphp",
+  "license": "MIT OR Apache-2.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "workspaceContains:**/sphp.toml"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "sphp",
+        "aliases": [
+          "StirPHP",
+          "sphp"
+        ],
+        "extensions": [
+          ".sphp"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "sphp",
+        "scopeName": "source.sphp",
+        "path": "./syntaxes/sphp.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "StirPHP",
+      "properties": {
+        "sphp.server.path": {
+          "type": "string",
+          "default": "sphp",
+          "markdownDescription": "Path to the `sphp` binary. The language server is started with `sphp lsp`."
+        },
+        "sphp.php.enable": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Also use the StirPHP language server for `.php` files (diagnostics follow `checkPhp` and `phpstan.neon`)."
+        },
+        "sphp.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Trace the communication between VS Code and the language server."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "sphp.restartServer",
+        "title": "Restart Language Server",
+        "category": "StirPHP"
+      }
+    ],
+    "semanticTokenModifiers": [
+      {
+        "id": "mutable",
+        "description": "A mutable binding (`var $x`, `mut x`)."
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "sphp",
+        "scopes": {
+          "variable.readonly": [
+            "variable.other.constant.sphp"
+          ],
+          "parameter.readonly": [
+            "variable.parameter.sphp"
+          ],
+          "variable.mutable": [
+            "variable.other.readwrite.sphp"
+          ],
+          "parameter.mutable": [
+            "variable.parameter.mutable.sphp"
+          ],
+          "property.mutable": [
+            "variable.other.property.mutable.sphp"
+          ]
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "check": "tsc --noEmit -p .",
+    "package": "vsce package --allow-missing-repository --skip-license"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^11.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "~1.100.0",
+    "@vscode/vsce": "^3.6.0",
+    "typescript": "^5.9.0"
+  }
+}

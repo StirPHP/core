@@ -1,0 +1,5 @@
+.gitignore
+jsconfig.json
+tsconfig.json
+*.vsix
+node_modules/.bin/**

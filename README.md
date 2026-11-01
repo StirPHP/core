@@ -49,6 +49,9 @@ project from the workspace folder's `sphp.toml` (or uses defaults), and offers:
 - semantic highlighting (immutable bindings are `readonly`, mutable ones carry
   a `mutable` modifier), document/workspace symbols, folding and selection ranges
 
+VS Code: the extension in [`editors/vscode`](editors/vscode) registers `.sphp`
+files and starts `sphp lsp` (see its README to build and install it).
+
 Neovim (0.11+):
 
 ```lua

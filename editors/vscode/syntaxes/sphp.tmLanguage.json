@@ -1,0 +1,200 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "StirPHP",
+  "scopeName": "source.sphp",
+  "patterns": [{ "include": "#code" }],
+  "repository": {
+    "code": {
+      "patterns": [
+        { "include": "#comments" },
+        { "include": "#tags" },
+        { "include": "#strings" },
+        { "include": "#numbers" },
+        { "include": "#declarations" },
+        { "include": "#keywords" },
+        { "include": "#variables" },
+        { "include": "#types" },
+        { "include": "#calls" },
+        { "include": "#operators" }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.documentation.sphp",
+          "begin": "/\\*\\*(?!/)",
+          "end": "\\*/",
+          "patterns": [
+            { "name": "keyword.other.phpdoc.sphp", "match": "(?<=\\s|\\*)@[A-Za-z-]+" }
+          ]
+        },
+        { "name": "comment.block.sphp", "begin": "/\\*", "end": "\\*/" },
+        { "name": "comment.line.double-slash.sphp", "match": "//.*$" },
+        { "name": "comment.line.number-sign.sphp", "match": "#(?!\\[).*$" }
+      ]
+    },
+    "tags": {
+      "patterns": [
+        { "name": "punctuation.section.embedded.sphp", "match": "<\\?php\\b|<\\?=|\\?>" }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.sphp",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "include": "#escapes" },
+            { "include": "#template" }
+          ]
+        },
+        {
+          "name": "string.quoted.single.sphp",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            { "name": "constant.character.escape.sphp", "match": "\\\\['\\\\]" }
+          ]
+        },
+        {
+          "name": "string.unquoted.heredoc.sphp",
+          "begin": "<<<\\s*([\"']?)([A-Za-z_][A-Za-z0-9_]*)\\1\\s*$",
+          "end": "^\\s*\\2\\b",
+          "patterns": [
+            { "include": "#escapes" },
+            { "include": "#template" }
+          ]
+        }
+      ]
+    },
+    "escapes": {
+      "name": "constant.character.escape.sphp",
+      "match": "\\\\([nrtvef\\\\$\"]|[0-7]{1,3}|x[0-9A-Fa-f]{1,2}|u\\{[0-9A-Fa-f]+\\})"
+    },
+    "template": {
+      "name": "meta.template.expression.sphp",
+      "begin": "\\$\\{",
+      "end": "\\}",
+      "beginCaptures": { "0": { "name": "punctuation.definition.template-expression.begin.sphp" } },
+      "endCaptures": { "0": { "name": "punctuation.definition.template-expression.end.sphp" } },
+      "contentName": "meta.embedded.line.sphp",
+      "patterns": [{ "include": "#code" }]
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.hex.sphp", "match": "\\b0[xX][0-9A-Fa-f_]+\\b" },
+        { "name": "constant.numeric.binary.sphp", "match": "\\b0[bB][01_]+\\b" },
+        { "name": "constant.numeric.octal.sphp", "match": "\\b0[oO][0-7_]+\\b" },
+        {
+          "name": "constant.numeric.decimal.sphp",
+          "match": "\\b([0-9][0-9_]*)?\\.?[0-9][0-9_]*([eE][+-]?[0-9]+)?\\b"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "comment": "function <T> Receiver.name / function name",
+          "match": "\\b(function)\\s+(?:<[^>]*>\\s*)?(?:([A-Z][A-Za-z0-9_]*(?:<[^>]*>)?\\??)\\.)?([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.function.sphp" },
+            "2": { "name": "entity.name.type.sphp" },
+            "3": { "name": "entity.name.function.sphp" }
+          }
+        },
+        {
+          "match": "\\b(class|interface|trait|enum|record|typealias)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.class.sphp" },
+            "2": { "name": "entity.name.type.class.sphp" }
+          }
+        },
+        {
+          "match": "\\b(val)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.val.sphp" },
+            "2": { "name": "variable.other.constant.sphp" }
+          }
+        },
+        {
+          "match": "\\b(var)\\s+(\\$[A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.var.sphp" },
+            "2": { "name": "variable.other.readwrite.sphp" }
+          }
+        },
+        {
+          "match": "\\b(namespace|use)\\s+([A-Za-z_\\\\][A-Za-z0-9_\\\\]*)",
+          "captures": {
+            "1": { "name": "keyword.other.namespace.sphp" },
+            "2": { "name": "entity.name.type.namespace.sphp" }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.sphp",
+          "match": "\\b(if|else|elseif|when|match|for|foreach|while|do|switch|case|default|return|throw|try|catch|finally|break|continue|yield|goto)\\b"
+        },
+        {
+          "name": "storage.modifier.sphp",
+          "match": "\\b(val|var|mut|data|sealed|open|abstract|final|override|private|protected|public|static|readonly|const|in|out)\\b"
+        },
+        {
+          "name": "storage.type.sphp",
+          "match": "\\b(function|fn|class|interface|trait|enum|record|typealias|namespace|use)\\b"
+        },
+        {
+          "name": "keyword.operator.word.sphp",
+          "match": "!?\\b(is|in)\\b|\\b(as|of|where|new|clone|instanceof|and|or|xor)\\b"
+        },
+        {
+          "name": "constant.language.sphp",
+          "match": "\\b(true|false|null)\\b"
+        },
+        {
+          "name": "variable.language.this.sphp",
+          "match": "\\$this\\b|\\b(this|it)\\b"
+        },
+        {
+          "name": "support.function.construct.sphp",
+          "match": "\\b(echo|print|isset|unset|empty|exit|die|list|include|include_once|require|require_once|declare)\\b"
+        }
+      ]
+    },
+    "variables": {
+      "name": "variable.other.readwrite.sphp",
+      "match": "\\$[A-Za-z_\\x{80}-\\x{10ffff}][A-Za-z0-9_\\x{80}-\\x{10ffff}]*"
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.builtin.sphp",
+          "match": "\\b(Int|Float|String|Bool|Unit|Nothing|Any|List|MutableList|Map|MutableMap|int|float|string|bool|void|never|mixed|array|object|iterable|callable)\\b"
+        },
+        {
+          "name": "entity.name.type.sphp",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "calls": {
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+      "captures": { "1": { "name": "entity.name.function.call.sphp" } }
+    },
+    "operators": {
+      "patterns": [
+        { "name": "keyword.operator.null-safety.sphp", "match": "\\?->|!!|\\?:|\\?\\?=?" },
+        { "name": "keyword.operator.arrow.lambda.sphp", "match": "(?<=\\s)->(?=\\s)" },
+        { "name": "punctuation.accessor.sphp", "match": "->|::" },
+        { "name": "keyword.operator.arrow.sphp", "match": "=>" },
+        { "name": "keyword.operator.comparison.sphp", "match": "===|!==|==|!=|<=>|<=|>=" },
+        { "name": "keyword.operator.assignment.sphp", "match": "(\\.|\\+|-|\\*\\*|\\*|/|%|&|\\||\\^|<<|>>)?=" },
+        { "name": "keyword.operator.sphp", "match": "\\.\\.\\.|\\.|\\+\\+|--|&&|\\|\\||[-+*/%!<>&|^~]" }
+      ]
+    }
+  }
+}
