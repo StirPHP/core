@@ -12,3 +12,6 @@ class Php_Entry
     /** @var string|null */
     public $singular = null;
 }
+
+/** @param string|array<string, mixed>|object $a */
+function takes_args($a) {}

@@ -430,6 +430,15 @@ impl<'a, 'db> Checker<'a, 'db> {
         if php_array_of_mixed(from, to) || covers_every_php_value(from, to) {
             return;
         }
+        if from.is_union()
+            && from.members().iter().any(|m| php_array_of_mixed(m, to))
+            && from
+                .members()
+                .iter()
+                .all(|m| php_array_of_mixed(m, to) || self.assignable(m, to))
+        {
+            return;
+        }
         // a template the call couldn't solve says nothing about the value
         if !self.stir()
             && (!stir_types::free_params(from).is_empty()

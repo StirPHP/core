@@ -89,3 +89,7 @@ function false_stays_in_unions(p: string): string {
     }
     return found
 }
+
+function bare_array_in_union(o: array|string|null): Unit {
+    takes_args(o ?? [])
+}
