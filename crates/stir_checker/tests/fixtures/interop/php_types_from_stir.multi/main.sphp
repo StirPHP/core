@@ -15,3 +15,14 @@ function after_literal_check(): String {
     }
     return "${d}!"
 }
+
+class Holder {
+    private var $map: array<string, string> = []
+    function reset(m: array<string, bool> = [], l: array<int> = []): Unit {
+        $map = []
+    }
+}
+
+function php_offset_may_be_missing(m: array<string, bool>): bool = m["k"] ?? false
+
+function known_non_null(s: String): String = s ?? "" // warning: SPHP0021

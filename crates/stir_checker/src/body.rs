@@ -2741,7 +2741,19 @@ impl<'a, 'db> Checker<'a, 'db> {
                 }
             }
             QUESTION2 => {
+                // a PHP array's key may simply not be there
+                let php_offset = es[0].kind() == INDEX_EXPR
+                    && exprs_of(&es[0])
+                        .first()
+                        .and_then(|b| self.types.get(&b.text_range()))
+                        .is_some_and(|b| {
+                            matches!(
+                                strip_platform(b).kind(),
+                                TyKind::Array { .. } | TyKind::PhpList { .. } | TyKind::Shape(_)
+                            )
+                        });
                 if stir
+                    && !php_offset
                     && !stir_types::is_nullable(self.ctx, &l)
                     && !matches!(l.kind(), TyKind::Platform(_))
                     && !l.is_any_platform()
@@ -3346,6 +3358,16 @@ impl<'a, 'db> Checker<'a, 'db> {
             Some(TyKind::MutableMap(k, v)) => (Some(k), Some(v), true),
             _ => (None, None, false),
         };
+        // `[]` where a PHP array type is expected
+        if elems.is_empty()
+            && let Some(e) = &exp
+            && matches!(
+                e.kind(),
+                TyKind::Array { .. } | TyKind::PhpList { .. } | TyKind::Shape(_)
+            )
+        {
+            return e.clone();
+        }
         let mut keys = Vec::new();
         let mut vals = Vec::new();
         let mut keyed = false;
