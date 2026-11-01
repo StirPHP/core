@@ -1054,9 +1054,10 @@ impl<'a, 'db> Lowerer<'a, 'db> {
         let body = self.body_stmts(node, &sig.ret);
         self.in_extension = false;
         self.frames = saved_frames;
+        let attrs = self.attributes(node);
         out.push(Stmt::new(StmtKind::Function(FunctionDecl {
             doc: (!doc.is_empty()).then_some(doc),
-            attrs: Vec::new(),
+            attrs,
             by_ref: false,
             name,
             params,
@@ -1064,6 +1065,29 @@ impl<'a, 'db> Lowerer<'a, 'db> {
             body,
             origin: self.origin(node),
         })));
+    }
+
+    /// A declaration's `#[...]` attributes, as written.
+    fn attributes(&mut self, node: &SyntaxNode) -> Vec<AttributeGroup> {
+        let mut groups = Vec::new();
+        for list in node.children_of(ATTRIBUTE_LIST) {
+            for group in list.children_of(ATTRIBUTE_GROUP) {
+                let mut attrs = Vec::new();
+                for attr in group.children_of(ATTRIBUTE) {
+                    let Some(name) = attr.child(NAME_REF) else {
+                        continue;
+                    };
+                    let name = name.text().to_string();
+                    let name = name.trim();
+                    attrs.push(match attr.child(ARG_LIST) {
+                        Some(list) => Attribute::with_args(name, self.args(&list)),
+                        None => Attribute::new(name),
+                    });
+                }
+                groups.push(AttributeGroup::new(attrs));
+            }
+        }
+        groups
     }
 
     fn class_decl(&mut self, node: &SyntaxNode, out: &mut Vec<Stmt>) {
@@ -1273,10 +1297,11 @@ impl<'a, 'db> Lowerer<'a, 'db> {
         let name = SmolStr::new(def.name.short());
         let doc = (!doc.is_empty()).then_some(doc);
         let origin = self.origin(node);
+        let attrs = self.attributes(node);
         let kind = match def.kind {
             stir_hir::ClassKind::Interface => StmtKind::Interface(InterfaceDecl {
                 doc,
-                attrs: Vec::new(),
+                attrs,
                 name,
                 extends: view.interfaces.iter().map(|n| q(n)).collect(),
                 members,
@@ -1291,7 +1316,7 @@ impl<'a, 'db> Lowerer<'a, 'db> {
             }),
             stir_hir::ClassKind::Enum => StmtKind::Enum(EnumDecl {
                 doc,
-                attrs: Vec::new(),
+                attrs,
                 name,
                 backing: view.enum_backing.as_ref().and_then(native_type),
                 implements: view.interfaces.iter().map(|n| q(n)).collect(),
@@ -1309,7 +1334,7 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                 });
                 StmtKind::Class(ClassDecl {
                     doc,
-                    attrs: Vec::new(),
+                    attrs,
                     modifiers: ClassModifiers {
                         is_final: model.is_final(),
                         is_abstract: def.mods.is_abstract || def.mods.is_sealed,
@@ -1424,9 +1449,10 @@ impl<'a, 'db> Lowerer<'a, 'db> {
         let body = md.has_body.then(|| self.body_stmts(m, &sig.ret));
         self.frames = saved;
         let interface = model.kind() == stir_hir::ClassKind::Interface;
+        let attrs = self.attributes(m);
         members.push(Member::Method(MethodDecl {
             doc: (!doc.is_empty()).then_some(doc),
-            attrs: Vec::new(),
+            attrs,
             // StirPHP members are final unless `open`, `abstract` or `override`
             is_final: md.mods.is_final
                 || (model.is_stir()

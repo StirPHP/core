@@ -1,0 +1,18 @@
+#[AllowDynamicProperties]
+class Bag {
+    #[Deprecated]
+    function old(): Unit {}
+}
+
+#[Deprecated(message: "gone")]
+function legacy(): Unit {}
+
+foreach (new ReflectionClass("Bag")->getAttributes() as $attribute) {
+    echo $attribute->getName() . "\n"
+}
+foreach (new ReflectionMethod("Bag", "old")->getAttributes() as $attribute) {
+    echo $attribute->getName() . "\n"
+}
+foreach (new ReflectionFunction("legacy")->getAttributes() as $attribute) {
+    echo $attribute->getName() . "\n"
+}
