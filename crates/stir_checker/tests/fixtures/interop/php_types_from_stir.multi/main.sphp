@@ -51,7 +51,7 @@ function replaced(s: string, l: array<string>): string {
 
 function replaced_array(l: array<string>): string = str_replace("a", "b", l) // error: SPHP0005
 
-typealias AnyValue = string|int|float|bool|array|object|null
+typealias AnyValue = unknown
 
 function takes_any(v: AnyValue): Unit {}
 

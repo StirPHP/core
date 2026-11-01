@@ -489,6 +489,7 @@ impl<'db> Ctx<'db> {
                         Ty::mixed()
                     }
                 }
+                PhpBuiltin::Unknown => Ty::mixed(),
                 PhpBuiltin::Void => Ty::void(),
                 PhpBuiltin::Never => Ty::never(),
                 PhpBuiltin::Null => Ty::null(),

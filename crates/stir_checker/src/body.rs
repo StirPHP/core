@@ -354,8 +354,16 @@ impl<'a, 'db> Checker<'a, 'db> {
     // ------------------------------------------------------------ diagnostics
 
     pub fn error(&mut self, range: TextRange, code: &'static str, msg: impl Into<String>) {
+        let msg = self.dialect_message(msg.into());
         self.diags
             .push(Diagnostic::error(self.path.clone(), range, code, msg));
+    }
+
+    fn dialect_message(&self, msg: String) -> String {
+        if !self.stir() || msg.contains("`mixed` is not a StirPHP type") {
+            return msg;
+        }
+        crate::stir_type_names(&msg)
     }
 
     /// In a `.php` file, an override's types are mostly PHPDoc, which PHP doesn't
@@ -376,6 +384,7 @@ impl<'a, 'db> Checker<'a, 'db> {
     }
 
     fn warn(&mut self, range: TextRange, code: &'static str, msg: impl Into<String>) {
+        let msg = self.dialect_message(msg.into());
         self.diags.push(
             Diagnostic::error(self.path.clone(), range, code, msg).with_severity(Severity::Warning),
         );
@@ -426,8 +435,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             widened = widen_refinements(to);
             &widened
         };
-        // a bare `array` is an `array<K, mixed>` of any keys, and `mixed` is the union of everything
-        if php_array_of_mixed(from, to) || covers_every_php_value(from, to) {
+        // a bare `array` is an `array<K, mixed>` of any keys
+        if php_array_of_mixed(from, to) {
             return;
         }
         if from.is_union()
@@ -1169,6 +1178,14 @@ impl<'a, 'db> Checker<'a, 'db> {
                 (key.clone(), value.clone())
             }
             TyKind::Shape(_) => (Ty::array_key(), Ty::mixed()),
+            TyKind::Mixed if self.stir() => {
+                self.error(
+                    range,
+                    codes::INVALID_OPERAND,
+                    "cannot iterate over `mixed`; narrow it first (`is` / `as`)",
+                );
+                (Ty::error(), Ty::error())
+            }
             TyKind::Error | TyKind::Mixed => (Ty::error(), Ty::error()),
             TyKind::Never | TyKind::Nothing if !self.stir() => (Ty::never(), Ty::never()),
             TyKind::Class { name, args } => {
@@ -2310,6 +2327,18 @@ impl<'a, 'db> Checker<'a, 'db> {
                 } else {
                     bt
                 };
+                if self.stir()
+                    && self.probing == 0
+                    && matches!(bt.kind(), TyKind::Mixed)
+                    && !is_write_target(node)
+                {
+                    self.error(
+                        base.text_range(),
+                        codes::INVALID_OPERAND,
+                        "can't index `mixed`; narrow it first (`is` / `as`)",
+                    );
+                    return Ty::error();
+                }
                 if self.stir()
                     && self.probing == 0
                     && bt.is_nullable_like(self.ctx)
@@ -4518,10 +4547,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             None => {
                 if !ct.is_error()
-                    && !matches!(
-                        ct.kind(),
-                        TyKind::Callable { sig: None, .. } | TyKind::Mixed
-                    )
+                    && !matches!(ct.kind(), TyKind::Callable { sig: None, .. })
+                    && !(matches!(ct.kind(), TyKind::Mixed) && !self.stir())
                     && !(ct.is_any_platform() && !self.stir())
                     && !(!self.stir() && php_callable_value(&ct))
                 {
@@ -4564,7 +4591,13 @@ impl<'a, 'db> Checker<'a, 'db> {
             .next()
             .is_some_and(|c| c.kind() == NULLSAFE_PROPERTY_FETCH_EXPR);
         let nullable = stir_types::is_nullable(self.ctx, &bt);
-        if self.stir() && nullable && !nullsafe && !bt.is_error() && !bt.is_any_platform() {
+        if self.stir()
+            && nullable
+            && !nullsafe
+            && !bt.is_error()
+            && !bt.is_any_platform()
+            && !matches!(bt.kind(), TyKind::Mixed)
+        {
             self.error(
                 base.text_range(),
                 codes::NULLABLE_ACCESS,
@@ -4691,6 +4724,14 @@ impl<'a, 'db> Checker<'a, 'db> {
                         Ty::error()
                     }
                 }
+            }
+            TyKind::Mixed if self.stir() => {
+                self.error(
+                    range,
+                    codes::INVALID_OPERAND,
+                    format!("can't access `{name}` on `mixed`; narrow it first (`is` / `as`)"),
+                );
+                Ty::error()
             }
             TyKind::Mixed | TyKind::Object => Ty::any_platform(),
             _ if recv.is_any_platform() => {
@@ -4896,9 +4937,13 @@ impl<'a, 'db> Checker<'a, 'db> {
                 self.error(
                     range,
                     codes::INVALID_OPERAND,
-                    format!(
-                        "can't call `{name}` on an untyped value; narrow it first (`is` / `as`)"
-                    ),
+                    if matches!(recv.kind(), TyKind::Mixed) {
+                        format!("can't call `{name}` on `mixed`; narrow it first (`is` / `as`)")
+                    } else {
+                        format!(
+                            "can't call `{name}` on an untyped value; narrow it first (`is` / `as`)"
+                        )
+                    },
                 );
             }
             self.check_args_untyped(node);
@@ -6025,21 +6070,6 @@ fn php_array_of_mixed(from: &Ty, to: &Ty) -> bool {
     bare && to.members().iter().any(|m| {
         matches!(m.kind(), TyKind::Array { value, non_empty: false, .. } if matches!(value.kind(), TyKind::Mixed))
     })
-}
-
-/// Is `to` spelled out as every kind of PHP value (StirPHP has no `mixed` to write)?
-fn covers_every_php_value(from: &Ty, to: &Ty) -> bool {
-    if !from.is_any_platform() && !matches!(from.kind(), TyKind::Mixed) {
-        return false;
-    }
-    let has = |f: &dyn Fn(&TyKind) -> bool| to.members().iter().any(|m| f(m.kind()));
-    has(&|k| matches!(k, TyKind::PhpString))
-        && has(&|k| matches!(k, TyKind::PhpInt))
-        && has(&|k| matches!(k, TyKind::PhpFloat))
-        && has(&|k| matches!(k, TyKind::PhpBool))
-        && has(&|k| matches!(k, TyKind::Array { .. }))
-        && has(&|k| matches!(k, TyKind::Object))
-        && has(&|k| matches!(k, TyKind::Null))
 }
 
 fn is_php_scalar(ty: &Ty) -> bool {

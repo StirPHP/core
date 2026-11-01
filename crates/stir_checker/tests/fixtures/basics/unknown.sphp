@@ -1,0 +1,63 @@
+class C {
+    public var $p: int = 1
+    function run(): Unit {}
+}
+
+function take_string(s: string): Unit {}
+
+function mixed_is_not_a_type(x: mixed): Unit {} // error: SPHP0003
+
+function unusable_until_narrowed(m: unknown): Unit {
+    take_string(m) // error: SPHP0005
+    echo m->p // error: SPHP0015
+    m->run() // error: SPHP0015
+    m!!->run() // error: SPHP0015
+    m?->run() // error: SPHP0015
+    echo m["x"] // error: SPHP0015
+    foreach (m as $v) { // error: SPHP0015
+        echo 1
+    }
+    echo m + 1 // error: SPHP0015
+    echo "${m}" // error: SPHP0005
+    echo m . "x" // error: SPHP0015
+    if (m) { // error: SPHP0005
+        echo 1
+    }
+    m() // error: SPHP0018
+}
+
+function narrowing(m: unknown): Unit {
+    val same = m === 1
+    if (m is string) {
+        take_string(m)
+    }
+    if (m is C) {
+        echo m->p
+        m->run()
+    }
+    if (is_string(m)) {
+        take_string(m)
+    }
+    if (m is array) {
+        echo count(m)
+    }
+    take_string(m as string)
+}
+
+function anything_fits(a: array, s: string, n: int): unknown {
+    var $v: unknown = s
+    $v = n
+    $v = a
+    $v = null
+    return $v
+}
+
+function probing_is_fine(a: array): bool = isset(a["x"]["y"]) || !empty(a["z"]["w"])
+
+class Holder {
+    public var $value: unknown = null
+    public var $values: array<string, unknown> = []
+    function get(k: string): unknown = $this->values[k] ?? null
+}
+
+function no_message_rewrite_of_names(mixed_up: string): string = mixed_up

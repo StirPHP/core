@@ -136,7 +136,10 @@ echo maybe?->length() ?: 0
 val raw = json_decode("{}")         // Any!
 if (raw is Map<String, Int>) { echo raw->size() }
 
-// Generics with bounds and variance; no top type (`mixed`/`Any` are not allowed)
+// `unknown` holds any value (PHP's `mixed`), and can't be used until it's narrowed
+function describe(v: unknown): String = if (v is String) v else "other"
+
+// Generics with bounds and variance
 interface Source<out T> { function next(): T }
 interface Shape { function area(): Float }
 function <T of Shape> biggest(a: T, b: T): T = if (a->area() > b->area()) a else b

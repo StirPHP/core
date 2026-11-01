@@ -61,6 +61,8 @@ pub enum PhpBuiltin {
     SelfType,
     Static,
     Parent,
+    /// `.sphp`'s name for PHP's `mixed`: any value, unusable until narrowed.
+    Unknown,
 }
 
 impl PhpBuiltin {
@@ -267,6 +269,9 @@ impl TypeCtx<'_> {
             }
             if stir && let Some(k) = StirBuiltin::from_name(text) {
                 return TypeRefKind::Stir(k, args);
+            }
+            if stir && text == "unknown" {
+                return TypeRefKind::Php(PhpBuiltin::Unknown);
             }
             let php = if stir {
                 PhpBuiltin::from_name(text)

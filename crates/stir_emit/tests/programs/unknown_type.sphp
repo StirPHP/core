@@ -1,0 +1,26 @@
+class Holder {
+    public var $value: unknown = null
+    function get(): unknown = $this->value
+}
+
+function describe(v: unknown): string {
+    if (v is string) {
+        return "string ${v}"
+    }
+    if (v is int) {
+        return "int ${strval(v)}"
+    }
+    if (v === null) {
+        return "null"
+    }
+    return "other"
+}
+
+echo describe("a") . "\n"
+echo describe(1) . "\n"
+echo describe(null) . "\n"
+echo describe([1]) . "\n"
+echo describe(1.5) . "\n"
+val h = new Holder()
+h->value = fopen("php://memory", "r")
+echo describe(h->get()) . "\n"

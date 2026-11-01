@@ -21,6 +21,19 @@ pub fn hover(
     file: SourceFile,
     offset: TextSize,
 ) -> Option<HoverResult> {
+    let mut result = hover_in_php_terms(db, ws, file, offset)?;
+    if file.dialect(db) == stir_syntax::Dialect::Stir {
+        result.markdown = stir_checker::stir_type_names(&result.markdown);
+    }
+    Some(result)
+}
+
+fn hover_in_php_terms(
+    db: &dyn Db,
+    ws: Workspace,
+    file: SourceFile,
+    offset: TextSize,
+) -> Option<HoverResult> {
     let typed = typed_file(db, ws, file);
     if let Some((range, def)) = nav::def_at(db, ws, file, offset) {
         let narrowed = typed.types.get(&range).cloned();
