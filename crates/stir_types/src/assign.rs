@@ -726,7 +726,13 @@ impl<'a> Checker<'a> {
                 if *non_empty && !ne1 {
                     return Err(Mismatch::new(from, to, R::MaybeEmpty));
                 }
-                self.arg(from, to, 0, Variance::Out, &Ty::non_negative_int(), key)?;
+                // a list's keys fit StirPHP's `Int` as well as PHP's `int`
+                let list_key = if matches!(key.kind(), K::Int) {
+                    Ty::int()
+                } else {
+                    Ty::non_negative_int()
+                };
+                self.arg(from, to, 0, Variance::Out, &list_key, key)?;
                 return self.arg(from, to, 1, Variance::Out, elem, value);
             }
             (

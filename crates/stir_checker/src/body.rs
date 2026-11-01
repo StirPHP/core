@@ -3927,6 +3927,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 .map(|p| p.id)
                 .chain(extra_vars.iter().copied()),
         );
+        inf.php_caller = !self.stir();
         if let Some(ta) = call.child(CALL_TYPE_ARGS) {
             let written: Vec<Ty> = ta
                 .children()

@@ -10,6 +10,8 @@ pub struct Inference {
     pub solved: FxHashMap<ParamId, Ty>,
     /// Bind literal types as they are (when unifying with an expected type).
     exact: bool,
+    /// The call is in a `.php` file: a list's keys are PHP integers.
+    pub php_caller: bool,
 }
 
 impl Inference {
@@ -18,6 +20,7 @@ impl Inference {
             vars: vars.into_iter().collect(),
             solved: FxHashMap::default(),
             exact: false,
+            php_caller: false,
         }
     }
 
@@ -139,7 +142,7 @@ impl Inference {
                 | TyKind::Iterable { key: pk, value: pv },
                 TyKind::List(a) | TyKind::MutableList(a) | TyKind::PhpList { elem: a, .. },
             ) => {
-                let key = if matches!(arg.kind(), TyKind::PhpList { .. }) {
+                let key = if self.php_caller {
                     Ty::php_int()
                 } else {
                     Ty::int()
