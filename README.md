@@ -170,3 +170,12 @@ scripts/parse-corpus.sh                                              # parse Lar
 
 Checker fixtures live in `crates/stir_checker/tests/fixtures/` and mark expected
 diagnostics inline: `$x = "no" // error: SPHP0005`.
+
+## License
+
+StirPHP is licensed under the [MIT license](LICENSE).
+
+The `sphp` binary embeds JetBrains'
+[phpstorm-stubs](https://github.com/JetBrains/phpstorm-stubs) (a git submodule
+of `crates/stir_stubs`), which are licensed under the
+[Apache License 2.0](crates/stir_stubs/phpstorm-stubs/LICENSE).

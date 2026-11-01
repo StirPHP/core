@@ -4,7 +4,7 @@
   "description": "StirPHP language support: diagnostics, completion, navigation and highlighting via the sphp language server.",
   "version": "0.1.0",
   "publisher": "stirphp",
-  "license": "MIT OR Apache-2.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "engines": {
@@ -102,7 +102,7 @@
   },
   "scripts": {
     "check": "tsc --noEmit -p .",
-    "package": "vsce package --allow-missing-repository --skip-license"
+    "package": "vsce package --allow-missing-repository"
   },
   "dependencies": {
     "vscode-languageclient": "^11.0.0"
