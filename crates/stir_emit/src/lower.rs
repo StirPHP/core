@@ -331,6 +331,15 @@ pub(crate) fn native_type(t: &Ty) -> Option<Type> {
     })
 }
 
+fn mentions_callable(t: &Type) -> bool {
+    match t {
+        Type::Builtin(BuiltinType::Callable) => true,
+        Type::Builtin(_) | Type::Class(_) => false,
+        Type::Nullable(inner) => mentions_callable(inner),
+        Type::Union(ts) | Type::Intersection(ts) => ts.iter().any(mentions_callable),
+    }
+}
+
 /// Does the PHPDoc type say more than the native type?
 fn doc_needed(t: &Ty) -> bool {
     let doc = stir_types::to_phpdoc(t);
@@ -1159,6 +1168,8 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                     });
                 }
                 let default = exprs_of(p).first().map(|e| self.expr(e));
+                // PHP doesn't allow `callable` as a property type
+                let native = native.filter(|n| promote.is_none() || !mentions_callable(n));
                 // a readonly property must be typed
                 let native = native.or_else(|| {
                     promote
@@ -1381,6 +1392,13 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                 .as_ref()
                 .map(|t| self.types_doc(t))
                 .unwrap_or((None, None));
+            // PHP doesn't allow `callable` as a property type
+            let (native, d) = match (&native, &ty) {
+                (Some(n), Some(t)) if mentions_callable(n) => {
+                    (None, d.or_else(|| Some(stir_types::to_phpdoc(t))))
+                }
+                _ => (native, d),
+            };
             let default_node = exprs_of(&e).into_iter().next();
             let mut default = None;
             if let Some(dn) = default_node {
