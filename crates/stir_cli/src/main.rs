@@ -9,9 +9,20 @@ use clap::{Args, Parser, Subcommand};
 use stir_project::{InitOptions, InitReport};
 use tracing_subscriber::EnvFilter;
 
+/// The version shown by `--version`: release builds set `SPHP_BUILD_VERSION`
+/// (e.g. `0.1.0-nightly.20261101+3f02c05` for nightlies).
+const VERSION: &str = match option_env!("SPHP_BUILD_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// StirPHP: a typed superset of PHP.
 #[derive(Debug, Parser)]
-#[command(name = "sphp", version, about)]
+#[command(name = "sphp", version = VERSION, about)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

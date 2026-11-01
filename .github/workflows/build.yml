@@ -1,0 +1,104 @@
+# Builds release archives of `sphp` for every platform, and the VS Code
+# extension. Called by the release and nightly workflows.
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Version reported by `sphp --version` and used in file names
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sphp:
+    name: sphp (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-24.04, run: true }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm, run: true }
+          - { target: x86_64-apple-darwin, os: macos-15, run: false }
+          - { target: aarch64-apple-darwin, os: macos-15, run: true }
+          - { target: x86_64-pc-windows-msvc, os: windows-2025, run: true }
+          - { target: aarch64-pc-windows-msvc, os: windows-11-arm, run: true }
+    steps:
+      - uses: actions/checkout@v5
+      - name: Fetch the PHP stubs
+        run: git submodule update --init --depth 1 crates/stir_stubs/phpstorm-stubs
+      - name: musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        shell: bash
+        env:
+          SPHP_BUILD_VERSION: ${{ inputs.version }}
+        run: cargo build --profile dist --locked -p stir_cli --target ${{ matrix.target }}
+      - name: Smoke test
+        if: matrix.run
+        shell: bash
+        run: |
+          bin=target/${{ matrix.target }}/dist/sphp
+          "$bin" --version
+          "$bin" --version | grep -qF "${{ inputs.version }}"
+          mkdir -p smoke/src && cd smoke
+          printf 'srcDir = "src"\n' > sphp.toml
+          printf 'val n: Int = 1 + 2\necho n\n' > src/main.sphp
+          "../$bin" check
+          "../$bin" build
+          test -f build/main.php
+      - name: Package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          name="sphp-$VERSION-$TARGET"
+          mkdir -p "dist/$name"
+          cp LICENSE README.md "dist/$name/"
+          if [[ "$TARGET" == *windows* ]]; then
+            cp "target/$TARGET/dist/sphp.exe" "dist/$name/"
+            (cd dist && 7z a -tzip "$name.zip" "$name" > /dev/null)
+          else
+            cp "target/$TARGET/dist/sphp" "dist/$name/"
+            tar -C dist -czf "dist/$name.tar.gz" "$name"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sphp-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  vscode:
+    name: VS Code extension
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Package
+        working-directory: editors/vscode
+        run: |
+          npm ci
+          npx vsce package --allow-missing-repository --out ../../stirphp-vscode-${{ inputs.version }}.vsix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vscode
+          path: stirphp-vscode-*.vsix
+          if-no-files-found: error

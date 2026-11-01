@@ -1,0 +1,60 @@
+# A rolling `nightly` prerelease, rebuilt from every commit on main.
+name: Nightly
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: v
+        run: |
+          crate=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          echo "version=$crate-nightly.$(date -u +%Y%m%d)+$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Stable file names
+        working-directory: dist
+        run: |
+          # `sphp-<version>-<target>.tar.gz` → `sphp-nightly-<target>.tar.gz`, so
+          # https://github.com/StirPHP/core/releases/download/nightly/... links keep working
+          for f in *; do mv "$f" "$(echo "$f" | sed -E 's/-[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]+\+[0-9a-f]+/-nightly/')"; done
+          sha256sum -- * > SHA256SUMS
+          ls -la
+      - name: Replace the nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete nightly --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create nightly dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Nightly" \
+            --notes "Built from $GITHUB_SHA (\`sphp --version\`: ${{ needs.version.outputs.version }}). Rebuilt for every commit on main: it may be broken."
