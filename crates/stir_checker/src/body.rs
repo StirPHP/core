@@ -3937,7 +3937,15 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             arg_tys[i] = Some(t);
         }
-        inf.finish(&Ty::nothing());
+        if !self.stir() || sig.external {
+            // PHP code can't spell type arguments: nothing was said about this variable
+            let ctx = self.ctx;
+            inf.finish_with(|id| {
+                stir_types::TypeEnv::param_bound(ctx, id).unwrap_or_else(Ty::any_platform)
+            });
+        } else {
+            inf.finish(&Ty::nothing());
+        }
         self.bounds_external = sig.external;
         self.check_bounds(
             call.text_range(),
@@ -3984,7 +3992,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             // PHPStan refinements (`non-negative-int`, `non-empty-string`, ...) on external
             // parameters can't be expressed in StirPHP: check against the base type
-            let want = if sig.external {
+            let want = if sig.external || !self.stir() {
                 widen_refinements(&want)
             } else {
                 want
@@ -5585,7 +5593,9 @@ fn is_write_target(node: &SyntaxNode) -> bool {
 fn widen_refinements(t: &Ty) -> Ty {
     t.transform(&mut |x| match x.kind() {
         TyKind::IntRange { .. } => Some(Ty::php_int()),
-        TyKind::NonEmptyString | TyKind::NumericString => Some(Ty::php_string()),
+        TyKind::NonEmptyString | TyKind::NumericString | TyKind::ClassString(_) => {
+            Some(Ty::php_string())
+        }
         TyKind::PhpList {
             elem,
             non_empty: true,

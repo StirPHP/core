@@ -40,6 +40,13 @@ impl Inference {
         }
     }
 
+    /// Replaces any still-unsolved variable with what `fallback` makes of it.
+    pub fn finish_with(&mut self, fallback: impl Fn(ParamId) -> Ty) {
+        for v in self.vars.clone() {
+            self.solved.entry(v).or_insert_with(|| fallback(v));
+        }
+    }
+
     fn bind(&mut self, env: &dyn TypeEnv, id: ParamId, ty: &Ty) {
         if ty.is_error() {
             return;
@@ -143,6 +150,13 @@ impl Inference {
             }
             (TyKind::ClassString(Some(p)), TyKind::ClassString(Some(a))) => {
                 self.unify_depth(env, p, a, depth + 1)
+            }
+            // `new_table('WP_Posts_List_Table')` names the class
+            (TyKind::ClassString(Some(p)), TyKind::Literal(l)) => {
+                if let LitValue::String(name) = &l.value {
+                    let name = name.trim_start_matches('\\');
+                    self.unify_depth(env, p, &Ty::class(name, Vec::new()), depth + 1);
+                }
             }
             (TyKind::Fn(pf), TyKind::Fn(af)) => {
                 for (pp, ap) in pf.params.iter().zip(&af.params) {
