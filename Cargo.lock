@@ -1714,7 +1714,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "stir_checker"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "fancy-regex",
  "libtest-mimic",
@@ -1730,7 +1730,7 @@ dependencies = [
 
 [[package]]
 name = "stir_cli"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -1759,7 +1759,7 @@ dependencies = [
 
 [[package]]
 name = "stir_db"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "salsa",
  "smol_str",
@@ -1768,7 +1768,7 @@ dependencies = [
 
 [[package]]
 name = "stir_emit"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "insta",
  "libtest-mimic",
@@ -1786,7 +1786,7 @@ dependencies = [
 
 [[package]]
 name = "stir_hir"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "rowan",
  "rustc-hash 2.1.3",
@@ -1800,7 +1800,7 @@ dependencies = [
 
 [[package]]
 name = "stir_lsp"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "line-index",
  "ls-types",
@@ -1822,7 +1822,7 @@ dependencies = [
 
 [[package]]
 name = "stir_neon"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "indexmap",
  "insta",
@@ -1832,7 +1832,7 @@ dependencies = [
 
 [[package]]
 name = "stir_phpdoc"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "insta",
  "smol_str",
@@ -1841,7 +1841,7 @@ dependencies = [
 
 [[package]]
 name = "stir_project"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "futures",
@@ -1862,14 +1862,14 @@ dependencies = [
 
 [[package]]
 name = "stir_stubs"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "stir_syntax",
 ]
 
 [[package]]
 name = "stir_syntax"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "drop_bomb",
  "insta",
@@ -1881,7 +1881,7 @@ dependencies = [
 
 [[package]]
 name = "stir_types"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "pretty_assertions",
  "rustc-hash 2.1.3",
@@ -1890,7 +1890,7 @@ dependencies = [
 
 [[package]]
 name = "stir_wasm"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "salsa",
  "serde",
