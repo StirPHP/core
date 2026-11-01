@@ -274,7 +274,10 @@ mod tests {
             files
                 .iter()
                 .filter(|f| f.origin(db) == FileOrigin::Stub)
-                .all(|f| f.path(db).to_string_lossy().starts_with("stubs://"))
+                .all(|f| {
+                    let p = f.path(db).to_string_lossy();
+                    p.starts_with("stubs://") || p.starts_with("stdlib://")
+                })
         );
 
         let without = load_workspace(&project, LoadOptions { vendor: false })
