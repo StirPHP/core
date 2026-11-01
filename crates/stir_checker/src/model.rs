@@ -173,6 +173,9 @@ pub struct Ctx<'db> {
     supers: RefCell<FxHashMap<SmolStr, Rc<Supers>>>,
     fn_sigs: RefCell<FxHashMap<(SourceFile, u32), Rc<FnSig>>>,
     in_progress: RefCell<FxHashSet<SmolStr>>,
+    /// Records whose fields are being lowered: references back to them are
+    /// [`TyKind::RecordRef`]s.
+    records_lowering: RefCell<Vec<SmolStr>>,
 }
 
 #[derive(Default)]
@@ -194,6 +197,7 @@ impl<'db> Ctx<'db> {
             supers: RefCell::default(),
             fn_sigs: RefCell::default(),
             in_progress: RefCell::default(),
+            records_lowering: RefCell::default(),
         }
     }
 
@@ -737,6 +741,9 @@ impl<'db> Ctx<'db> {
                 return Ty::error();
             }
             if c.kind() == ClassKind::Record {
+                if self.records_lowering.borrow().contains(&c.key) {
+                    return Ty::record_ref(c.name.clone(), args);
+                }
                 return self.record_ty(&c, args);
             }
             return Ty::class(c.name.clone(), args);
@@ -792,12 +799,14 @@ impl<'db> Ctx<'db> {
             .map(|(p, a)| (p.name.clone(), a.clone()))
             .collect();
         let mut sink = Vec::new();
+        self.records_lowering.borrow_mut().push(c.key.clone());
         let fields: Vec<(SmolStr, Ty)> = c
             .def
             .fields
             .iter()
             .map(|f| (f.name.clone(), self.lower(&f.ty, &cx, &mut sink)))
             .collect();
+        self.records_lowering.borrow_mut().pop();
         Ty::named_record(c.name.clone(), args, fields)
     }
 
@@ -1160,6 +1169,11 @@ fn view(ty: &Ty) -> Ty {
 }
 
 impl TypeEnv for Ctx<'_> {
+    fn unfold_record(&self, name: &str, args: &[Ty]) -> Option<Ty> {
+        let c = self.class(name)?;
+        (c.kind() == ClassKind::Record).then(|| self.record_ty(&c, args.to_vec()))
+    }
+
     fn supertypes(&self, class: &str, args: &[Ty]) -> Vec<Ty> {
         let Some(c) = self.class(class) else {
             return Vec::new();

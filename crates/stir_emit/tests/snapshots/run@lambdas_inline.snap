@@ -1,5 +1,6 @@
 ---
 source: crates/stir_emit/tests/programs.rs
+assertion_line: 72
 expression: out.code
 ---
 <?php
@@ -9,7 +10,7 @@ declare(strict_types=1);
 namespace App;
 
 require_once __DIR__ . '/stir-runtime.php';
-$nums = \Stir\listOf(1, 2, 3, 4);
+$nums = [1, 2, 3, 4];
 $__i1 = fn (int $it): int => $it * 2;
 $doubled = \array_map($__i1, $nums);
 echo \implode(',', $doubled) . "\n";

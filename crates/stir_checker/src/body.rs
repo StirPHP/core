@@ -306,7 +306,7 @@ impl<'a, 'db> Checker<'a, 'db> {
     fn this_ty(&self) -> Option<Ty> {
         self.lookup("this")
             .filter(|l| l.kind == LocalKind::This)
-            .map(|l| l.ty.clone())
+            .map(|l| class_of(&l.ty))
     }
 
     /// A property of `$this` referenced without `$this->` (StirPHP only).
@@ -327,6 +327,13 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     fn stir(&self) -> bool {
         self.dialect == Dialect::Stir
+    }
+
+    /// Does `$this` have a mutable property `name` (for `$name` in methods)?
+    fn has_mutable_property(&self, name: &str) -> bool {
+        self.this_ty()
+            .and_then(|t| self.ctx.find_property(&t, name))
+            .is_some_and(|p| !p.immutable)
     }
 
     // ------------------------------------------------------------ diagnostics
@@ -1307,6 +1314,16 @@ impl<'a, 'db> Checker<'a, 'db> {
                 }
             }
         }
+        // record field defaults
+        for member in node.children_of(RECORD_FIELD) {
+            let ty = stir_hir::first_type(&member).map(|t| self.lower_type_node(&t));
+            if let Some(e) = exprs_of(&member).into_iter().next() {
+                let vt = self.expr(&e, ty.as_ref());
+                if let Some(t) = &ty {
+                    self.check_assign(e.text_range(), &vt, t, "field default");
+                }
+            }
+        }
         if let Some(body) = node.child(CLASS_BODY) {
             for member in body.children() {
                 match member.kind() {
@@ -1410,7 +1427,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         let this = if m.mods.is_static {
             None
         } else {
-            Some(model.self_ty())
+            Some(Ty::this_of(model.self_ty()))
         };
         if m.has_body {
             self.function_body(node, &sig, this, m.expr_body);
@@ -1732,6 +1749,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                             .name
                             .as_deref()
                             .is_some_and(|n| n.eq_ignore_ascii_case(&model.name)),
+                        TyKind::RecordRef { name, .. } => name.eq_ignore_ascii_case(&model.name),
                         _ => false,
                     };
                     if same {
@@ -2234,7 +2252,13 @@ impl<'a, 'db> Checker<'a, 'db> {
             );
             return Ty::error();
         }
-        match self.lookup(name).cloned() {
+        // `$x` names a mutable binding: with only an immutable local `x` in
+        // scope, it is the mutable property `$this->x`
+        let local = self
+            .lookup(name)
+            .cloned()
+            .filter(|l| !(self.stir() && !l.kind.dollar() && self.has_mutable_property(name)));
+        match local {
             Some(l) => {
                 self.def(node.text_range(), Def::Local { decl: l.range });
                 if self.stir() && !l.kind.dollar() {
@@ -2711,7 +2735,11 @@ impl<'a, 'db> Checker<'a, 'db> {
             VARIABLE_EXPR if op == EQ => {
                 let name = text_of(lhs);
                 let n = name.trim_start_matches('$').to_owned();
-                match self.lookup(&n).cloned() {
+                let local = self
+                    .lookup(&n)
+                    .cloned()
+                    .filter(|l| !(self.stir() && !l.kind.dollar() && self.has_mutable_property(&n)));
+                match local {
                     Some(l) => {
                         if l.kind != LocalKind::This {
                             self.def(lhs.text_range(), Def::Local { decl: l.range });
@@ -3055,7 +3083,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         // generic records: infer arguments from the fields
         let mut inf = Inference::new(model.params.iter().map(|p| p.id));
         if let Some(e) = expected
-            && let TyKind::Record(r) = strip_platform(e).kind()
+            && let TyKind::Record(r) = stir_types::unfold(self.ctx, &strip_platform(e)).kind()
             && r.name
                 .as_deref()
                 .is_some_and(|n| n.eq_ignore_ascii_case(&model.name))
@@ -3467,6 +3495,11 @@ impl<'a, 'db> Checker<'a, 'db> {
                 for f in &r.fields {
                     // records are copied by value: fields are covariant
                     self.variance_walk(&f.ty, input, invariant, params, range, out);
+                }
+            }
+            TyKind::RecordRef { args, .. } => {
+                for a in args {
+                    self.variance_walk(a, input, invariant, params, range, out);
                 }
             }
             _ => {}
@@ -3915,7 +3948,7 @@ impl<'a, 'db> Checker<'a, 'db> {
     }
 
     fn member_type(&mut self, recv: &Ty, name: &str, range: TextRange) -> Ty {
-        let recv = &self.bound_of(recv);
+        let recv = &stir_types::unfold(self.ctx, &self.bound_of(recv));
         match recv.kind() {
             TyKind::Error => Ty::error(),
             TyKind::Nothing | TyKind::Never => Ty::nothing(),
@@ -4436,6 +4469,20 @@ impl<'a, 'db> Checker<'a, 'db> {
     }
 
     fn new_expr(&mut self, node: &SyntaxNode, expected: Option<&Ty>) -> Ty {
+        let t = self.new_expr_inner(node, expected);
+        // `new static()` is an instance of the late-bound class
+        let is_static = node
+            .children()
+            .find(|c| c.kind() != ARG_LIST)
+            .is_some_and(|c| c.kind() == NAME_EXPR && text_of(&c).eq_ignore_ascii_case("static"));
+        if is_static && matches!(t.kind(), TyKind::Class { .. }) {
+            Ty::static_of(t)
+        } else {
+            t
+        }
+    }
+
+    fn new_expr_inner(&mut self, node: &SyntaxNode, expected: Option<&Ty>) -> Ty {
         if node.child(ANON_CLASS).is_some() {
             self.check_args_untyped(node);
             return Ty::object();

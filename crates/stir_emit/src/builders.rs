@@ -480,7 +480,7 @@ impl Expr {
         self.bin(BinaryOp::NotIdentical, rhs)
     }
     pub fn coalesce(self, rhs: Expr) -> Self {
-        self.bin(BinaryOp::Coalesce, rhs)
+        strip_null_defaults(self).bin(BinaryOp::Coalesce, rhs)
     }
     pub fn assign(self, value: Expr) -> Self {
         ExprKind::Assign {
@@ -1094,4 +1094,23 @@ impl File {
         self.stmts.push(s.into());
         self
     }
+}
+
+/// `??` tolerates missing keys and nulls along a whole index chain, so
+/// `($a['x'] ?? null)['y']` on its left side is just `$a['x']['y']`.
+fn strip_null_defaults(e: Expr) -> Expr {
+    let Expr { kind, origin } = e;
+    let kind = match kind {
+        ExprKind::Binary {
+            op: BinaryOp::Coalesce,
+            lhs,
+            rhs,
+        } if matches!(rhs.kind, ExprKind::Null) => return strip_null_defaults(*lhs),
+        ExprKind::Index { base, index } => ExprKind::Index {
+            base: Box::new(strip_null_defaults(*base)),
+            index,
+        },
+        other => other,
+    };
+    Expr { kind, origin }
 }

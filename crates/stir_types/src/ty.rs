@@ -383,6 +383,11 @@ pub enum TyKind {
     /// Mutable map, invariant.
     MutableMap(Ty, Ty),
     Record(RecordTy),
+    /// A reference to a named record from inside its own declaration (directly or
+    /// through other records): expanded one level at a time with
+    /// [`TypeEnv::unfold_record`](crate::TypeEnv::unfold_record), so recursive
+    /// records stay finite.
+    RecordRef { name: SmolStr, args: Vec<Ty> },
     /// StirPHP function type `(A, B) -> R`.
     Fn(FnTy),
 
@@ -579,6 +584,13 @@ impl Ty {
     }
 
     /// A record type.
+    pub fn record_ref<N: Into<SmolStr>>(name: N, args: Vec<Ty>) -> Ty {
+        Ty::raw(TyKind::RecordRef {
+            name: name.into(),
+            args,
+        })
+    }
+
     pub fn record(record: RecordTy) -> Ty {
         Ty::raw(TyKind::Record(record))
     }
@@ -993,6 +1005,7 @@ impl Ty {
             | K::Map(..)
             | K::MutableMap(..)
             | K::Record(_)
+            | K::RecordRef { .. }
             | K::Fn(_) => Some(Family::Safe),
             K::PhpInt
             | K::PhpFloat
@@ -1060,6 +1073,7 @@ impl Ty {
                 r.args.iter().for_each(&mut *f);
                 r.fields.iter().for_each(|fl| f(&fl.ty));
             }
+            K::RecordRef { args, .. } => args.iter().for_each(f),
             K::Shape(s) => s.fields.iter().for_each(|fl| f(&fl.ty)),
             K::Fn(sig) | K::Callable { sig: Some(sig), .. } => {
                 sig.params.iter().for_each(|p| f(&p.ty));
@@ -1086,6 +1100,10 @@ impl Ty {
             K::MutableList(t) => K::MutableList(f(t)),
             K::Map(k, v) => K::Map(f(k), f(v)),
             K::MutableMap(k, v) => K::MutableMap(f(k), f(v)),
+            K::RecordRef { name, args } => K::RecordRef {
+                name: name.clone(),
+                args: args.iter().map(&mut *f).collect(),
+            },
             K::Record(r) => K::Record(RecordTy {
                 name: r.name.clone(),
                 args: r.args.iter().map(&mut *f).collect(),

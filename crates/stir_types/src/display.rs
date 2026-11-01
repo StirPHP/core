@@ -85,6 +85,14 @@ fn print(w: &mut dyn Write, ty: &Ty, mode: Mode, prec: Prec) -> fmt::Result {
             print(w, v, mode, Prec::Top)?;
             w.write_str(">")
         }
+        K::RecordRef { name, args } => {
+            if doc {
+                // PHPDoc can't spell a recursive shape
+                return w.write_str("array<string, mixed>");
+            }
+            w.write_str(name)?;
+            print_args(w, args, mode)
+        }
         K::Record(r) => {
             if doc {
                 let fields: Vec<(ShapeKey, &Ty, bool)> = r

@@ -1,5 +1,6 @@
 ---
 source: crates/stir_emit/tests/programs.rs
+assertion_line: 72
 expression: out.code
 ---
 <?php
@@ -7,8 +8,6 @@ expression: out.code
 declare(strict_types=1);
 
 namespace App;
-
-require_once __DIR__ . '/stir-runtime.php';
 
 enum Suit: string
 {
@@ -32,16 +31,16 @@ final class Counter
     }
 }
 
-$items = \Stir\mutableListOf();
+$items = [];
 \array_push($items, 3);
 \array_push($items, 1);
 \array_push($items, 2);
 echo 'size=' . \count($items) . "\n";
-$ages = \Stir\mapOf(['first' => 'ann', 'second' => 31], ['first' => 'bob', 'second' => 25]);
+$ages = ['ann' => 31, 'bob' => 25];
 foreach ($ages as $name => $age) {
     echo "{$name}:{$age}\n";
 }
-$missing = ($ages['zed'] ?? null) ?? -1;
+$missing = $ages['zed'] ?? -1;
 echo "missing={$missing}\n";
 $c = \App\Counter::make()->inc()->inc();
 echo "counter={$c->n}\n";

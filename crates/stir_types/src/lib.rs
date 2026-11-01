@@ -31,7 +31,7 @@ pub use assign::{
 };
 pub use compare::are_comparable;
 pub use display::to_phpdoc;
-pub use env::{EmptyEnv, TypeEnv, Variance};
+pub use env::{EmptyEnv, TypeEnv, Variance, unfold};
 pub use ops::{free_params, is_nullable, join, meet, narrow_away, narrow_to, subst, without_null};
 pub use top::{TopKind, TopViolation, top_type_violation};
 pub use ty::{

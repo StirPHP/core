@@ -1,0 +1,68 @@
+namespace App
+
+// a recursive record: the tree is plain nested arrays at runtime
+record Node {
+    name: String
+    text: String? = null
+    child: Node? = null
+    children: List<Node> = listOf()
+}
+
+function depth(n: Node): Int = 1 + (n->child?->let { depth(it) } ?: 0)
+
+function render(n: Node): String {
+    var $out = "<${n->name}>"
+    $out .= n->text ?: ""
+    val c = n->child
+    if (c != null) {
+        $out .= render(c)
+    }
+    foreach (n->children as $x) {
+        $out .= render($x)
+    }
+    return $out . "</${n->name}>"
+}
+
+var $tree = Node { name = "pre", child = Node { name = "code", text = "x" } }
+$tree->child!!->text = "y < 1"
+echo "${render($tree)} ${depth($tree)}\n"
+
+// PHP code may drop a nullable key: it reads as null
+$tree->child = null
+echo render($tree) . "\n"
+
+open class Settings {
+    protected var $safe: Bool = false
+    private static var $made: MutableMap<String, Settings> = mutableMapOf()
+    protected val tags: List<String> = listOf("a", "br")
+
+    // `$safe` is the mutable property, `safe` the parameter
+    function setSafe(safe: Bool): static {
+        $safe = safe
+        return $this
+    }
+
+    function describe(): String = "safe=${if ($safe) "yes" else "no"} tags=${tags->size()}"
+
+    protected open function hook(n: Node): Node = n
+
+    function run(n: Node): String = render(hook(n))
+
+    static function instance(name: String = "default"): Settings {
+        val found = self::$made[name]
+        if (found != null) {
+            return found
+        }
+        val s = new static()
+        self::$made[name] = s
+        return s
+    }
+}
+
+class Loud : Settings() {
+    protected override function hook(n: Node): Node = Node { name = "b", child = n }
+}
+
+echo Settings::instance()->setSafe(true)->describe() . "\n"
+echo (Settings::instance() === Settings::instance() ? "same" : "different") . "\n"
+echo new Loud()->run(Node { name = "i", text = "hi" }) . "\n"

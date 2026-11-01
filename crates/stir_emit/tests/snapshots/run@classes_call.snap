@@ -1,5 +1,6 @@
 ---
 source: crates/stir_emit/tests/programs.rs
+assertion_line: 72
 expression: out.code
 ---
 <?php
@@ -22,7 +23,7 @@ class Base
     ) {
     }
 
-    public function describe(): string
+    final public function describe(): string
     {
         return "base {$this->id}";
     }

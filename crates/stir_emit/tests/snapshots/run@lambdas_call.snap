@@ -1,5 +1,6 @@
 ---
 source: crates/stir_emit/tests/programs.rs
+assertion_line: 72
 expression: out.code
 ---
 <?php
@@ -9,7 +10,7 @@ declare(strict_types=1);
 namespace App;
 
 require_once __DIR__ . '/stir-runtime.php';
-$nums = \Stir\listOf(1, 2, 3, 4);
+$nums = [1, 2, 3, 4];
 $doubled = \Stir\List_map($nums, fn (int $it): int => $it * 2);
 echo \Stir\List_joinToString($doubled, ',') . "\n";
 $evens = \Stir\List_map(

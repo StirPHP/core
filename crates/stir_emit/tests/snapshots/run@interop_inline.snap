@@ -1,0 +1,120 @@
+---
+source: crates/stir_emit/tests/programs.rs
+assertion_line: 72
+expression: out.code
+---
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+/**
+ * @param array{name: string, text: ?string, child: ?array<string, mixed>, children: list<array<string, mixed>>} $n
+ */
+function depth(array $n): int
+{
+    $__i2 = fn (array $it): int => \App\depth($it);
+    return 1 + ([$__t1 = $n['child'] ?? null, $__t1 === null ? null : $__i2($__t1)][1] ?? 0);
+}
+
+/**
+ * @param array{name: string, text: ?string, child: ?array<string, mixed>, children: list<array<string, mixed>>} $n
+ */
+function render(array $n): string
+{
+    $out = "<{$n['name']}>";
+    $out .= $n['text'] ?? '';
+    $c = $n['child'] ?? null;
+    if ($c !== null) {
+        $out .= \App\render($c);
+    }
+    foreach ($n['children'] as $x) {
+        $out .= \App\render($x);
+    }
+    return $out . "</{$n['name']}>";
+}
+
+$tree = [
+    'name' => 'pre',
+    'text' => null,
+    'child' => ['name' => 'code', 'text' => 'x', 'child' => null, 'children' => []],
+    'children' => [],
+];
+$tree['child'] ?? throw new \TypeError('`$tree->child` was null');
+$tree['child']['text'] = 'y < 1';
+echo \App\render($tree) . ' ' . \App\depth($tree) . "\n";
+$tree['child'] = null;
+echo \App\render($tree) . "\n";
+
+class Settings
+{
+    public function __construct()
+    {
+        $this->tags = ['a', 'br'];
+    }
+
+    protected bool $safe = false;
+
+    /** @var array<string, \App\Settings> */
+    private static array $made = [];
+
+    /** @var list<string> */
+    protected readonly array $tags;
+
+    final public function setSafe(bool $safe): static
+    {
+        $this->safe = $safe;
+        return $this;
+    }
+
+    final public function describe(): string
+    {
+        $__i3 = $this->tags;
+        return 'safe=' . ($this->safe ? 'yes' : 'no') . ' tags=' . \count($__i3);
+    }
+
+    /**
+     * @param array{name: string, text: ?string, child: ?array<string, mixed>, children: list<array<string, mixed>>} $n
+     * @return array{name: string, text: ?string, child: ?array<string, mixed>, children: list<array<string, mixed>>}
+     */
+    protected function hook(array $n)
+    {
+        return $n;
+    }
+
+    /**
+     * @param array{name: string, text: ?string, child: ?array<string, mixed>, children: list<array<string, mixed>>} $n
+     */
+    final public function run(array $n): string
+    {
+        return \App\render($this->hook($n));
+    }
+
+    final public static function instance(string $name = 'default'): \App\Settings
+    {
+        $found = self::$made[$name] ?? null;
+        if ($found !== null) {
+            return $found;
+        }
+        $s = new static();
+        self::$made[$name] = $s;
+        return $s;
+    }
+}
+
+final class Loud extends \App\Settings
+{
+    /**
+     * @param array{name: string, text: ?string, child: ?array<string, mixed>, children: list<array<string, mixed>>} $n
+     * @return array{name: string, text: ?string, child: ?array<string, mixed>, children: list<array<string, mixed>>}
+     */
+    protected function hook(array $n): array
+    {
+        return ['name' => 'b', 'text' => null, 'child' => $n, 'children' => []];
+    }
+}
+
+echo \App\Settings::instance()->setSafe(true)->describe() . "\n";
+echo (\App\Settings::instance() === \App\Settings::instance() ? 'same' : 'different') . "\n";
+echo (new \App\Loud())->run(['name' => 'i', 'text' => 'hi', 'child' => null, 'children' => []]) . "\n";

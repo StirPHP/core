@@ -31,6 +31,13 @@ pub trait TypeEnv {
         Variance::Invariant
     }
 
+    /// The record type a [`TyKind::RecordRef`](crate::TyKind::RecordRef) to record
+    /// `name` instantiated with `args` stands for (one level expanded).
+    fn unfold_record(&self, name: &str, args: &[Ty]) -> Option<Ty> {
+        let _ = (name, args);
+        None
+    }
+
     /// Upper bound of a type parameter (`T of Bound`), or `None` if unbounded (an unbounded
     /// parameter is only assignable to itself, `mixed` and `Any!`).
     fn param_bound(&self, param: ParamId) -> Option<Ty> {
@@ -71,5 +78,15 @@ pub struct EmptyEnv;
 impl TypeEnv for EmptyEnv {
     fn supertypes(&self, _class: &str, _args: &[Ty]) -> Vec<Ty> {
         Vec::new()
+    }
+}
+
+/// `ty` with a top-level record reference expanded (other types unchanged).
+pub fn unfold(env: &dyn TypeEnv, ty: &Ty) -> Ty {
+    match ty.kind() {
+        crate::TyKind::RecordRef { name, args } => {
+            env.unfold_record(name, args).unwrap_or_else(|| ty.clone())
+        }
+        _ => ty.clone(),
     }
 }

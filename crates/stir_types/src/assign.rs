@@ -266,7 +266,7 @@ pub fn is_assignable(env: &dyn TypeEnv, from: &Ty, to: &Ty) -> bool {
 
 /// Like [`is_assignable`], but explains a failure.
 pub fn check_assignable(env: &dyn TypeEnv, from: &Ty, to: &Ty) -> Result<(), Mismatch> {
-    Checker { env, depth: 0 }.check(from, to)
+    Checker::new(env).check(from, to)
 }
 
 /// Mutual assignability (used for invariant positions).
@@ -291,6 +291,7 @@ pub fn php_view(ty: &Ty) -> Option<Ty> {
         K::List(t) | K::MutableList(t) => Ty::php_list(t.clone()),
         K::Map(k, v) | K::MutableMap(k, v) => Ty::array(k.clone(), v.clone()),
         K::Record(r) => record_shape(r),
+        K::RecordRef { .. } => Ty::array(Ty::php_string(), Ty::mixed()),
         K::Fn(sig) => Ty::closure(Some(sig.clone())),
         _ => return None,
     })
@@ -328,6 +329,9 @@ type Res = Result<(), Mismatch>;
 pub(crate) struct Checker<'a> {
     pub(crate) env: &'a dyn TypeEnv,
     depth: u32,
+    /// Record-reference pairs assumed related while unfolding them (recursive
+    /// records are related coinductively).
+    assuming: Vec<(Ty, Ty)>,
 }
 
 fn lit(t: &Ty) -> Option<&Literal> {
@@ -429,7 +433,11 @@ fn shape_is_list(s: &ShapeTy) -> bool {
 
 impl<'a> Checker<'a> {
     pub(crate) fn new(env: &'a dyn TypeEnv) -> Self {
-        Self { env, depth: 0 }
+        Self {
+            env,
+            depth: 0,
+            assuming: Vec::new(),
+        }
     }
 
     pub(crate) fn ok(&mut self, from: &Ty, to: &Ty) -> bool {
@@ -632,6 +640,25 @@ impl<'a> Checker<'a> {
             (K::MutableMap(k1, v1), K::MutableMap(k2, v2)) => {
                 self.arg(from, to, 0, Variance::Invariant, k1, k2)?;
                 return self.arg(from, to, 1, Variance::Invariant, v1, v2);
+            }
+            (K::RecordRef { name: n1, args: a1 }, K::RecordRef { name: n2, args: a2 })
+                if n1.eq_ignore_ascii_case(n2) && a1 == a2 =>
+            {
+                return Ok(());
+            }
+            (K::RecordRef { .. }, _) | (_, K::RecordRef { .. }) => {
+                let pair = (from.clone(), to.clone());
+                if self.assuming.contains(&pair) {
+                    return Ok(());
+                }
+                let (uf, ut) = (crate::unfold(self.env, from), crate::unfold(self.env, to));
+                if &uf == from && &ut == to {
+                    return self.fail(from, to);
+                }
+                self.assuming.push(pair);
+                let r = self.check(&uf, &ut);
+                self.assuming.pop();
+                return r;
             }
             (K::Record(a), K::Record(b)) => return self.record_prefix(from, to, a, b),
             (K::Shape(s), K::Record(r)) => return self.shape_to_record(from, to, s, r),

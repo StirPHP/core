@@ -1,5 +1,6 @@
 ---
 source: crates/stir_emit/tests/programs.rs
+assertion_line: 72
 expression: out.code
 ---
 <?php
@@ -32,16 +33,16 @@ final class Counter
     }
 }
 
-$items = \Stir\mutableListOf();
+$items = [];
 \Stir\MutableList_add($items, 3);
 \Stir\MutableList_add($items, 1);
 \Stir\MutableList_add($items, 2);
 echo 'size=' . \Stir\List_size($items) . "\n";
-$ages = \Stir\mapOf(\Stir\Any_to('ann', 31), \Stir\Any_to('bob', 25));
+$ages = ['ann' => 31, 'bob' => 25];
 foreach ($ages as $name => $age) {
     echo "{$name}:{$age}\n";
 }
-$missing = ($ages['zed'] ?? null) ?? -1;
+$missing = $ages['zed'] ?? -1;
 echo "missing={$missing}\n";
 $c = \App\Counter::make()->inc()->inc();
 echo "counter={$c->n}\n";

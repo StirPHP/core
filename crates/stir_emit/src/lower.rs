@@ -268,6 +268,7 @@ pub(crate) fn native_type(t: &Ty) -> Option<Type> {
         | TyKind::Map(_, _)
         | TyKind::MutableMap(_, _)
         | TyKind::Record(_)
+        | TyKind::RecordRef { .. }
         | TyKind::Array { .. }
         | TyKind::PhpList { .. }
         | TyKind::Shape(_) => Type::Builtin(BuiltinType::Array),
@@ -1396,8 +1397,15 @@ impl<'a, 'db> Lowerer<'a, 'db> {
         let saved = std::mem::replace(&mut self.frames, vec![FxHashMap::default()]);
         let params = self.params(m.child(PARAM_LIST), Some(&sig), &mut doc);
         let is_ctor = md.name.eq_ignore_ascii_case("__construct");
+        // An `open` method's return type is PHPDoc-only: PHP can't override a
+        // method that declares a return type without declaring one itself, and
+        // untyped PHP subclasses must be able to override it. Parameter types
+        // stay native (an override may widen them).
+        let open = model.is_stir() && md.mods.is_open;
         let (ret_native, ret_doc) = if is_ctor {
             (None, None)
+        } else if open && !sig.ret.is_error() {
+            (None, Some(stir_types::to_phpdoc(&sig.ret)))
         } else {
             self.types_doc(&sig.ret)
         };
@@ -1413,7 +1421,17 @@ impl<'a, 'db> Lowerer<'a, 'db> {
         members.push(Member::Method(MethodDecl {
             doc: (!doc.is_empty()).then_some(doc),
             attrs: Vec::new(),
-            is_final: md.mods.is_final,
+            // StirPHP members are final unless `open`, `abstract` or `override`
+            is_final: md.mods.is_final
+                || (model.is_stir()
+                    && !model.is_final()
+                    && !interface
+                    && !is_ctor
+                    && md.has_body
+                    && !md.mods.is_open
+                    && !md.mods.is_abstract
+                    && !md.mods.is_override
+                    && md.mods.visibility != stir_hir::Visibility::Private),
             is_abstract: !interface && (md.mods.is_abstract || !md.has_body),
             visibility: Some(match md.mods.visibility {
                 stir_hir::Visibility::Public => Visibility::Public,
@@ -1648,6 +1666,12 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                     )))],
                 )
                 .throw();
+                if is_write_target(node) && self.conditional == 0 {
+                    // `a!!->x = v`: check first, then write through the plain
+                    // (assignable) chain
+                    self.pre.push(Stmt::expr(v.clone().coalesce(err)));
+                    return v;
+                }
                 v.coalesce(err)
             }
             IS_EXPR => {
@@ -2135,20 +2159,21 @@ impl<'a, 'db> Lowerer<'a, 'db> {
             return Expr::null();
         };
         let nullsafe = node.kind() == NULLSAFE_PROPERTY_FETCH_EXPR;
-        let bt = self
-            .ty(base)
-            .map(|t| strip_platform(&stir_types::without_null(&t)));
+        let bt = self.ty(base).map(|t| {
+            stir_types::unfold(self.ctx, &strip_platform(&stir_types::without_null(&t)))
+        });
         let b = self.expr(base);
         let Some(name) = node.child(SyntaxKind::NAME).map(|n| text(&n)) else {
             return Expr::raw(text(node));
         };
-        if bt
-            .as_ref()
-            .is_some_and(|t| matches!(t.kind(), TyKind::Record(_)))
-        {
-            // records are arrays
+        if let Some(TyKind::Record(r)) = bt.as_ref().map(|t| t.kind()) {
+            // records are arrays; a nullable field may be absent (PHP code can
+            // `unset` it), which reads as null
+            let optional = r
+                .field(&name)
+                .is_some_and(|f| stir_types::is_nullable(self.ctx, &f.ty));
             let e = b.index(Expr::string(name.as_str()));
-            return if nullsafe {
+            return if nullsafe || (optional && !is_write_target(node)) {
                 e.coalesce(Expr::null())
             } else {
                 e
@@ -2178,6 +2203,11 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                 let args = self.call_args(node);
                 return f.call(args);
             }
+            if let Some(fqn) = self.typed.function_calls.get(&node.text_range()).cloned()
+                && let Some(lit) = self.collection_literal(node, &fqn)
+            {
+                return lit;
+            }
             let args = self.call_args(node);
             let name = match self.typed.function_calls.get(&node.text_range()) {
                 Some(fqn) => {
@@ -2202,6 +2232,71 @@ impl<'a, 'db> Lowerer<'a, 'db> {
 
     fn is_runtime_file(&self) -> bool {
         self.file.origin(self.db) == FileOrigin::Stub
+    }
+
+    /// `listOf(a, b)` → `[a, b]` and `mapOf(k to v)` → `[k => v]`: collections
+    /// are arrays, and a literal is also valid where PHP needs a constant
+    /// expression (property defaults).
+    fn collection_literal(&mut self, node: &SyntaxNode, fqn: &str) -> Option<Expr> {
+        let list = matches!(fqn, "Stir\\listOf" | "Stir\\mutableListOf" | "Stir\\emptyList");
+        let map = matches!(fqn, "Stir\\mapOf" | "Stir\\mutableMapOf" | "Stir\\emptyMap");
+        if !list && !map {
+            return None;
+        }
+        let mut values = Vec::new();
+        for c in node.children() {
+            match c.kind() {
+                ARG_LIST => {
+                    for a in c.children() {
+                        if a.kind() != ARG || a.has_token(ELLIPSIS) {
+                            return None;
+                        }
+                        values.push(exprs_of(&a).into_iter().next()?);
+                    }
+                }
+                CALL_TYPE_ARGS | NAME_EXPR => {}
+                _ => return None,
+            }
+        }
+        if list {
+            let items = values.iter().map(|v| self.expr(v)).collect();
+            return Some(Expr::array_of(items));
+        }
+        // every argument must be a literal `k to v` pair
+        let pairs: Vec<(SyntaxNode, SyntaxNode)> = values
+            .iter()
+            .map(|v| self.to_pair(v))
+            .collect::<Option<_>>()?;
+        let items = pairs
+            .iter()
+            .map(|(k, v)| {
+                let k = self.expr(k);
+                ArrayItem::keyed(k, self.expr(v))
+            })
+            .collect();
+        Some(Expr::array(items))
+    }
+
+    /// The operands of `a to b` (infix or `a->to(b)`) calling the stdlib `to`.
+    fn to_pair(&self, node: &SyntaxNode) -> Option<(SyntaxNode, SyntaxNode)> {
+        let loc = self.typed.extension_calls.get(&node.text_range()).copied()?;
+        if self.ctx.function_def(loc).name.as_str() != "Stir\\to" {
+            return None;
+        }
+        match node.kind() {
+            INFIX_CALL_EXPR => {
+                let es = exprs_of(node);
+                Some((es.first()?.clone(), es.get(1)?.clone()))
+            }
+            METHOD_CALL_EXPR => {
+                let recv = exprs_of(&node.children().next()?).into_iter().next()?;
+                let args = node.child(ARG_LIST)?;
+                let mut it = args.children().filter(|a| a.kind() == ARG);
+                let arg = exprs_of(&it.next()?).into_iter().next()?;
+                it.next().is_none().then_some((recv, arg))
+            }
+            _ => None,
+        }
     }
 
     /// `a name b` → `a->name(b)` (or the extension function).
@@ -2283,13 +2378,11 @@ impl<'a, 'db> Lowerer<'a, 'db> {
         } else {
             (recv, None)
         };
-        let call = if self.inline && !self.inlining.contains(&loc) {
-            self.inline_call(loc, recv.clone(), args.clone())
-                .unwrap_or_else(|| {
-                    let mut all = vec![Arg::Positional(recv.clone())];
-                    all.extend(args.clone());
-                    Expr::call_fn(fqn.as_str(), all)
-                })
+        let inlined = (self.inline && !self.inlining.contains(&loc))
+            .then(|| self.inline_call(loc, recv.clone(), args.clone()))
+            .flatten();
+        let call = if let Some(e) = inlined {
+            e
         } else {
             if loc.file.origin(self.db) == FileOrigin::Stub && !self.is_runtime_file() {
                 self.needs_runtime = true;
@@ -2417,7 +2510,7 @@ impl<'a, 'db> Lowerer<'a, 'db> {
     /// A runtime check that `v` has type `t` (erasure semantics).
     fn type_check(&self, v: &Expr, t: &Ty) -> Expr {
         let call = |f: &str| Expr::call_fn(f, vec![Arg::Positional(v.clone())]);
-        match strip_platform(t).kind() {
+        match stir_types::unfold(self.ctx, &strip_platform(t)).kind() {
             TyKind::Int | TyKind::PhpInt | TyKind::IntRange { .. } => call("\\is_int"),
             TyKind::Float | TyKind::PhpFloat => call("\\is_float"),
             TyKind::String | TyKind::PhpString | TyKind::NonEmptyString | TyKind::NumericString => {
@@ -2490,7 +2583,7 @@ impl<'a, 'db> Lowerer<'a, 'db> {
     }
 
     fn record_literal(&mut self, node: &SyntaxNode) -> Expr {
-        let ty = self.ty(node);
+        let ty = self.ty(node).map(|t| stir_types::unfold(self.ctx, &t));
         let Some(TyKind::Record(r)) = ty.as_ref().map(|t| t.kind().clone()) else {
             return Expr::array(Vec::new());
         };
@@ -2529,13 +2622,20 @@ impl<'a, 'db> Lowerer<'a, 'db> {
         };
         let root = stir_db::parse(self.db, model.file).syntax();
         let node = model.def.ptr.to_node(&root);
-        for f in node.children_of(RECORD_FIELD) {
+        // defaults are lowered in the context of the record's own file
+        let typed = stir_checker::typed_file(self.db, self.ctx.ws, model.file);
+        let opts = EmitOptions {
+            inline_extensions: self.inline,
+            ..EmitOptions::default()
+        };
+        let mut sub = Lowerer::new(self.db, self.ctx, model.file, typed, &opts);
+        for f in node.descendants().filter(|d| d.kind() == RECORD_FIELD) {
             if let (Some(n), Some(e)) = (f.name_text(), exprs_of(&f).into_iter().next()) {
-                // defaults are constant expressions; lower them without file context
-                let v = Expr::raw(text(&e));
+                let v = sub.expr(&e);
                 out.insert(SmolStr::new(n), v);
             }
         }
+        self.needs_runtime |= sub.needs_runtime;
         out
     }
 
@@ -3073,4 +3173,30 @@ enum LitKey {
     Bool(bool),
     Int(i64),
     Str(SmolStr),
+}
+
+/// Is `node` assigned to (or the base of an assigned member/index chain)?
+fn is_write_target(node: &SyntaxNode) -> bool {
+    let mut cur = node.clone();
+    while let Some(parent) = cur.parent() {
+        match parent.kind() {
+            ASSIGN_EXPR => {
+                return parent.children().next().is_some_and(|lhs| lhs == cur);
+            }
+            PROPERTY_FETCH_EXPR | INDEX_EXPR | NOT_NULL_EXPR
+                if parent.children().next().is_some_and(|base| base == cur) =>
+            {
+                cur = parent;
+            }
+            PREFIX_EXPR | POSTFIX_EXPR => {
+                let op = parent
+                    .children_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .any(|t| matches!(t.kind(), INC | DEC));
+                return op;
+            }
+            _ => return false,
+        }
+    }
+    false
 }
