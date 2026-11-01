@@ -13,9 +13,11 @@ mod body;
 pub mod codes;
 mod infer;
 mod model;
+mod typed;
 
 pub use body::Checker;
 pub use model::Ctx;
+pub use typed::{TypedFile, typed_file};
 
 /// All diagnostics of `file` within `ws`.
 #[salsa::tracked(returns(ref))]
