@@ -254,6 +254,30 @@ fn nested_includes_relative_to_includer() {
 }
 
 #[test]
+fn missing_vendor_include_is_skipped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = root(&tmp);
+    let file = write(
+        &dir,
+        "phpstan.neon",
+        "includes:\n    - vendor/x/extension.neon\nparameters:\n    level: 3\n",
+    );
+    let cfg = PhpstanConfig::load_with(&file, &opts()).unwrap();
+    assert_eq!(cfg.level, Some(Level::Level(3)));
+    assert_eq!(cfg.skipped_includes, vec![dir.join("vendor/x/extension.neon")]);
+    assert!(cfg.included_files.is_empty());
+}
+
+#[test]
+fn missing_include_outside_vendor_is_an_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = root(&tmp);
+    let file = write(&dir, "phpstan.neon", "includes:\n    - missing.neon\n");
+    let err = PhpstanConfig::load_with(&file, &opts()).unwrap_err();
+    assert!(matches!(err, ConfigError::Io { .. }));
+}
+
+#[test]
 fn include_with_known_param() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = root(&tmp);

@@ -163,6 +163,9 @@ pub async fn load_settings(project: &Project) -> anyhow::Result<Settings> {
     })
     .await?
     .context("failed to load the PHPStan configuration")?;
+    for skipped in &config.skipped_includes {
+        tracing::warn!("skipping PHPStan include {}: not installed", skipped.display());
+    }
     settings.php_level = config.level.map(|l| match l {
         stir_neon::phpstan::Level::Level(n) => n.min(stir_db::MAX_PHP_LEVEL),
         stir_neon::phpstan::Level::Max => stir_db::MAX_PHP_LEVEL,

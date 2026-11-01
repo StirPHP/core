@@ -102,6 +102,9 @@ pub struct PhpstanConfig {
     pub file: PathBuf,
     /// Every included file, in load order.
     pub included_files: Vec<PathBuf>,
+    /// Includes under `vendor/` that don't exist yet (`composer install` hasn't run);
+    /// they are skipped so a project can be checked without its dev dependencies.
+    pub skipped_includes: Vec<PathBuf>,
     pub level: Option<Level>,
     pub paths: Vec<PathBuf>,
     pub exclude_paths: ExcludePaths,
@@ -154,9 +157,11 @@ impl PhpstanConfig {
             opts: &opts,
             stack: Vec::new(),
             included: Vec::new(),
+            skipped: Vec::new(),
         };
         let merged = loader.load_file(path)?;
         let included_files = loader.included;
+        let skipped_includes = loader.skipped;
 
         // Expand %params% across the whole config.
         let params_for_expansion = merged
@@ -174,6 +179,7 @@ impl PhpstanConfig {
         let mut cfg = PhpstanConfig {
             file: path.to_path_buf(),
             included_files,
+            skipped_includes,
             level: None,
             paths: Vec::new(),
             exclude_paths: ExcludePaths::default(),
@@ -374,10 +380,16 @@ fn path_list(v: &Value) -> Option<Vec<PathBuf>> {
         .collect()
 }
 
+fn is_in_vendor(path: &Path) -> bool {
+    path.components()
+        .any(|c| matches!(c, Component::Normal(n) if n == "vendor"))
+}
+
 struct Loader<'a> {
     opts: &'a LoadOptions,
     stack: Vec<PathBuf>,
     included: Vec<PathBuf>,
+    skipped: Vec<PathBuf>,
 }
 
 impl Loader<'_> {
@@ -423,6 +435,10 @@ impl Loader<'_> {
                     .as_str()
                     .ok_or_else(|| invalid("includes", "expected a list of files"))?;
                 let inc_path = resolve_path(&expand_known(inc, &self.opts.params), &dir);
+                if !inc_path.exists() && is_in_vendor(&inc_path) {
+                    self.skipped.push(inc_path);
+                    continue;
+                }
                 self.included.push(inc_path.clone());
                 let sub = self.load_file(&inc_path)?;
                 res = merge(sub, res);
