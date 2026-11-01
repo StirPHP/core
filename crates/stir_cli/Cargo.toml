@@ -19,9 +19,8 @@ sourcemap = "9.3.2"
 stir_checker = { version = "0.1.0", path = "../stir_checker" }
 stir_db = { version = "0.1.0", path = "../stir_db" }
 stir_emit = { version = "0.1.0", path = "../stir_emit" }
-stir_neon = { version = "0.1.0", path = "../stir_neon" }
+stir_lsp = { version = "0.1.0", path = "../stir_lsp" }
 stir_project = { version = "0.1.0", path = "../stir_project" }
-stir_stubs = { version = "0.1.0", path = "../stir_stubs" }
 stir_syntax = { version = "0.1.0", path = "../stir_syntax" }
 tokio.workspace = true
 tracing.workspace = true

@@ -967,6 +967,16 @@ impl Ty {
         found
     }
 
+    /// Whether an error type occurs anywhere inside this type.
+    pub fn contains_error(&self) -> bool {
+        let mut found = false;
+        self.walk(&mut |t| {
+            found |= t.is_error();
+            !found
+        });
+        found
+    }
+
     /// The family of this type's outermost constructor, or `None` for family-neutral types
     /// (`null`, classes, params, `static`, unions, intersections, platform types, `Error`).
     pub fn family(&self) -> Option<Family> {

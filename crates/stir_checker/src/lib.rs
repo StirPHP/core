@@ -25,9 +25,10 @@ mod model;
 pub mod model_api;
 mod typed;
 
-pub use body::{Checker, is_by_ref_receiver};
+pub use body::{Checker, LocalKind, is_by_ref_receiver, strip_platform};
+pub use infer::widen_literals;
 pub use model::Ctx;
-pub use typed::{TypedFile, typed_file};
+pub use typed::{Def, MemberKind, TypedFile, typed_file};
 
 /// All diagnostics of `file` within `ws`.
 #[salsa::tracked(returns(ref))]
@@ -41,11 +42,7 @@ pub fn check_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> Arc<Vec<Diagn
     let mut diags = stir_db::syntax_diagnostics(db, file).as_ref().clone();
     // Semantic errors on a broken tree are mostly noise: fix syntax first.
     if file.origin(db) == FileOrigin::Source && diags.is_empty() {
-        let ctx = Ctx::for_file(db, ws, file);
-        let mut checker = Checker::new(&ctx, file);
-        let root = stir_db::parse(db, file).syntax();
-        checker.check_root(&root);
-        diags.extend(checker.diags);
+        diags.extend(typed_file(db, ws, file).diags.iter().cloned());
     }
     if php {
         levels::filter_php(&mut diags, settings);

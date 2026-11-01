@@ -17,6 +17,7 @@ sphp check                 # type-check the project (--format json, --max-errors
 sphp build                 # transpile src/ to build/ (+ source maps)
 sphp build --watch         # rebuild on changes
 sphp build --inline-extensions
+sphp lsp                   # language server over stdin/stdout
 ```
 
 `sphp.toml`:
@@ -32,6 +33,50 @@ inlineExtensions = false
 
 Generated code targets PHP 8.4. Non-inlined calls into the standard library
 `require_once` a generated `build/stir-runtime.php`.
+
+## Editor support
+
+`sphp lsp` is a language server for `.sphp` and `.php` files. It finds the
+project from the workspace folder's `sphp.toml` (or uses defaults), and offers:
+
+- diagnostics for every project file, updated as you type
+- hover with types (narrowed by smart casts), signatures and doc comments
+- go to definition / type definition, including into the stdlib and PHP stubs
+- find references, highlights and rename (keeping `$` on mutable names)
+- completion of members after `->`/`::` (extension functions included), locals,
+  functions, classes and keywords
+- signature help, inlay type hints for `val`/`var` and lambda parameters
+- semantic highlighting (immutable bindings are `readonly`, mutable ones carry
+  a `mutable` modifier), document/workspace symbols, folding and selection ranges
+
+Neovim (0.11+):
+
+```lua
+vim.filetype.add({ extension = { sphp = "sphp" } })
+vim.lsp.config("sphp", {
+  cmd = { "sphp", "lsp" },
+  filetypes = { "sphp", "php" },
+  root_markers = { "sphp.toml", ".git" },
+})
+vim.lsp.enable("sphp")
+```
+
+Helix (`languages.toml`):
+
+```toml
+[language-server.sphp]
+command = "sphp"
+args = ["lsp"]
+
+[[language]]
+name = "sphp"
+scope = "source.sphp"
+file-types = ["sphp"]
+roots = ["sphp.toml"]
+language-servers = ["sphp"]
+```
+
+Any other LSP client works the same way: run `sphp lsp` for `.sphp` files.
 
 ## The language in one screen
 
@@ -107,7 +152,8 @@ all written in StirPHP.
 | `stir_stubs` | embedded phpstorm-stubs and the StirPHP stdlib |
 | `stir_checker` | the type checker |
 | `stir_emit` | PHP output AST, printer and the StirPHP → PHP lowering |
-| `stir_project` | `sphp.toml`, discovery, composer autoload, `init` |
+| `stir_project` | `sphp.toml`, discovery, composer autoload, `init`, workspace loading |
+| `stir_lsp` | the language server (tower-lsp-server) |
 | `stir_cli` | the `sphp` binary |
 
 ## Tests

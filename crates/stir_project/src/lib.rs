@@ -6,6 +6,7 @@ mod config;
 mod discover;
 mod error;
 mod init;
+pub mod workspace;
 
 pub use composer::{Autoload, InstalledPackage, load_autoload, parse_installed};
 pub use config::{CONFIG_FILE, Config, Project};

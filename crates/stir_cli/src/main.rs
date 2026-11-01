@@ -1,7 +1,6 @@
 mod build;
 mod check;
 mod watch;
-mod workspace;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -26,6 +25,8 @@ enum Command {
     Check(check::CheckArgs),
     /// Transpile the project to plain PHP.
     Build(build::BuildArgs),
+    /// Run the language server (over stdin/stdout).
+    Lsp,
 }
 
 #[derive(Debug, Args)]
@@ -59,6 +60,10 @@ async fn main() -> anyhow::Result<ExitCode> {
         Command::Init(args) => run_init(args).await.map(|()| ExitCode::SUCCESS),
         Command::Check(args) => check::run(args).await,
         Command::Build(args) => build::run(args).await,
+        Command::Lsp => {
+            stir_lsp::run_stdio().await;
+            Ok(ExitCode::SUCCESS)
+        }
     }
 }
 

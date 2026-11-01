@@ -1,7 +1,7 @@
 //! Building the salsa database for a project: project sources, builtin stubs and
 //! vendor PHP files reachable through Composer autoload rules.
 //!
-//! Shared by `sphp check` and (later) `sphp build`.
+//! Shared by `sphp check`, `sphp build` and the language server.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -10,7 +10,7 @@ use std::time::Instant;
 use anyhow::Context as _;
 use futures::{StreamExt as _, TryStreamExt as _};
 use stir_db::{FileOrigin, IgnoreRule, RootDatabase, Settings, SourceFile, Workspace};
-use stir_project::{Autoload, FileKind, Project};
+use crate::{Autoload, FileKind, Project};
 use stir_syntax::Dialect;
 
 /// Maximum number of files read concurrently.
@@ -43,7 +43,7 @@ pub struct Loaded {
 /// (unless disabled) vendor files from the root `composer.json` autoload rules.
 pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::Result<Loaded> {
     let start = Instant::now();
-    let discovered = stir_project::discover(project).await?;
+    let discovered = crate::discover(project).await?;
 
     let source_texts: Vec<(PathBuf, FileKind, String)> =
         futures::stream::iter(discovered.into_iter().map(|file| async move {
@@ -57,7 +57,7 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         .await?;
 
     let vendor_texts = if options.vendor {
-        let autoload = stir_project::load_autoload(project).await?;
+        let autoload = crate::load_autoload(project).await?;
         let own: Vec<PathBuf> = source_texts.iter().map(|(p, ..)| p.clone()).collect();
         let paths = vendor_paths(autoload, own, project.out_dir()).await?;
         read_vendor(paths).await
@@ -78,26 +78,12 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         files.push(file);
     }
 
-    let mut stub_count = 0;
-    for stub in stir_stubs::stub_files() {
-        files.push(SourceFile::new(
-            &db,
-            PathBuf::from(format!("stubs://{}", stub.path)),
-            stub.text.to_owned(),
-            Dialect::Php,
-            FileOrigin::Stub,
-        ));
-        stub_count += 1;
-    }
-    for lib in stir_stubs::stdlib_files() {
-        files.push(SourceFile::new(
-            &db,
-            PathBuf::from(format!("stdlib://{}", lib.path)),
-            lib.text.to_owned(),
-            Dialect::Stir,
-            FileOrigin::Stub,
-        ));
-    }
+    let builtins = builtin_files(&db);
+    let stub_count = builtins
+        .iter()
+        .filter(|f| f.path(&db).to_string_lossy().starts_with("stubs://"))
+        .count();
+    files.extend(builtins);
 
     let vendor_count = vendor_texts.len();
     for (path, text) in vendor_texts {
@@ -126,6 +112,29 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         stub_count,
         vendor_count,
     })
+}
+
+/// The builtin PHP stubs (`stubs://...`) and the StirPHP stdlib (`stdlib://...`).
+pub fn builtin_files(db: &RootDatabase) -> Vec<SourceFile> {
+    let stubs = stir_stubs::stub_files().map(|stub| {
+        SourceFile::new(
+            db,
+            PathBuf::from(format!("stubs://{}", stub.path)),
+            stub.text.to_owned(),
+            Dialect::Php,
+            FileOrigin::Stub,
+        )
+    });
+    let stdlib = stir_stubs::stdlib_files().map(|lib| {
+        SourceFile::new(
+            db,
+            PathBuf::from(format!("stdlib://{}", lib.path)),
+            lib.text.to_owned(),
+            Dialect::Stir,
+            FileOrigin::Stub,
+        )
+    });
+    stubs.chain(stdlib).collect()
 }
 
 /// Check settings: `checkPhp` from `sphp.toml`, plus the rule level and

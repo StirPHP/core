@@ -14,6 +14,7 @@ use stir_syntax::{Dialect, SyntaxKind, SyntaxKind::*, SyntaxNode, SyntaxToken, T
 use stir_types::{Family, LitValue, Ty, TyKind};
 
 use crate::codes;
+use crate::typed::{Def, MemberKind};
 use crate::infer::{Inference, widen_literals};
 use crate::model::{ClassModel, Ctx, FnSig, LowerCx};
 
@@ -106,6 +107,10 @@ pub struct Checker<'a, 'db> {
     pub function_calls: FxHashMap<TextRange, SmolStr>,
     /// Types written in `is`/`as`/`when` patterns, by type-node range.
     pub pattern_types: FxHashMap<TextRange, Ty>,
+    /// What names resolve to, by the range of the name (for the language server).
+    pub defs: FxHashMap<TextRange, Def>,
+    /// Local bindings by declaring-name range: declared type and kind.
+    pub locals: FxHashMap<TextRange, (Ty, LocalKind)>,
     /// The extension function whose body is being checked.
     current_ext: Option<stir_hir::ItemLoc>,
     /// The call being checked targets an external (PHP) function: its PHPDoc
@@ -256,7 +261,45 @@ impl<'a, 'db> Checker<'a, 'db> {
             extension_calls: FxHashMap::default(),
             function_calls: FxHashMap::default(),
             pattern_types: FxHashMap::default(),
+            defs: FxHashMap::default(),
+            locals: FxHashMap::default(),
         }
+    }
+
+    fn def(&mut self, range: TextRange, def: Def) {
+        self.defs.insert(range, def);
+    }
+
+    fn member_def(&mut self, range: TextRange, class: &ClassModel<'_>, kind: MemberKind, name: &str) {
+        self.def(
+            range,
+            Def::Member {
+                class: class.key.clone(),
+                kind,
+                name: SmolStr::new(name),
+            },
+        );
+    }
+
+    /// The range of the token spelling `name` (or `$name`) inside `range`.
+    fn name_range(&self, range: TextRange, name: &str) -> TextRange {
+        let root = stir_db::parse(self.ctx.db, self.file).syntax();
+        if !root.text_range().contains_range(range) {
+            return range;
+        }
+        let tokens: Vec<SyntaxToken> = match root.covering_element(range) {
+            stir_syntax::SyntaxElement::Token(t) => vec![t],
+            stir_syntax::SyntaxElement::Node(n) => n
+                .descendants_with_tokens()
+                .filter_map(|e| e.into_token())
+                .collect(),
+        };
+        tokens
+            .into_iter()
+            .filter(|t| range.contains_range(t.text_range()))
+            .find(|t| t.text() == name || t.text().strip_prefix('$') == Some(name))
+            .map(|t| t.text_range())
+            .unwrap_or(range)
     }
 
     /// The type of `$this`, if inside an instance method.
@@ -277,6 +320,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             return None;
         }
         self.implicit_this.insert(node.text_range());
+        let class = p.class.clone();
+        self.member_def(node.text_range(), &class, MemberKind::Property, name);
         Some(p.ty)
     }
 
@@ -354,6 +399,9 @@ impl<'a, 'db> Checker<'a, 'db> {
     }
 
     fn declare(&mut self, name: &str, ty: Ty, kind: LocalKind, range: TextRange) {
+        let range = self.name_range(range, name);
+        self.def(range, Def::Local { decl: range });
+        self.locals.insert(range, (ty.clone(), kind));
         if self.stir()
             && let Some(prev) = self.lookup(name)
         {
@@ -1022,6 +1070,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             && let Some(l) = self.lookup_mut(&name)
         {
             l.declared = widen_literals(&ty);
+            let (range, declared) = (l.range, l.declared.clone());
+            self.locals.insert(range, (declared, LocalKind::Val));
         }
     }
 
@@ -2186,6 +2236,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
         match self.lookup(name).cloned() {
             Some(l) => {
+                self.def(node.text_range(), Def::Local { decl: l.range });
                 if self.stir() && !l.kind.dollar() {
                     self.error(
                         node.text_range(),
@@ -2226,6 +2277,9 @@ impl<'a, 'db> Checker<'a, 'db> {
             && !text.contains('\\')
             && let Some(l) = self.lookup(&text).cloned()
         {
+            if l.kind != LocalKind::This {
+                self.def(node.text_range(), Def::Local { decl: l.range });
+            }
             if l.kind.dollar() && self.in_template == 0 && l.kind != LocalKind::This {
                 self.error(
                     node.text_range(),
@@ -2255,7 +2309,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                 .and_then(|f| self.ctx.constant(f.as_str()))
         });
         match loc {
-            Some(loc) => self.const_type(loc),
+            Some(loc) => {
+                self.def(node.text_range(), Def::Const(loc));
+                self.const_type(loc)
+            }
             None => {
                 self.error(
                     node.text_range(),
@@ -2656,6 +2713,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                 let n = name.trim_start_matches('$').to_owned();
                 match self.lookup(&n).cloned() {
                     Some(l) => {
+                        if l.kind != LocalKind::This {
+                            self.def(lhs.text_range(), Def::Local { decl: l.range });
+                        }
                         let vt = self.expr(rhs, Some(&l.declared));
                         if n == "this" {
                             self.check_mutable_target(lhs);
@@ -2980,6 +3040,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             return Ty::error();
         };
+        self.def(name_node.text_range(), Def::Class(model.key.clone()));
         if model.kind() != ClassKind::Record {
             self.error(
                 name_node.text_range(),
@@ -3668,6 +3729,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 && let Some(l) = self.lookup(&text).cloned()
             {
                 self.types.insert(callee.text_range(), l.ty.clone());
+                self.def(callee.text_range(), Def::Local { decl: l.range });
                 return self.call_value(node, &l.ty, expected);
             }
             if self.stir()
@@ -3676,6 +3738,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 && let Some((owner, m, map)) = self.ctx.find_method(&this, &text)
             {
                 self.implicit_this.insert(callee.text_range());
+                self.member_def(callee.text_range(), &owner, MemberKind::Method, &m.name);
                 let sig = self.ctx.method_sig(&owner, m);
                 let ret = self.check_args(node, &sig, &map, None, expected, &[]);
                 return resolve_self(&ret, &this);
@@ -3698,6 +3761,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 self.check_args_untyped(node);
                 return Ty::error();
             };
+            self.def(callee.text_range(), Def::Function(loc));
             self.function_calls.insert(
                 node.text_range(),
                 SmolStr::new(self.ctx.function_def(loc).name.as_str()),
@@ -3856,7 +3920,19 @@ impl<'a, 'db> Checker<'a, 'db> {
             TyKind::Error => Ty::error(),
             TyKind::Nothing | TyKind::Never => Ty::nothing(),
             TyKind::Record(r) => match r.field(name) {
-                Some(f) => f.ty.clone(),
+                Some(f) => {
+                    if let Some(rn) = &r.name {
+                        self.def(
+                            range,
+                            Def::Member {
+                                class: SmolStr::new(rn.trim_start_matches('\\').to_ascii_lowercase()),
+                                kind: MemberKind::Field,
+                                name: SmolStr::new(name),
+                            },
+                        );
+                    }
+                    f.ty.clone()
+                }
                 None => {
                     self.error(
                         range,
@@ -3870,6 +3946,8 @@ impl<'a, 'db> Checker<'a, 'db> {
                 let cls = class_of(recv);
                 match self.ctx.find_property(&cls, name) {
                     Some(p) => {
+                        let class = p.class.clone();
+                        self.member_def(range, &class, MemberKind::Property, name);
                         self.check_visibility(
                             range,
                             &p.class,
@@ -4018,6 +4096,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         if matches!(cls.kind(), TyKind::Class { .. })
             && let Some((owner, m, map)) = self.ctx.find_method(&cls, name)
         {
+            self.member_def(range, &owner, MemberKind::Method, &m.name);
             self.check_visibility(
                 range,
                 &owner,
@@ -4034,6 +4113,9 @@ impl<'a, 'db> Checker<'a, 'db> {
         // a property holding a closure: `($this->f)()` is required in PHP, so not here
         // extension functions (and the StirPHP stdlib)
         if let Some(t) = self.call_extension(node, recv, name, expected) {
+            if let Some(loc) = self.extension_calls.get(&node.text_range()).copied() {
+                self.def(range, Def::Function(loc));
+            }
             return t;
         }
         if matches!(cls.kind(), TyKind::Class { .. })
@@ -4181,6 +4263,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         let fqn = scope.resolve_class(text);
         match self.ctx.class(fqn.as_str()) {
             Some(c) => {
+                self.def(node.text_range(), Def::Class(c.key.clone()));
                 if c.kind() == ClassKind::Record {
                     self.ctx
                         .record_ty(&c, c.params.iter().map(|_| Ty::nothing()).collect())
@@ -4232,6 +4315,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
         match self.ctx.find_method(&cls, &name) {
             Some((owner, m, map)) => {
+                self.member_def(name_node.text_range(), &owner, MemberKind::Method, &m.name);
                 self.check_visibility(
                     name_node.text_range(),
                     &owner,
@@ -4285,6 +4369,8 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
         match self.ctx.find_property(&cls, name) {
             Some(p) => {
+                let class = p.class.clone();
+                self.member_def(var.text_range(), &class, MemberKind::Property, name);
                 self.check_visibility(
                     var.text_range(),
                     &p.class,
@@ -4329,7 +4415,13 @@ impl<'a, 'db> Checker<'a, 'db> {
             return Ty::error();
         }
         match self.ctx.find_const(&cls, &name) {
-            Some(t) => t,
+            Some(t) => {
+                if let Some((owner, kind)) = self.ctx.const_owner(&cls, &name) {
+                    let kind = if kind { MemberKind::Case } else { MemberKind::Const };
+                    self.member_def(name_node.text_range(), &owner, kind, &name);
+                }
+                t
+            }
             None => {
                 if self.class_known(&cls) {
                     self.error(

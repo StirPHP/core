@@ -23,7 +23,7 @@ use stir_syntax::Dialect;
 use crate::check::{
     Summary, collect_diagnostics, display_path, load_project, print_human, source_texts,
 };
-use crate::workspace::{LoadOptions, Loaded, load_workspace};
+use stir_project::workspace::{LoadOptions, Loaded, load_workspace};
 
 /// Name of the build manifest inside `outDir`.
 pub const MANIFEST_FILE: &str = ".sphp-build.json";

@@ -13,7 +13,7 @@ use stir_db::{Diagnostic, Severity, SourceFile};
 use stir_project::Project;
 use stir_syntax::{Dialect, TextRange};
 
-use crate::workspace::{LoadOptions, Loaded, load_workspace};
+use stir_project::workspace::{LoadOptions, Loaded, load_workspace};
 
 #[derive(Debug, Args)]
 pub struct CheckArgs {

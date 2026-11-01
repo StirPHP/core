@@ -18,7 +18,7 @@ use stir_project::Project;
 
 use crate::build::{BuildArgs, apply_overrides, build, options};
 use crate::check::display_path;
-use crate::workspace::{LoadOptions, Loaded, load_workspace};
+use stir_project::workspace::{LoadOptions, Loaded, load_workspace};
 
 const DEBOUNCE: Duration = Duration::from_millis(100);
 

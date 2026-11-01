@@ -1040,6 +1040,24 @@ impl<'db> Ctx<'db> {
         None
     }
 
+    /// The class declaring constant or enum case `name` visible on `ty`, and
+    /// whether it is an enum case.
+    pub fn const_owner(&self, ty: &Ty, name: &str) -> Option<(Rc<ClassModel<'db>>, bool)> {
+        for anc in self.ancestors(ty) {
+            let TyKind::Class { name: cname, .. } = anc.kind() else {
+                continue;
+            };
+            let Some(c) = self.class(cname) else { continue };
+            if c.def.cases.iter().any(|k| k.name == name) {
+                return Some((c, true));
+            }
+            if c.def.consts.iter().any(|k| k.name == name) {
+                return Some((c, false));
+            }
+        }
+        None
+    }
+
     /// Extension functions named `name` (lowercase lookup).
     pub fn extensions(&self, name: &str) -> Vec<ItemLoc> {
         self.index
