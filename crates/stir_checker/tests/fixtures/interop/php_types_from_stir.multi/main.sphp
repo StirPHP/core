@@ -26,3 +26,27 @@ class Holder {
 function php_offset_may_be_missing(m: array<string, bool>): bool = m["k"] ?? false
 
 function known_non_null(s: String): String = s ?? "" // warning: SPHP0021
+
+function any_value(v: string|int|array|null): string {
+    if (v !is string || v === "") {
+        return ""
+    }
+    return v
+}
+
+function both_sides_narrow(v: string?): int {
+    if (v !== null && strlen(v) > 0) {
+        return strlen(v)
+    }
+    return 0
+}
+
+function union_default(a: array<string, string>|Holder = []): Unit {}
+
+function replaced(s: string, l: array<string>): string {
+    val r = str_replace("a", "b", s)
+    val p = preg_replace("/a/", "b", s) ?: ""
+    return r . p
+}
+
+function replaced_array(l: array<string>): string = str_replace("a", "b", l) // error: SPHP0005

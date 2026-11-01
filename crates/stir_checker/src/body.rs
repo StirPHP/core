@@ -1663,7 +1663,11 @@ impl<'a, 'db> Checker<'a, 'db> {
                 match op {
                     Some(AMP2 | AND_KW) => {
                         let (lt, lf) = self.facts(&es[0]);
+                        // the right side only runs (and narrows) if the left was true
+                        let snap = self.snapshot();
+                        self.apply_facts(&lt);
                         let (rt, rf) = self.facts(&es[1]);
+                        self.restore_types(&snap);
                         let _ = (lf, rf);
                         (
                             Facts {
@@ -1674,7 +1678,11 @@ impl<'a, 'db> Checker<'a, 'db> {
                     }
                     Some(PIPE2 | OR_KW) => {
                         let (_, lf) = self.facts(&es[0]);
+                        // the right side only runs (and narrows) if the left was false
+                        let snap = self.snapshot();
+                        self.apply_facts(&lf);
                         let (_, rf) = self.facts(&es[1]);
+                        self.restore_types(&snap);
                         (
                             Facts::default(),
                             Facts {
@@ -3361,12 +3369,14 @@ impl<'a, 'db> Checker<'a, 'db> {
         // `[]` where a PHP array type is expected
         if elems.is_empty()
             && let Some(e) = &exp
-            && matches!(
-                e.kind(),
-                TyKind::Array { .. } | TyKind::PhpList { .. } | TyKind::Shape(_)
-            )
+            && let Some(array) = e.members().iter().find(|m| {
+                matches!(
+                    m.kind(),
+                    TyKind::Array { .. } | TyKind::PhpList { .. } | TyKind::Shape(_)
+                )
+            })
         {
-            return e.clone();
+            return array.clone();
         }
         let mut keys = Vec::new();
         let mut vals = Vec::new();
@@ -4295,10 +4305,58 @@ impl<'a, 'db> Checker<'a, 'db> {
             {
                 self.dynamic_vars_fn = Some(self.fns.len());
             }
-            return self.check_args(node, &sig, &FxHashMap::default(), None, expected, &[]);
+            let ret = self.check_args(node, &sig, &FxHashMap::default(), None, expected, &[]);
+            let name = self
+                .ctx
+                .function_def(loc)
+                .name
+                .as_str()
+                .to_ascii_lowercase();
+            return self.refine_by_subject(node, &name, ret);
         }
         let ct = self.expr(&callee, None);
         self.call_value(node, &ct, expected)
+    }
+
+    /// `str_replace` and friends return an array only when given an array subject.
+    fn refine_by_subject(&mut self, node: &SyntaxNode, name: &str, ret: Ty) -> Ty {
+        let subject = match name {
+            "str_replace"
+            | "str_ireplace"
+            | "preg_replace"
+            | "preg_replace_callback"
+            | "preg_filter" => 2,
+            "substr_replace" => 0,
+            _ => return ret,
+        };
+        let Some(arg) = self.args_of(node).into_iter().nth(subject) else {
+            return ret;
+        };
+        let Some(t) = exprs_of(&arg)
+            .first()
+            .and_then(|e| self.types.get(&e.text_range()))
+            .cloned()
+        else {
+            return ret;
+        };
+        let is_array = |m: &Ty| {
+            matches!(
+                strip_platform(m).kind(),
+                TyKind::Array { .. }
+                    | TyKind::PhpList { .. }
+                    | TyKind::Shape(_)
+                    | TyKind::List(_)
+                    | TyKind::MutableList(_)
+                    | TyKind::Map(..)
+                    | TyKind::MutableMap(..)
+                    | TyKind::Mixed
+                    | TyKind::AnyPlatform
+            )
+        };
+        if t.members().iter().any(is_array) {
+            return ret;
+        }
+        Ty::union(ret.members().iter().filter(|m| !is_array(m)).cloned())
     }
 
     fn call_value(&mut self, node: &SyntaxNode, ct: &Ty, expected: Option<&Ty>) -> Ty {
