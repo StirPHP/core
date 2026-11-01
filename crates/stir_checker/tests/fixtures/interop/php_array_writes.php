@@ -67,3 +67,48 @@ function string_offset(string $s): string
     $s[0] = 'x';
     return $s;
 }
+
+class Node
+{
+    public function add(): void {}
+}
+
+function written_later_in_loop(array $items): void
+{
+    $ref = array();
+    foreach ($items as $k => $item) {
+        if (isset($ref[$k])) {
+            $ref[$k]->add();
+        } else {
+            $ref[$k] = new Node();
+        }
+    }
+}
+
+class Guarded
+{
+    public function has(): bool
+    {
+        return isset($this->dynamic);
+    }
+
+    public function missing()
+    {
+        return $this->dynamic; // error: SPHP0009
+    }
+}
+
+/**
+ * @template T
+ * @param T $v
+ */
+function template_index($v)
+{
+    return $v['k'];
+}
+
+function add_to_nullable(?array $a): array
+{
+    $a += array('k' => 1);
+    return $a;
+}

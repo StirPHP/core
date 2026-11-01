@@ -1103,6 +1103,11 @@ impl<'a, 'db> Checker<'a, 'db> {
         match ty.kind() {
             TyKind::List(e) | TyKind::MutableList(e) => (Ty::int(), e.clone()),
             TyKind::Map(k, v) | TyKind::MutableMap(k, v) => (k.clone(), v.clone()),
+            TyKind::PhpList { elem, .. }
+                if matches!(elem.kind(), TyKind::Never) && !self.stir() =>
+            {
+                (Ty::php_int(), Ty::any_platform())
+            }
             TyKind::PhpList { elem, .. } => (Ty::php_int(), elem.clone()),
             TyKind::Array { key, value, .. } | TyKind::Iterable { key, value } => {
                 (key.clone(), value.clone())
@@ -2808,7 +2813,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             t.members().iter().all(|m| {
                 matches!(
                     strip_platform(m).kind(),
-                    TyKind::Array { .. } | TyKind::PhpList { .. } | TyKind::Shape(_)
+                    TyKind::Array { .. } | TyKind::PhpList { .. } | TyKind::Shape(_) | TyKind::Null
                 )
             })
         };
@@ -3312,6 +3317,12 @@ impl<'a, 'db> Checker<'a, 'db> {
         match base.kind() {
             TyKind::List(e) | TyKind::MutableList(e) => Some(e.clone()),
             TyKind::Map(_, v) | TyKind::MutableMap(_, v) => Some(v.clone().nullable()),
+            // in a loop, an array that starts empty may have been written to by now
+            TyKind::PhpList { elem, .. }
+                if matches!(elem.kind(), TyKind::Never) && !self.stir() =>
+            {
+                Some(Ty::any_platform())
+            }
             TyKind::PhpList { elem, .. } => Some(elem.clone()),
             TyKind::Array { value, .. } => Some(value.clone()),
             TyKind::String | TyKind::PhpString => Some(base.clone()),
@@ -3319,6 +3330,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             TyKind::Shape(_) | TyKind::Mixed => Some(Ty::mixed()),
             TyKind::Error => Some(Ty::error()),
             TyKind::Never | TyKind::Nothing if !self.stir() => Some(Ty::never()),
+            TyKind::Param { .. } if !self.stir() => Some(Ty::any_platform()),
             TyKind::Class { .. } => Some(Ty::any_platform()),
             _ => None,
         }
@@ -4463,6 +4475,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                         if self.has_magic(&cls, "__get")
                             || matches!(cls.kind(), TyKind::Class { name, .. } if name.eq_ignore_ascii_case("stdClass"))
                         {
+                            return Ty::any_platform();
+                        }
+                        if self.probing > 0 && !self.stir() {
                             return Ty::any_platform();
                         }
                         if self.class_known(&cls) {
