@@ -2294,7 +2294,6 @@ impl<'a, 'db> Lowerer<'a, 'db> {
             return Expr::raw(text(node));
         }
         let op = op_of(node).unwrap_or(EQ);
-        let lt = self.ty(&es[0]);
         let target = self.expr(&es[0]);
         let by_ref = op == EQ && es[1].kind() == PREFIX_EXPR && op_of(&es[1]) == Some(AMP);
         let value = if by_ref {
