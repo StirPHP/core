@@ -2292,6 +2292,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                 if let Some(t) = self.implicit_property(node, name, true) {
                     return t;
                 }
+                if is_superglobal(name) {
+                    return Ty::any_platform();
+                }
                 if self.stir() || self.fns.len() > 1 {
                     self.error(
                         node.text_range(),
@@ -5221,6 +5224,21 @@ fn resolve_self(ret: &Ty, recv: &Ty) -> Ty {
 }
 
 /// After assigning `value` to a variable declared `declared`, its current type.
+fn is_superglobal(name: &str) -> bool {
+    matches!(
+        name,
+        "GLOBALS"
+            | "_SERVER"
+            | "_GET"
+            | "_POST"
+            | "_FILES"
+            | "_COOKIE"
+            | "_SESSION"
+            | "_REQUEST"
+            | "_ENV"
+    )
+}
+
 fn narrow_assigned(declared: &Ty, value: &Ty) -> Ty {
     if value.is_error() || declared.is_error() {
         return declared.clone();
