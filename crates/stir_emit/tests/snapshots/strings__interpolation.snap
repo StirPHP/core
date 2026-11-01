@@ -1,0 +1,41 @@
+---
+source: crates/stir_emit/tests/strings.rs
+expression: file(stmts)
+---
+<?php
+
+declare(strict_types=1);
+
+$x = 'X';
+$o = new class {
+    public $p = 'P';
+
+    public function m()
+    {
+        return 'M';
+    }
+};
+$a = ['k' => 'K'];
+
+class S
+{
+    public static function m()
+    {
+        return 'M';
+    }
+}
+
+$r = "hello {$x}!";
+$r = "{$x}{$x}";
+$r = "{{$x}}";
+$r = "\${$x}\$";
+$r = "{\${$x}\\";
+$r = "\"{$o->p}\n";
+$r = "{$a['k']}'";
+$r = "{$o?->p} {$o->m()}";
+$r = 'only literal $x';
+$r = '';
+$r = 'n=' . strtoupper('q') . ';';
+$r = '' . strtoupper('q');
+$r = 1 + 2 . "\t";
+$r = S::m() . $x;

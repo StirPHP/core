@@ -1,0 +1,49 @@
+---
+source: crates/stir_emit/tests/decls.rs
+expression: "file(vec![ClassDecl::new(\"A\").into(), ClassDecl::new(\"B\").into(),\nClassDecl::new(\"C\").into(),\nClassDecl::new(\"Foo\").member(MethodDecl::new(Visibility::Public,\n\"m\").static_().param(Param::new(\"x\").ty(Type::self_())).body(vec![])).into(),\nf.into(),])"
+---
+<?php
+
+declare(strict_types=1);
+
+class A
+{
+}
+
+class B
+{
+}
+
+class C
+{
+}
+
+class Foo
+{
+    public static function m(self $x)
+    {
+    }
+}
+
+function typed(
+    int $p0,
+    ?int $p1,
+    ?\Foo\Bar $p2,
+    int|string $p3,
+    int|null $p4,
+    int|string|null $p5,
+    int|string|null $p6,
+    int|string|bool $p7,
+    A&\B $p8,
+    (A&\B)|null $p9,
+    (A&\B)|null $p10,
+    (A&\B)|C $p11,
+    int|string|null $p12,
+    mixed $p13,
+    iterable $p16,
+    callable $p17,
+    object $p18,
+    false|string $p19,
+    true $p20,
+): void {
+}

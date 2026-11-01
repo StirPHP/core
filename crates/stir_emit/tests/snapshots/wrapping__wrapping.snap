@@ -1,0 +1,90 @@
+---
+source: crates/stir_emit/tests/wrapping.rs
+expression: "file(vec![Stmt::comment(\"fits\"),\nExpr::call_fn(\"f\", args(long_names(3))).stmt(),\nStmt::comment(\"too long: one per line with trailing comma\"),\nExpr::call_fn(\"someFunction\", args(long_names(6))).stmt(),\nStmt::comment(\"nested call breaks only where needed\"),\nv(\"result\").assign(Expr::call_fn(\"outer\",\nvec![Expr::call_fn(\"inner\", args(long_names(5))).into(),\nint(1).into(),])).stmt(), Stmt::comment(\"arrays\"),\nv(\"config\").assign(nested).stmt(),\nStmt::comment(\"closure argument stays inline\"),\nv(\"ys\").assign(closure_arg).stmt(), Stmt::comment(\"isset / unset\"),\nStmt::if_(Expr::isset(long_names(6)),\nvec![StmtKind::Unset(long_names(6)).into()]),\nStmt::comment(\"new and method args\"),\nv(\"x\").assign(Expr::new_(\"\\\\Very\\\\Long\\\\Namespace\\\\ClassName\",\nargs(long_names(4)))).stmt(),\nExpr::this().method(\"doSomethingWith\", args(long_names(5))).stmt(),\nlong_fn.into(), long_method.into(),])"
+---
+<?php
+
+declare(strict_types=1);
+
+// fits
+f($argumentNumber0, $argumentNumber1, $argumentNumber2);
+// too long: one per line with trailing comma
+someFunction(
+    $argumentNumber0,
+    $argumentNumber1,
+    $argumentNumber2,
+    $argumentNumber3,
+    $argumentNumber4,
+    $argumentNumber5,
+);
+// nested call breaks only where needed
+$result = outer(
+    inner($argumentNumber0, $argumentNumber1, $argumentNumber2, $argumentNumber3, $argumentNumber4),
+    1,
+);
+// arrays
+$config = [
+    'short' => [1, 2],
+    'long' => [
+        'key_0' => 'value number 0',
+        'key_1' => 'value number 1',
+        'key_2' => 'value number 2',
+        'key_3' => 'value number 3',
+        'key_4' => 'value number 4',
+        'key_5' => 'value number 5',
+        'key_6' => 'value number 6',
+        'key_7' => 'value number 7',
+    ],
+];
+// closure argument stays inline
+$ys = array_map(function ($x) use ($factor) {
+    return $x * $factor;
+}, $xs);
+// isset / unset
+if (isset(
+    $argumentNumber0,
+    $argumentNumber1,
+    $argumentNumber2,
+    $argumentNumber3,
+    $argumentNumber4,
+    $argumentNumber5,
+)) {
+    unset(
+        $argumentNumber0,
+        $argumentNumber1,
+        $argumentNumber2,
+        $argumentNumber3,
+        $argumentNumber4,
+        $argumentNumber5,
+    );
+}
+// new and method args
+$x = new \Very\Long\Namespace\ClassName(
+    $argumentNumber0,
+    $argumentNumber1,
+    $argumentNumber2,
+    $argumentNumber3,
+);
+$this->doSomethingWith(
+    $argumentNumber0,
+    $argumentNumber1,
+    $argumentNumber2,
+    $argumentNumber3,
+    $argumentNumber4,
+);
+
+function aFunctionWithAVeryLongName(
+    \Some\Namespaced\ClassName $firstParameter,
+    ?string $secondParameter = null,
+): \Some\Namespaced\ReturnType {
+    return new \Some\Namespaced\ReturnType();
+}
+
+class K
+{
+    public function aMethodWithAVeryLongNameIndeed(
+        \Some\Namespaced\ClassName $firstParameter,
+        string $secondParameter,
+    ): void {
+    }
+}

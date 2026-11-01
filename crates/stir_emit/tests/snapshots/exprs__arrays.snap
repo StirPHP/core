@@ -1,0 +1,24 @@
+---
+source: crates/stir_emit/tests/exprs.rs
+expression: "expr_cases(vec![(\"empty\", Expr::array(vec![])),\n(\"list\", Expr::array_of(vec![int(1), int(2), int(3)])),\n(\"keyed\",\nExpr::array(vec![ArrayItem::keyed(s(\"a\"), int(1)),\nArrayItem::keyed(int(5), v(\"x\")),])),\n(\"spread and ref\",\nExpr::array(vec![ArrayItem::spread(v(\"xs\")), ArrayItem::by_ref(v(\"y\")),\nArrayItem\n{ key: Some(s(\"k\")), value: v(\"z\"), by_ref: true, spread: false },])),\n(\"nested\",\nExpr::array_of(vec![Expr::array_of(vec![int(1)]), Expr::array(vec![])])),\n(\"destructure keyed\",\nExpr::list(vec![Some(ArrayItem::keyed(s(\"id\"), v(\"id\"))),\nSome(ArrayItem::keyed(s(\"tags\"),\nExpr::list(vec![Some(ArrayItem::value(v(\"first\")))]))),]).assign(v(\"row\"))),\n(\"destructure holes\",\nExpr::list(vec![None, Some(ArrayItem::value(v(\"b\"))), None,\nSome(ArrayItem::value(v(\"d\")))]).assign(v(\"arr\"))),\n(\"destructure ref\",\nExpr::list(vec![Some(ArrayItem::value(v(\"a\"))),\nSome(ArrayItem::by_ref(v(\"b\")))]).assign(v(\"arr\"))),])"
+---
+<?php
+
+declare(strict_types=1);
+
+// empty
+[];
+// list
+[1, 2, 3];
+// keyed
+['a' => 1, 5 => $x];
+// spread and ref
+[...$xs, &$y, 'k' => &$z];
+// nested
+[[1], []];
+// destructure keyed
+['id' => $id, 'tags' => [$first]] = $row;
+// destructure holes
+[, $b, , $d] = $arr;
+// destructure ref
+[$a, &$b] = $arr;

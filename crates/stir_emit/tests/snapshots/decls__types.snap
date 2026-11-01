@@ -1,0 +1,27 @@
+---
+source: crates/stir_emit/tests/decls.rs
+expression: "printed.join(\"\\n\")"
+---
+int
+?int
+?\Foo\Bar
+int|string
+int|null
+int|string|null
+int|string|null
+int|string|bool
+A&\B
+(A&\B)|null
+(A&\B)|null
+(A&\B)|C
+int|string|null
+mixed
+static
+self
+iterable
+callable
+object
+false|string
+true
+void
+never

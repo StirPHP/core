@@ -1,0 +1,62 @@
+---
+source: crates/stir_emit/tests/strings.rs
+expression: expr_cases(cases)
+---
+<?php
+
+declare(strict_types=1);
+
+//
+'';
+//
+'plain';
+//
+'it\'s';
+//
+'back\\slash';
+//
+'trailing\\';
+//
+'\\\'';
+//
+'double "quotes"';
+//
+'$var and {$braces} and ${dollar}';
+//
+"line\nbreak";
+//
+"tab\there";
+//
+"cr\r\n";
+//
+"nul\x00byte";
+//
+"nul\x00";
+//
+"\x00";
+//
+"\x01\x02\x1F\x7F";
+//
+"esc\e[0m";
+//
+"vt\vff\f";
+//
+"mixed \n \$x \\ \"q\" '";
+//
+'\\n literally';
+//
+'\\u{41} literally';
+//
+"\\x41 \\101 literally\n";
+//
+'héllo wörld';
+//
+'日本語 ✓ 🎉';
+//
+"nel\u{85}ls\u{2028}";
+//
+"bom\u{FEFF}";
+//
+'{$';
+//
+"{\n\$";

@@ -1,0 +1,67 @@
+---
+source: crates/stir_emit/tests/exprs.rs
+expression: "expr_cases(vec![(\"func\", Expr::call_fn(\"strlen\", args(vec![s(\"abc\")]))),\n(\"fq func\", Expr::call_fn(\"\\\\array_map\", args(vec![s(\"trim\"), v(\"xs\")]))),\n(\"named args\",\nExpr::call_fn(\"str_pad\",\nvec![v(\"s\").into(), int(10).into(),\nArg::named(\"pad_type\", Expr::name(\"STR_PAD_LEFT\"))])),\n(\"spread args\",\nExpr::call_fn(\"f\", vec![v(\"a\").into(), Arg::spread(v(\"rest\"))])),\n(\"first class callable\", Expr::name(\"strlen\").callable()),\n(\"method callable\", v(\"o\").method(\"m\", vec![Arg::Placeholder])),\n(\"static callable\", Expr::static_call(\"Foo\", \"bar\", vec![Arg::Placeholder])),\n(\"method\", v(\"o\").method(\"run\", args(vec![int(1)]))),\n(\"nullsafe method\", v(\"o\").nullsafe_method(\"run\", vec![])),\n(\"dynamic method\", v(\"o\").method(v(\"m\"), vec![])),\n(\"static call\", Expr::static_call(\"Foo\", \"create\", vec![])),\n(\"parent call\",\nExpr::static_call(\"parent\", \"__construct\", args(vec![v(\"x\")]))),\n(\"dynamic static method\", Expr::static_call(\"Foo\", v(\"m\"), vec![])),\n(\"new\", Expr::new_(\"Foo\", vec![])),\n(\"new args\", Expr::new_(\"\\\\DateTime\", args(vec![s(\"now\")]))),\n(\"new static\", Expr::new_(\"static\", vec![])),\n(\"new anon\", Expr::new_anon(ClassDecl::default(), vec![])),\n(\"new anon full\",\nExpr::new_anon(ClassDecl::new(\"\").readonly().extends(\"Base\").implements(\"\\\\Countable\").member(MethodDecl::new(Visibility::Public,\n\"count\").returns(Type::int()).body(vec![Stmt::ret(Some(int(0)))])),\nargs(vec![v(\"x\")]),)),\n(\"new anon attrs\",\nExpr::new_anon(ClassDecl::new(\"\").attr(Attribute::new(\"Foo\")), vec![])),\n(\"isset\", Expr::isset(vec![v(\"a\"), v(\"b\").index(s(\"k\"))])),\n(\"empty\", v(\"a\").prop(\"b\").empty()),\n(\"exit\", Expr::new(ExprKind::Exit(None))),\n(\"exit code\", Expr::new(ExprKind::Exit(Some(Box::new(int(1)))))),\n(\"print\", s(\"hi\").print()),\n(\"include\", Expr::include(IncludeKind::Include, s(\"a.php\"))),\n(\"require once\",\nExpr::include(IncludeKind::RequireOnce,\nExpr::magic(MagicConst::Dir).concat(s(\"/b.php\")))),\n(\"clone\", v(\"a\").clone_()),])"
+---
+<?php
+
+declare(strict_types=1);
+
+// func
+strlen('abc');
+// fq func
+\array_map('trim', $xs);
+// named args
+str_pad($s, 10, pad_type: STR_PAD_LEFT);
+// spread args
+f($a, ...$rest);
+// first class callable
+strlen(...);
+// method callable
+$o->m(...);
+// static callable
+Foo::bar(...);
+// method
+$o->run(1);
+// nullsafe method
+$o?->run();
+// dynamic method
+$o->{$m}();
+// static call
+Foo::create();
+// parent call
+parent::__construct($x);
+// dynamic static method
+Foo::{$m}();
+// new
+new Foo();
+// new args
+new \DateTime('now');
+// new static
+new static();
+// new anon
+new class {};
+// new anon full
+new readonly class ($x) extends Base implements \Countable {
+    public function count(): int
+    {
+        return 0;
+    }
+};
+// new anon attrs
+new #[Foo] class {};
+// isset
+isset($a, $b['k']);
+// empty
+empty($a->b);
+// exit
+exit();
+// exit code
+exit(1);
+// print
+print 'hi';
+// include
+include 'a.php';
+// require once
+require_once __DIR__ . '/b.php';
+// clone
+clone $a;

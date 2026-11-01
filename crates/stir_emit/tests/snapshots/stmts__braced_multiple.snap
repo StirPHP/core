@@ -1,0 +1,15 @@
+---
+source: crates/stir_emit/tests/stmts.rs
+expression: "stir_emit::print_file(&f, &opts())"
+---
+<?php
+
+namespace A {
+    function f()
+    {
+    }
+}
+
+namespace {
+    echo A\f();
+}
