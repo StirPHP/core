@@ -2881,6 +2881,26 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
+    /// A variable passed by reference in PHP code may be written by the callee, and
+    /// needn't exist before the call: `preg_match($re, $s, $matches)`.
+    fn bind_out_argument(&mut self, arg: &SyntaxNode) {
+        if self.stir() || arg.kind() != VARIABLE_EXPR {
+            return;
+        }
+        let text = text_of(arg);
+        let name = text.trim_start_matches('$');
+        match self.lookup_mut(name) {
+            Some(l) if l.kind == LocalKind::This => {}
+            Some(l) => {
+                if !matches!(l.ty.kind(), TyKind::Array { .. } | TyKind::PhpList { .. }) {
+                    l.ty = Ty::any_platform();
+                    l.declared = Ty::any_platform();
+                }
+            }
+            None => self.declare(name, Ty::any_platform(), LocalKind::Php, arg.text_range()),
+        }
+    }
+
     fn local_name(&self, node: &SyntaxNode) -> Option<String> {
         match node.kind() {
             VARIABLE_EXPR => Some(text_of(node).trim_start_matches('$').to_owned()),
@@ -3708,6 +3728,9 @@ impl<'a, 'db> Checker<'a, 'db> {
             let Some(v) = value_of(a) else { continue };
             if matches!(v.kind(), LAMBDA_EXPR | CLOSURE_EXPR | ARROW_FN_EXPR) {
                 continue;
+            }
+            if assigned[i].is_some_and(|p| sig.params[p].by_ref) {
+                self.bind_out_argument(&v);
             }
             let pty = assigned[i].map(|p| subst_cls(&sig.params[p].ty));
             let exp = pty
