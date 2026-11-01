@@ -1,0 +1,76 @@
+# Publishes the install scripts at https://stirphp.github.io/core/, then runs
+# the documented one-liners against the live URLs.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths: [install.sh, install.ps1, .github/workflows/pages.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Assemble the site
+        run: |
+          mkdir site
+          cp install.sh install.ps1 site/
+          cat > site/index.html <<'HTML'
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>StirPHP</title>
+          <meta http-equiv="refresh" content="0; url=https://stirphp.github.io/docs/guide/installation.html">
+          <a href="https://stirphp.github.io/docs/guide/installation.html">StirPHP installation guide</a>
+          HTML
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  verify-unix:
+    name: One-liner (${{ matrix.os }})
+    needs: deploy
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      - run: curl -fsSL https://stirphp.github.io/core/install.sh | sh
+      - run: '"$HOME/.local/bin/sphp" --version'
+
+  verify-windows:
+    name: One-liner (${{ matrix.shell }})
+    needs: deploy
+    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - run: irm https://stirphp.github.io/core/install.ps1 | iex
+      - run: '& (Join-Path $env:LOCALAPPDATA "Programs\sphp\bin\sphp.exe") --version'

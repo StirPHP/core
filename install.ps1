@@ -1,6 +1,6 @@
 # Installs sphp, the StirPHP compiler, on Windows:
 #
-#   irm https://raw.githubusercontent.com/StirPHP/core/main/install.ps1 | iex
+#   irm https://stirphp.github.io/core/install.ps1 | iex
 #
 # Environment:
 #   SPHP_VERSION        a version such as 0.1.1, or "nightly" (default: the latest release)

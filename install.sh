@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs sphp, the StirPHP compiler, on Linux and macOS:
 #
-#   curl -fsSL https://raw.githubusercontent.com/StirPHP/core/main/install.sh | sh
+#   curl -fsSL https://stirphp.github.io/core/install.sh | sh
 #
 # Environment:
 #   SPHP_VERSION      a version such as 0.1.1, or "nightly" (default: the latest release)
