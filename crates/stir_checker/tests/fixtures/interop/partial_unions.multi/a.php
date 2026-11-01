@@ -27,7 +27,7 @@ function partial_argument($v): string
     return want($v);
 }
 
-function wrong_argument(int $n): string
+function wrong_argument(array $n): string
 {
     return want($n); // error: SPHP0005
 }

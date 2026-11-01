@@ -4017,6 +4017,31 @@ impl<'a, 'db> Checker<'a, 'db> {
             } else {
                 want
             };
+            if !self.stir() && !self.items.strict_types && accepts_php_scalars(&want) {
+                // without `strict_types`, PHP coerces scalar arguments
+                let rest: Vec<Ty> = t
+                    .members()
+                    .iter()
+                    .filter(|m| !coerces_to(m, &want))
+                    .cloned()
+                    .collect();
+                if rest.is_empty() {
+                    continue;
+                }
+                if rest.len() < t.members().len() {
+                    let before = self.diags.len();
+                    self.check_assign(
+                        range,
+                        &Ty::union(rest),
+                        &want,
+                        &format!("argument `{}` of `{}`", param.name, sig.name),
+                    );
+                    if self.diags.len() > before {
+                        self.tag_partial_union();
+                    }
+                    continue;
+                }
+            }
             self.check_assign(
                 range,
                 t,
@@ -5555,6 +5580,46 @@ fn unquoted_literal(node: &SyntaxNode) -> Option<String> {
         .and_then(|t| t.strip_suffix('\''))
         .or_else(|| text.strip_prefix('"').and_then(|t| t.strip_suffix('"')))?;
     (!inner.contains(['\\', '$'])).then(|| inner.to_owned())
+}
+
+fn is_php_scalar(ty: &Ty) -> bool {
+    matches!(
+        ty.kind(),
+        TyKind::PhpInt
+            | TyKind::PhpFloat
+            | TyKind::PhpString
+            | TyKind::PhpBool
+            | TyKind::Numeric
+            | TyKind::ArrayKey
+            | TyKind::NonEmptyString
+            | TyKind::NumericString
+            | TyKind::IntRange { .. }
+    ) || matches!(ty.kind(), TyKind::Literal(l) if l.family == Family::Php)
+}
+
+/// A scalar coerces in a non-strict call, unless it's a literal that isn't a number
+/// going to a parameter that doesn't take strings (a `TypeError` at runtime).
+fn coerces_to(ty: &Ty, want: &Ty) -> bool {
+    if let TyKind::Literal(l) = ty.kind()
+        && let LitValue::String(v) = &l.value
+        && v.trim().parse::<f64>().is_err()
+    {
+        return want
+            .members()
+            .iter()
+            .any(|m| matches!(m.kind(), TyKind::PhpString));
+    }
+    is_php_scalar(ty)
+}
+
+/// Does the type have a member a scalar can be coerced to? Literal types don't qualify.
+fn accepts_php_scalars(ty: &Ty) -> bool {
+    ty.members().iter().any(|m| {
+        matches!(
+            m.kind(),
+            TyKind::PhpInt | TyKind::PhpFloat | TyKind::PhpString | TyKind::PhpBool
+        )
+    })
 }
 
 fn is_superglobal(name: &str) -> bool {
