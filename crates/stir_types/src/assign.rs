@@ -825,7 +825,7 @@ impl<'a> Checker<'a> {
                 K::Callable { closure: false, .. },
             ) => return Ok(()),
             (K::Literal(l), K::Callable { closure: false, .. })
-                if l.family == Family::Php && matches!(l.value, LitValue::String(_)) =>
+                if matches!(l.value, LitValue::String(_)) =>
             {
                 return Ok(());
             }

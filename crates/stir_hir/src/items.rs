@@ -102,6 +102,17 @@ pub struct Signature {
     /// The PHPDoc `@return` type (`.php` files only).
     pub doc_ret: Option<TypeRef>,
     pub by_ref: bool,
+    /// `@phpstan-assert-if-true` / `-if-false` on parameters.
+    pub asserts: Vec<AssertDef>,
+}
+
+/// What a boolean function's result says about one of its parameters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssertDef {
+    pub param: SmolStr,
+    pub ty: TypeRef,
+    /// The result that means the parameter has this type.
+    pub when: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -580,12 +591,36 @@ impl Lowerer {
                 ptr: NodePtr::new(node),
             });
         }
+        let asserts = doc
+            .map(|d| {
+                d.effective_tags()
+                    .into_iter()
+                    .filter_map(|t| match &t.kind {
+                        stir_phpdoc::TagKind::Assert(a) if !a.negated && !a.equality => {
+                            let target = a.target.as_ref().filter(|t| t.member.is_none())?;
+                            let when = match a.kind {
+                                stir_phpdoc::AssertKind::IfTrue => true,
+                                stir_phpdoc::AssertKind::IfFalse => false,
+                                stir_phpdoc::AssertKind::Assert => return None,
+                            };
+                            Some(AssertDef {
+                                param: target.param.clone(),
+                                ty: self.doc_cx(&names).lower(&a.ty),
+                                when,
+                            })
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         Signature {
             type_params,
             params,
             ret,
             doc_ret,
             by_ref: node.has_token(AMP),
+            asserts,
         }
     }
 
@@ -989,6 +1024,7 @@ impl Lowerer {
                             ret: None,
                             doc_ret: m.return_type.as_ref().map(|t| dcx.lower(t)),
                             by_ref: false,
+                            asserts: Vec::new(),
                         },
                         has_body: true,
                         magic: true,

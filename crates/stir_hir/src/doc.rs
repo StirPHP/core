@@ -135,7 +135,13 @@ impl DocCx<'_> {
             }
             // Conditional types degrade to the union of their branches.
             TypeKind::Conditional(c) => {
-                TypeRefKind::Union(vec![self.lower(&c.if_type), self.lower(&c.else_type)])
+                let (a, b) = (self.lower(&c.if_type), self.lower(&c.else_type));
+                // what a template resolves to decides the branch, which isn't tracked: say
+                // nothing, and leave it to the native type if there is one
+                if mentions_type_param(&a) || mentions_type_param(&b) {
+                    return mixed();
+                }
+                TypeRefKind::Union(vec![a, b])
             }
             TypeKind::Error(_) => return mixed(),
         };
@@ -438,4 +444,22 @@ pub fn optional_marker(doc: &DocBlock, name: &str) -> bool {
             .as_ref()
             .is_some_and(|d| d.text.trim_start().starts_with("[optional]"))
     })
+}
+
+fn mentions_type_param(t: &TypeRef) -> bool {
+    match &t.kind {
+        TypeRefKind::Param(_) => true,
+        TypeRefKind::Nullable(inner) => mentions_type_param(inner),
+        TypeRefKind::Union(ms) | TypeRefKind::Intersection(ms) => {
+            ms.iter().any(mentions_type_param)
+        }
+        TypeRefKind::Named(_, args) | TypeRefKind::Stir(_, args) => {
+            args.iter().any(mentions_type_param)
+        }
+        TypeRefKind::PhpList { elem, .. } => mentions_type_param(elem),
+        TypeRefKind::PhpArray { key, value, .. } | TypeRefKind::Iterable { key, value } => {
+            key.as_deref().is_some_and(mentions_type_param) || mentions_type_param(value)
+        }
+        _ => false,
+    }
 }

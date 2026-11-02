@@ -11,7 +11,7 @@ use stir_hir::name::Scope;
 use stir_hir::type_ref::{parse_int, unquote};
 use stir_hir::{Binding, ClassKind, FileItems, Visibility};
 use stir_syntax::{Dialect, SyntaxKind, SyntaxKind::*, SyntaxNode, SyntaxToken, TextRange};
-use stir_types::{Family, LitValue, Ty, TyKind};
+use stir_types::{Family, LitValue, ShapeKey, ShapeTy, Ty, TyKind};
 
 use crate::codes;
 use crate::infer::{Inference, widen_literals};
@@ -2038,7 +2038,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                             Facts::default(),
                         );
                     }
-                    _ => return Default::default(),
+                    _ => return self.assert_facts(node, &text_of(&callee)),
                 };
                 let Some(arg) = node
                     .child(ARG_LIST)
@@ -2147,6 +2147,51 @@ impl<'a, 'db> Checker<'a, 'db> {
             .first_mut()?
             .insert(SmolStr::new(&key), local.clone());
         Some((SmolStr::new(&key), local))
+    }
+
+    /// What a call to a function with `@phpstan-assert-if-true` says about its arguments.
+    fn assert_facts(&mut self, node: &SyntaxNode, callee: &str) -> (Facts, Facts) {
+        let scope = self.scope(node);
+        let r = scope.resolve_function(callee);
+        let Some(loc) = self.ctx.function(r.primary.as_str()).or_else(|| {
+            r.fallback
+                .as_ref()
+                .and_then(|f| self.ctx.function(f.as_str()))
+        }) else {
+            return Default::default();
+        };
+        let def = self.ctx.function_def(loc);
+        let args = self.args_of(node);
+        let cx = LowerCx {
+            dialect: Some(loc.file.dialect(self.ctx.db)),
+            ..LowerCx::default()
+        };
+        let (mut when_true, mut when_false) = (Facts::default(), Facts::default());
+        for assert in &def.sig.asserts {
+            let Some(index) = def.sig.params.iter().position(|p| p.name == assert.param) else {
+                continue;
+            };
+            let Some((name, local)) = args
+                .get(index)
+                .and_then(|a| exprs_of(a).into_iter().next())
+                .and_then(|e| self.local_of(&e))
+            else {
+                continue;
+            };
+            let mut sink = Vec::new();
+            let test = self.ctx.lower(&assert.ty, &cx, &mut sink);
+            let test = if self.stir() {
+                crate::model::view(&test)
+            } else {
+                test
+            };
+            let yes = stir_types::narrow_to(self.ctx, &local.ty, &test);
+            let no = stir_types::narrow_away(self.ctx, &local.ty, &test);
+            let (on_true, on_false) = if assert.when { (yes, no) } else { (no, yes) };
+            when_true.narrow.push((name.clone(), on_true));
+            when_false.narrow.push((name, on_false));
+        }
+        (when_true, when_false)
     }
 
     /// The name a variable or property path is tracked under.
@@ -3786,6 +3831,63 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
+    /// `None` if the literal doesn't have string keys, so it's not meant as this shape.
+    fn shape_literal(&mut self, elems: &[SyntaxNode], shape: &ShapeTy, ty: &Ty) -> Option<Ty> {
+        let mut entries = Vec::new();
+        for elem in elems {
+            let parts = exprs_of(elem);
+            let [key, value] = parts.as_slice() else {
+                return None;
+            };
+            if key.kind() != STRING_LITERAL {
+                return None;
+            }
+            entries.push((unquoted_literal(key)?, value.clone()));
+        }
+        let shape_ty = ty
+            .members()
+            .iter()
+            .find(|m| matches!(m.kind(), TyKind::Shape(_)))?
+            .clone();
+        for (key, value) in &entries {
+            match shape.field(&ShapeKey::Str(key.as_str().into())) {
+                Some(field) => {
+                    let t = self.expr(value, Some(&field.ty));
+                    self.check_assign(value.text_range(), &t, &field.ty, &format!("key `{key}`"));
+                }
+                None => {
+                    self.expr(value, None);
+                    if shape.sealed {
+                        self.error(
+                            value.text_range(),
+                            codes::TYPE_MISMATCH,
+                            format!("`{ty}` has no key `{key}`"),
+                        );
+                    }
+                }
+            }
+        }
+        for field in &shape.fields {
+            let present = entries
+                .iter()
+                .any(|(k, _)| ShapeKey::Str(k.as_str().into()) == field.key);
+            if !field.optional && !present {
+                self.error(
+                    elems.first().map(|e| e.text_range()).unwrap_or_default(),
+                    codes::TYPE_MISMATCH,
+                    format!(
+                        "missing key `{}` of `{ty}`",
+                        match &field.key {
+                            ShapeKey::Int(i) => i.to_string(),
+                            ShapeKey::Str(k) => k.to_string(),
+                        }
+                    ),
+                );
+            }
+        }
+        Some(shape_ty)
+    }
+
     fn array_literal(&mut self, node: &SyntaxNode, expected: Option<&Ty>) -> Ty {
         let elems = node.children_of(ARRAY_ELEM);
         let exp = expected.map(strip_platform);
@@ -3807,6 +3909,17 @@ impl<'a, 'db> Checker<'a, 'db> {
             })
         {
             return array.clone();
+        }
+        // a literal where a PHP array shape is expected is checked against it
+        if self.stir()
+            && let Some(e) = &exp
+            && let Some(shape) = e.members().iter().find_map(|m| match m.kind() {
+                TyKind::Shape(s) => Some(s.clone()),
+                _ => None,
+            })
+            && let Some(t) = self.shape_literal(&elems, &shape, e)
+        {
+            return t;
         }
         let mut keys = Vec::new();
         let mut vals = Vec::new();
