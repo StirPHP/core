@@ -46,14 +46,14 @@ fn stub_signatures_follow_attributes_and_phpdoc() {
     let ctx = Ctx::new(&db, ws);
     let cases = [
         // `$arrays` (PHP <= 7.4 only) is dropped, leaving the variadic.
-        "array_map(?callable $callback, array $array, array ...$arrays): Any!",
+        "array_map(?callable $callback, array $array, array ...$arrays): array",
         // `[optional]` in the PHPDoc; `int[]|string[]` refines `array`, whose
         // nullability the native type settles (not a platform type).
-        "array_keys(array $array, mixed $filter_value?, bool $strict?): Map<Int | String, Int> | Map<Int | String, String>",
+        "array_keys(array $array, mixed $filter_value?, bool $strict?): array<Int>|array<String>",
         "str_contains(string $haystack, string $needle): Bool",
         "json_decode(string $json, ?bool $associative?, int $depth?, int $flags?): Any!",
         // `#[LanguageLevelTypeAware(['8.0' => 'string[]'])]` is the native type.
-        "explode(string $separator, string $string, int $limit?): Map<Int | String, String>",
+        "explode(string $separator, string $string, int $limit?): array<String>",
         // `int<0, max>` adds nothing to `int` from StirPHP.
         "strlen(string $string): Int",
         "array_key_first(array $array): String | Int | null",
