@@ -34,7 +34,7 @@ function <K of Int | String, V> Map<K, V>.getOrElse(key: K, defaultValue: () -> 
 /** Returns the value for `key`; throws \OutOfBoundsException if the key is absent. */
 function <K of Int | String, V> Map<K, V>.getValue(key: K): V =
     if (array_key_exists(key, this)) this[key] as V
-    else throw new \OutOfBoundsException("Key ${strval(key)} is missing in the map.")
+    else throw new \OutOfBoundsException("Key ${key} is missing in the map.")
 
 /** Returns true if the map has an entry for `key` (even if its value is null). */
 function <K of Int | String, V> Map<K, V>.containsKey(key: K): Bool = array_key_exists(key, this)
