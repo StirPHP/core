@@ -58,7 +58,7 @@ pub fn inlay_hints(
         if wanted {
             out.push(TypeHint {
                 offset: decl.end(),
-                label: format!(": {ty}"),
+                label: stir_checker::stir_type_names(&format!(": {ty}")),
             });
         }
     }
