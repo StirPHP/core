@@ -293,9 +293,11 @@ pub(crate) fn expr_bp(p: &mut Parser<'_>, min_bp: u8) -> Option<CompletedMarker>
                 break;
             }
             let m = lhs.precede(p);
+            // `as?` is a safe cast; `as ?T` casts to a nullable type
+            let safe_cast = p.nth(1) == QUESTION && p.nth_joint(0);
             p.bump(AS_KW);
-            if p.at(QUESTION) && p.nth_joint(0) {
-                p.bump(QUESTION); // `as?` safe cast
+            if safe_cast {
+                p.bump(QUESTION);
             }
             types::type_(p);
             lhs = m.complete(p, AS_EXPR);

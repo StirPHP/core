@@ -22,6 +22,7 @@ pub const NOT_CALLABLE: &str = "SPHP0018";
 pub const ANY_PLATFORM_ESCAPE: &str = "SPHP0019";
 pub const GENERIC_ARITY: &str = "SPHP0020";
 pub const UNNECESSARY_NULL_CHECK: &str = "SPHP0021";
+pub const REDUNDANT_CONVERSION: &str = "SPHP0033";
 pub const RETURN_VALUE: &str = "SPHP0022";
 pub const INSTANTIATION: &str = "SPHP0023";
 pub const VISIBILITY: &str = "SPHP0024";

@@ -1,0 +1,12 @@
+function casts(s: String, a: array<string>, v: unknown): Unit {
+    val x = s as String // warning: SPHP0033
+    val y = a as array // warning: SPHP0033
+    val z = v as string
+    val w = v as array
+    val maybe = s as? String
+    echo strval(s) // warning: SPHP0033
+    val n: Int = 1
+    val m = intval(n) // warning: SPHP0033
+}
+
+function php_to_stir(s: string): String = strval(s)

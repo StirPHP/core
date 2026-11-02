@@ -2521,6 +2521,18 @@ impl<'a, 'db> Checker<'a, 'db> {
                             format!("cast from `{src}` to `{target}` can never succeed"),
                         );
                     }
+                    // it's compiled away, so it only adds noise
+                    if self.stir()
+                        && !safe
+                        && !matches!(src.kind(), TyKind::Mixed)
+                        && stir_types::is_assignable(self.ctx, &src, &target)
+                    {
+                        self.warn(
+                            tn.text_range(),
+                            codes::REDUNDANT_CONVERSION,
+                            format!("`as {target}` is redundant: this is already `{src}`"),
+                        );
+                    }
                 }
                 if safe { target.nullable() } else { target }
             }
@@ -4876,6 +4888,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 .name
                 .as_str()
                 .to_ascii_lowercase();
+            self.warn_redundant_conversion(node, &name);
             let ret = self.refine_by_subject(node, &name, ret);
             return self.refine_array_function(node, &name, ret);
         }
@@ -4936,6 +4949,39 @@ impl<'a, 'db> Checker<'a, 'db> {
             "array_merge" if tys.iter().any(|t| strip_platform(t) != first) => ret,
             // these keep the array's keys, so a list may no longer be one
             _ => Ty::array(key, value),
+        }
+    }
+
+    /// `strval()` of a `String`, `intval()` of an `Int`. A PHP `string` isn't reported: reading
+    /// it as a `String` is what `strval` is for.
+    fn warn_redundant_conversion(&mut self, node: &SyntaxNode, name: &str) {
+        if !self.stir() {
+            return;
+        }
+        let args = self.args_of(node);
+        let [arg] = args.as_slice() else {
+            return;
+        };
+        let Some(t) = exprs_of(arg)
+            .first()
+            .and_then(|e| self.types.get(&e.text_range()))
+            .cloned()
+        else {
+            return;
+        };
+        let same = match name {
+            "strval" => matches!(t.kind(), TyKind::String),
+            "intval" => matches!(t.kind(), TyKind::Int),
+            "floatval" => matches!(t.kind(), TyKind::Float),
+            "boolval" => matches!(t.kind(), TyKind::Bool),
+            _ => false,
+        };
+        if same {
+            self.warn(
+                node.text_range(),
+                codes::REDUNDANT_CONVERSION,
+                format!("`{name}` is redundant: this is already `{t}`"),
+            );
         }
     }
 
