@@ -40,7 +40,7 @@ The **StirPHP** output channel logs which `sphp` is used.
 npm install
 npm run check      # type-check extension.js
 npm run package    # build stirphp-<version>.vsix
-code --install-extension stirphp-0.1.20.vsix
+code --install-extension stirphp-0.1.21.vsix
 ```
 
 Or open this folder in VS Code and press F5 to start an Extension Development Host.
