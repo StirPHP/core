@@ -5301,6 +5301,11 @@ impl<'a, 'db> Checker<'a, 'db> {
             self.check_args_untyped(node);
             return Ty::error();
         }
+        // narrowing ruled this path out, so it can't run
+        if matches!(recv.kind(), TyKind::Never | TyKind::Nothing) {
+            self.check_args_untyped(node);
+            return Ty::nothing();
+        }
         if recv.is_union() && (!self.stir() || all_classes(recv)) {
             return self.union_method_call(node, recv, name, range, expected);
         }
