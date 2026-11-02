@@ -92,6 +92,8 @@ pub struct Checker<'a, 'db> {
     pub items: &'db FileItems,
     pub diags: Vec<Diagnostic>,
     conditional_depth: u32,
+    /// `var`s initialized from a literal with no annotation.
+    literal_vars: rustc_hash::FxHashSet<TextRange>,
     /// Inside `isset`, `empty` or the left of `??`: the value is allowed not to exist.
     probing: u32,
     /// The function (by `fns` depth) that ran `include` or `extract`, which can
@@ -251,6 +253,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             items: ctx.items(file),
             diags: Vec::new(),
             conditional_depth: 0,
+            literal_vars: Default::default(),
             probing: 0,
             dynamic_vars_fn: None,
             frames: vec![FxHashMap::default()],
@@ -584,7 +587,13 @@ impl<'a, 'db> Checker<'a, 'db> {
     fn apply_facts(&mut self, facts: &Facts) {
         for (name, ty) in &facts.narrow {
             if let Some(l) = self.lookup_mut(name) {
-                l.ty = ty.clone();
+                // a property found to be null may be filled in by the next call, and treating
+                // it as always null would make comparing it with anything look pointless
+                l.ty = if name.contains("->") && ty.is_null() {
+                    l.declared.clone()
+                } else {
+                    ty.clone()
+                };
             }
         }
     }
@@ -595,6 +604,18 @@ impl<'a, 'db> Checker<'a, 'db> {
     }
 
     fn restore_types(&mut self, snap: &[FxHashMap<SmolStr, Local>]) {
+        for (frame, old) in self.frames.iter_mut().zip(snap) {
+            frame.retain(|name, _| !name.contains("->") || old.contains_key(name));
+            for (name, local) in frame.iter_mut() {
+                if let Some(o) = old.get(name) {
+                    local.ty = o.ty.clone();
+                }
+            }
+        }
+    }
+
+    /// Like [`Self::restore_types`], keeping property paths that started being tracked.
+    fn restore_narrowing(&mut self, snap: &[FxHashMap<SmolStr, Local>]) {
         for (frame, old) in self.frames.iter_mut().zip(snap) {
             for (name, local) in frame.iter_mut() {
                 if let Some(o) = old.get(name) {
@@ -953,6 +974,9 @@ impl<'a, 'db> Checker<'a, 'db> {
         let cond = exprs_of(node).into_iter().next();
         let (t, f) = cond.as_ref().map(|c| self.condition(c)).unwrap_or_default();
         let snap = self.snapshot();
+        // the variables' types where each path through the `if` comes out
+        let assigned = self.assigned_places(node);
+        let mut path_ends: Vec<Vec<FxHashMap<SmolStr, Local>>> = Vec::new();
         self.apply_facts(&t);
         let body: Vec<SyntaxNode> = node.children().filter(|c| is_stmt_kind(c.kind())).collect();
         let mut all_diverge = true;
@@ -961,6 +985,9 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
         let then_diverges = body.iter().any(|s| self.diverges(s));
         all_diverge &= then_diverges;
+        if !then_diverges && !assigned.is_empty() {
+            path_ends.push(self.snapshot());
+        }
         self.restore_types(&snap);
         self.apply_facts(&f);
         let mut falls_through_facts = if then_diverges { Some(f.clone()) } else { None };
@@ -981,6 +1008,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                     }
                     let d = stmts.iter().any(|s| self.diverges(s));
                     all_diverge &= d;
+                    if !d && !assigned.is_empty() {
+                        path_ends.push(self.snapshot());
+                    }
                     self.restore_types(&snap2);
                     self.apply_facts(&f2);
                     if d {
@@ -1002,6 +1032,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                     }
                     let d = stmts.iter().any(|s| self.diverges(s));
                     all_diverge &= d;
+                    if !d && !assigned.is_empty() {
+                        path_ends.push(self.snapshot());
+                    }
                     if !d {
                         falls_through_facts = None;
                     }
@@ -1009,14 +1042,79 @@ impl<'a, 'db> Checker<'a, 'db> {
                 _ => {}
             }
         }
-        // After the if: types are those of the fall-through path, and
-        // variables assigned on a path that falls through lose narrowings.
+        // without an `else`, the last failed condition is a path too
+        if !has_else && !assigned.is_empty() {
+            path_ends.push(self.snapshot());
+        }
+        // After the if: types are those of the fall-through path, and a variable assigned
+        // on some path is whatever it is where the paths come out.
         self.restore_types(&snap);
         if !has_else && let Some(ff) = falls_through_facts {
             self.apply_facts(&ff);
         }
         if !all_diverge {
-            self.widen_assigned_in(node);
+            self.join_paths(&assigned, &path_ends);
+        }
+    }
+
+    /// What's assigned anywhere inside `node`.
+    fn assigned_places(&self, node: &SyntaxNode) -> Vec<String> {
+        node.descendants()
+            .filter(|d| d.kind() == ASSIGN_EXPR)
+            .filter_map(|a| a.children().next())
+            .filter_map(|lhs| self.place_key(&lhs))
+            .collect()
+    }
+
+    /// Gives each assigned place the union of its types over the paths that fall through.
+    fn join_paths(&mut self, assigned: &[String], ends: &[Vec<FxHashMap<SmolStr, Local>>]) {
+        for name in assigned {
+            let mut declared = None;
+            let mut range = TextRange::default();
+            let mut known_everywhere = true;
+            let tys: Vec<Ty> = ends
+                .iter()
+                .filter_map(|frames| {
+                    let found = frames.iter().rev().find_map(|f| f.get(name.as_str()));
+                    match found {
+                        Some(l) => {
+                            declared.get_or_insert_with(|| l.declared.clone());
+                            range = l.range;
+                        }
+                        None => known_everywhere = false,
+                    }
+                    found.map(|l| l.ty.clone())
+                })
+                .collect();
+            let joined = Ty::union(tys);
+            // a PHP variable's declared type already holds what it was assigned on each path
+            if !self.stir() {
+                if let Some(l) = self.lookup_mut(name) {
+                    l.ty = l.declared.clone();
+                }
+                continue;
+            }
+            if let Some(l) = self.lookup_mut(name) {
+                // not known on some path: all that's left is the declared type
+                l.ty = if known_everywhere {
+                    joined
+                } else {
+                    l.declared.clone()
+                };
+            } else if name.contains("->")
+                && known_everywhere
+                && let (Some(frame), Some(declared)) = (self.frames.first_mut(), declared)
+            {
+                frame.insert(
+                    SmolStr::new(name),
+                    Local {
+                        ty: joined,
+                        declared,
+                        kind: LocalKind::Var,
+                        range,
+                    },
+                );
+            }
         }
     }
 
@@ -1054,24 +1152,15 @@ impl<'a, 'db> Checker<'a, 'db> {
                 };
                 target = base;
             }
-            let name = text_of(&target);
-            if let Some(l) = self.lookup_mut(name.trim_start_matches(['&', '$', ' ']))
+            let name = self.place_key(&target).unwrap_or_else(|| {
+                text_of(&target)
+                    .trim_start_matches(['&', '$', ' '])
+                    .to_owned()
+            });
+            if let Some(l) = self.lookup_mut(&name)
                 && l.kind.mutable()
             {
                 l.ty = l.declared.clone();
-            }
-        }
-    }
-
-    /// Variables assigned inside `node` lose their narrowings.
-    fn widen_assigned_in(&mut self, node: &SyntaxNode) {
-        for a in node.descendants().filter(|d| d.kind() == ASSIGN_EXPR) {
-            if let Some(lhs) = a.children().next() {
-                let name = text_of(&lhs);
-                let name = name.trim_start_matches('$').to_owned();
-                if let Some(l) = self.lookup_mut(&name) {
-                    l.ty = l.declared.clone();
-                }
             }
         }
     }
@@ -1328,6 +1417,14 @@ impl<'a, 'db> Checker<'a, 'db> {
             // allowed in locals
         }
         self.declare(name, ty.clone(), LocalKind::Var, var.text_range());
+        if ann.is_none()
+            && vt
+                .as_ref()
+                .is_some_and(|v| matches!(v.kind(), TyKind::Literal(_)))
+            && let Some(l) = self.lookup(name)
+        {
+            self.literal_vars.insert(l.range);
+        }
         if let (Some(v), Some(l)) = (&vt, self.lookup_mut(name)) {
             // the current value is known more precisely than the declared type
             if ann.is_some() {
@@ -1720,6 +1817,29 @@ impl<'a, 'db> Checker<'a, 'db> {
                 Some(inner) => self.facts(inner),
                 None => Default::default(),
             },
+            // `!empty($x)` rules out null and false
+            EMPTY_EXPR => {
+                let arg = node
+                    .child(ARG_LIST)
+                    .and_then(|l| l.child(ARG))
+                    .and_then(|a| exprs_of(&a).into_iter().next());
+                let Some((name, local)) = arg.and_then(|a| self.local_of(&a)) else {
+                    return Default::default();
+                };
+                let no_false = local
+                    .ty
+                    .members()
+                    .iter()
+                    .filter(|m| !matches!(m.kind(), TyKind::Literal(l) if matches!(l.value, LitValue::Bool(false))))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                (
+                    Facts::default(),
+                    Facts {
+                        narrow: vec![(name, stir_types::without_null(&Ty::union(no_false)))],
+                    },
+                )
+            }
             // `isset($x)` rules out null
             ISSET_EXPR => {
                 let mut narrow = Vec::new();
@@ -1758,7 +1878,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                         let snap = self.snapshot();
                         self.apply_facts(&lt);
                         let (rt, rf) = self.facts(&es[1]);
-                        self.restore_types(&snap);
+                        self.restore_narrowing(&snap);
                         let _ = (lf, rf);
                         (
                             Facts {
@@ -1773,7 +1893,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                         let snap = self.snapshot();
                         self.apply_facts(&lf);
                         let (_, rf) = self.facts(&es[1]);
-                        self.restore_types(&snap);
+                        self.restore_narrowing(&snap);
                         (
                             Facts::default(),
                             Facts {
@@ -1885,6 +2005,22 @@ impl<'a, 'db> Checker<'a, 'db> {
                     "is_array" => Ty::php_array(),
                     "is_object" => Ty::object(),
                     "is_resource" => Ty::resource(),
+                    // anything callable isn't null; what else it might be, only the value knows
+                    "is_callable" => {
+                        let arg = node
+                            .child(ARG_LIST)
+                            .and_then(|a| a.child(ARG))
+                            .and_then(|a| exprs_of(&a).into_iter().next());
+                        let Some((name, local)) = arg.and_then(|a| self.local_of(&a)) else {
+                            return Default::default();
+                        };
+                        return (
+                            Facts {
+                                narrow: vec![(name, stir_types::without_null(&local.ty))],
+                            },
+                            Facts::default(),
+                        );
+                    }
                     _ => return Default::default(),
                 };
                 let Some(arg) = node
@@ -1899,6 +2035,18 @@ impl<'a, 'db> Checker<'a, 'db> {
                 };
                 let yes = stir_types::narrow_to(self.ctx, &local.ty, &test);
                 let no = stir_types::narrow_away(self.ctx, &local.ty, &test);
+                // `is_bool` on a `bool` in `.sphp`: both spellings are ruled out
+                let php_test = match test.kind() {
+                    TyKind::Int => Some(Ty::php_int()),
+                    TyKind::Float => Some(Ty::php_float()),
+                    TyKind::String => Some(Ty::php_string()),
+                    TyKind::Bool => Some(Ty::php_bool()),
+                    _ => None,
+                };
+                let no = match php_test {
+                    Some(t) => stir_types::narrow_away(self.ctx, &no, &t),
+                    None => no,
+                };
                 (
                     Facts {
                         narrow: vec![(name.clone(), yes)],
@@ -1951,14 +2099,59 @@ impl<'a, 'db> Checker<'a, 'db> {
         if positive { (t, f) } else { (f, t) }
     }
 
-    fn local_of(&self, node: &SyntaxNode) -> Option<(SmolStr, Local)> {
+    fn local_of(&mut self, node: &SyntaxNode) -> Option<(SmolStr, Local)> {
         let name = match node.kind() {
             VARIABLE_EXPR => text_of(node).trim_start_matches('$').to_owned(),
             NAME_EXPR if self.stir() => text_of(node),
             PAREN_EXPR => return exprs_of(node).first().and_then(|e| self.local_of(e)),
+            PROPERTY_FETCH_EXPR => return self.property_place(node),
             _ => return None,
         };
         self.lookup(&name).map(|l| (SmolStr::new(&name), l.clone()))
+    }
+
+    /// `$this->x` / `$a->b->c` as something narrowing can track, the way TypeScript does: it
+    /// stays narrowed until it, or something it's reached through, is assigned. Calls don't
+    /// reset it. It's held like a local under a name no variable can have.
+    fn property_place(&mut self, node: &SyntaxNode) -> Option<(SmolStr, Local)> {
+        let key = self.place_key(node)?;
+        if let Some(l) = self.lookup(&key) {
+            return Some((SmolStr::new(&key), l.clone()));
+        }
+        let ty = self.types.get(&node.text_range())?.clone();
+        let local = Local {
+            ty: ty.clone(),
+            declared: ty,
+            kind: LocalKind::Var,
+            range: node.text_range(),
+        };
+        // the outermost frame, so it outlives the block it was narrowed in
+        self.frames
+            .first_mut()?
+            .insert(SmolStr::new(&key), local.clone());
+        Some((SmolStr::new(&key), local))
+    }
+
+    /// The name a variable or property path is tracked under.
+    fn place_key(&self, node: &SyntaxNode) -> Option<String> {
+        match node.kind() {
+            VARIABLE_EXPR => Some(text_of(node).trim_start_matches('$').to_owned()),
+            NAME_EXPR if self.stir() => Some(text_of(node)),
+            PROPERTY_FETCH_EXPR => {
+                let base = exprs_of(node).into_iter().next()?;
+                let name = node.child(SyntaxKind::NAME).map(|n| text_of(&n))?;
+                Some(format!("{}->{name}", self.place_key(&base)?))
+            }
+            _ => None,
+        }
+    }
+
+    /// Assigning to `$a` forgets what was known about `$a->b`.
+    fn forget_properties_of(&mut self, key: &str) {
+        let prefix = format!("{key}->");
+        for frame in &mut self.frames {
+            frame.retain(|name, _| !name.starts_with(&prefix));
+        }
     }
 
     /// The type tested by `is T` / `when { is T -> }` against `subject`. A
@@ -3127,6 +3320,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             VARIABLE_EXPR if op == EQ => {
                 let name = text_of(lhs);
                 let n = name.trim_start_matches('$').to_owned();
+                self.forget_properties_of(&n);
                 let local = self.lookup(&n).cloned().filter(|l| {
                     !(self.stir() && !l.kind.dollar() && self.has_mutable_property(&n))
                 });
@@ -3136,6 +3330,12 @@ impl<'a, 'db> Checker<'a, 'db> {
                             self.def(lhs.text_range(), Def::Local { decl: l.range });
                         }
                         let vt = self.expr(rhs, Some(&l.declared));
+                        let l = if self.stir() && self.literal_vars.contains(&l.range) {
+                            self.adopt_php_family(&n, &vt);
+                            self.lookup(&n).cloned().unwrap_or(l)
+                        } else {
+                            l
+                        };
                         let conditional = self.conditional_depth > 0;
                         if n == "this" {
                             self.check_mutable_target(lhs);
@@ -3201,6 +3401,21 @@ impl<'a, 'db> Checker<'a, 'db> {
                 self.check_assign_target_writable(lhs);
                 let declared = self.declared_target_type(lhs).unwrap_or(lt.clone());
                 let vt = self.expr(rhs, Some(&declared));
+                let (lt, declared) = match self.local_name(lhs) {
+                    Some(n)
+                        if self.stir()
+                            && self
+                                .lookup(&n)
+                                .is_some_and(|l| self.literal_vars.contains(&l.range)) =>
+                    {
+                        self.adopt_php_family(&n, &vt);
+                        match self.lookup(&n) {
+                            Some(l) => (l.ty.clone(), l.declared.clone()),
+                            None => (lt, declared),
+                        }
+                    }
+                    _ => (lt, declared),
+                };
                 let result = match op {
                     EQ => vt.clone(),
                     QUESTION2_EQ => stir_types::join(self.ctx, &stir_types::without_null(&lt), &vt),
@@ -3255,6 +3470,33 @@ impl<'a, 'db> Checker<'a, 'db> {
                     && let Some(l) = self.lookup_mut(&n)
                 {
                     l.ty = narrow_assigned(&l.declared, &result);
+                }
+                if lhs.kind() == PROPERTY_FETCH_EXPR
+                    && !lt.is_error()
+                    && let Some(key) = self.place_key(lhs)
+                {
+                    self.forget_properties_of(&key);
+                    for frame in &mut self.frames {
+                        frame.remove(key.as_str());
+                    }
+                    // what it holds now, within what it's declared to hold; `null` isn't kept, since
+                    // a call could fill it in and comparing with it would then look pointless
+                    let assigned = if result.is_null() {
+                        declared.clone()
+                    } else {
+                        narrow_assigned(&declared, &result)
+                    };
+                    if let Some(frame) = self.frames.first_mut() {
+                        frame.insert(
+                            SmolStr::new(&key),
+                            Local {
+                                ty: assigned,
+                                declared: declared.clone(),
+                                kind: LocalKind::Var,
+                                range: lhs.text_range(),
+                            },
+                        );
+                    }
                 }
                 result
             }
@@ -3374,8 +3616,29 @@ impl<'a, 'db> Checker<'a, 'db> {
             return false;
         };
         let class = class_of(&strip_platform(&stir_types::without_null(base_ty)));
-        matches!(class.kind(), TyKind::Class { name, .. }
-            if self.ctx.class(name).is_some_and(|c| !c.is_stir()))
+        let Some(name) = node.child(SyntaxKind::NAME).map(|n| text_of(&n)) else {
+            return false;
+        };
+        // the class that declares it, which an inheriting `.sphp` class doesn't change
+        self.ctx
+            .find_property(&class, &name)
+            .is_some_and(|p| !p.class.is_stir())
+    }
+
+    /// `var $x = 0` says nothing about which integer type `$x` has, only its value. If a PHP
+    /// `int` is assigned to it, it's a PHP `int` from then on.
+    fn adopt_php_family(&mut self, name: &str, value: &Ty) {
+        let php = widen_literals(value);
+        let Some(l) = self.lookup_mut(name) else {
+            return;
+        };
+        if !php.is_php() || crate::model::view(&php) != l.declared {
+            return;
+        }
+        let range = l.range;
+        l.declared = php.clone();
+        l.ty = php;
+        self.literal_vars.remove(&range);
     }
 
     fn local_name(&self, node: &SyntaxNode) -> Option<String> {
@@ -3399,6 +3662,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                 TyKind::MutableMap(_, v) | TyKind::Map(_, v) => Some(v.clone()),
                 _ => None,
             };
+        }
+        if node.kind() == PROPERTY_FETCH_EXPR {
+            let key = self.place_key(node)?;
+            return self.lookup(&key).map(|l| l.declared.clone());
         }
         let n = self.local_name(node)?;
         self.lookup(&n).map(|l| l.declared.clone())
@@ -3437,10 +3704,12 @@ impl<'a, 'db> Checker<'a, 'db> {
                 let Some(bt) = self.types.get(&base.text_range()).cloned() else {
                     return;
                 };
+                // a PHP-declared array property is a PHP array, however it reads from StirPHP
                 if matches!(
                     strip_platform(&bt).kind(),
                     TyKind::List(_) | TyKind::Map(_, _)
-                ) {
+                ) && !self.is_php_declared_property(base)
+                {
                     self.error(
                         lhs.text_range(),
                         codes::REASSIGN_IMMUTABLE,
@@ -4317,7 +4586,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 );
             }
             // external PHP functions accept untyped values
-            if sig.external && t.is_any_platform() {
+            if sig.external && (t.is_any_platform() || (self.stir() && is_bare_array(t))) {
                 continue;
             }
             // PHPStan refinements (`non-negative-int`, `non-empty-string`, ...) on external
@@ -4637,6 +4906,12 @@ impl<'a, 'db> Checker<'a, 'db> {
         };
         let name = text_of(&name_node);
         let t = self.member_type(&recv, &name, name_node.text_range());
+        if node.kind() == PROPERTY_FETCH_EXPR
+            && let Some(key) = self.place_key(node)
+            && let Some(l) = self.lookup(&key)
+        {
+            return l.ty.clone();
+        }
         if nullable { t.nullable() } else { t }
     }
 
@@ -6062,6 +6337,14 @@ fn php_callable_value(ty: &Ty) -> bool {
     })
 }
 
+fn is_bare_array(ty: &Ty) -> bool {
+    matches!(
+        strip_platform(ty).kind(),
+        TyKind::Array { key, value, .. }
+            if matches!(key.kind(), TyKind::ArrayKey) && matches!(value.kind(), TyKind::Mixed)
+    )
+}
+
 fn php_array_of_mixed(from: &Ty, to: &Ty) -> bool {
     let bare = matches!(
         strip_platform(from).kind(),
@@ -6130,6 +6413,13 @@ fn is_superglobal(name: &str) -> bool {
 
 fn narrow_assigned(declared: &Ty, value: &Ty) -> Ty {
     if value.is_error() || declared.is_error() {
+        return declared.clone();
+    }
+    // a literal in a PHP array variable is a PHP array, not a read-only collection
+    if matches!(
+        strip_platform(declared).kind(),
+        TyKind::Array { .. } | TyKind::PhpList { .. }
+    ) {
         return declared.clone();
     }
     // keep the declared type unless the value is a strictly narrower non-literal

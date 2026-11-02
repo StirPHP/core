@@ -136,13 +136,23 @@ fn discover_blocking(project: &Project) -> Result<Vec<SourceFile>> {
         });
     }
     files.sort();
-    warn_ignored_sphp(&src_dir, &project.out_dir(), &files);
+    warn_ignored_sphp(
+        &src_dir,
+        &project.out_dir(),
+        |path| excluded(path, &exclude),
+        &files,
+    );
     Ok(files)
 }
 
 /// `.gitignore` allowlists written for `.php` files can hide their `.sphp` ports, and a hidden
 /// file silently vanishes from the build: say so.
-fn warn_ignored_sphp(src_dir: &Path, out_dir: &Path, found: &[SourceFile]) {
+fn warn_ignored_sphp(
+    src_dir: &Path,
+    out_dir: &Path,
+    excluded: impl Fn(&Path) -> bool,
+    found: &[SourceFile],
+) {
     let out_dir = out_dir.to_path_buf();
     let walker = ignore::WalkBuilder::new(src_dir)
         .standard_filters(false)
@@ -156,7 +166,10 @@ fn warn_ignored_sphp(src_dir: &Path, out_dir: &Path, found: &[SourceFile]) {
         .build();
     for entry in walker.flatten() {
         let path = entry.path();
-        if path.extension().is_some_and(|e| e == "sphp") && !found.iter().any(|f| f.path == path) {
+        if path.extension().is_some_and(|e| e == "sphp")
+            && !excluded(path)
+            && !found.iter().any(|f| f.path == path)
+        {
             tracing::warn!(
                 "{} is ignored (.gitignore), so it won't be checked or built",
                 path.display()

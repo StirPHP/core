@@ -97,6 +97,14 @@ impl Inference {
             TyKind::Platform(inner) => inner.clone(),
             _ => arg.clone(),
         };
+        // a bare `array` says nothing about its keys or elements, so it can't solve `array<K, V>`
+        if !self.php_caller
+            && matches!(param.kind(), TyKind::Array { .. } | TyKind::Iterable { .. })
+            && matches!(arg.kind(), TyKind::Array { key, value, .. }
+                if matches!(key.kind(), TyKind::ArrayKey) && matches!(value.kind(), TyKind::Mixed))
+        {
+            return;
+        }
         match (param.kind(), arg.kind()) {
             (TyKind::Param { id, .. }, _) if self.vars.contains(id) => self.bind(env, *id, &arg),
             (TyKind::List(p), TyKind::List(a) | TyKind::MutableList(a))

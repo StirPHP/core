@@ -1196,8 +1196,8 @@ pub(crate) fn view(ty: &Ty) -> Ty {
         TyKind::PhpList { elem, .. } => Ty::list(view(elem)),
         TyKind::Array { key, value, .. } => {
             if matches!(key.kind(), TyKind::ArrayKey) && matches!(value.kind(), TyKind::Mixed) {
-                // untyped `array`
-                Ty::any_platform()
+                // a bare `array`: known to be an array, with elements that must be narrowed
+                ty.clone()
             } else {
                 Ty::map(view(key), view(value))
             }
