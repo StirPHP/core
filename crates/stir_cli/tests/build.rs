@@ -317,7 +317,7 @@ fn strict_types_can_be_turned_off() {
     let toml = fs::read_to_string(root.join("sphp.toml")).unwrap();
     write(
         &root.join("sphp.toml"),
-        &format!("strictTypes = false\n{toml}"),
+        &toml.replace("strictTypes = true", "strictTypes = false"),
     );
     build(root, &[]).success();
     assert!(
@@ -338,7 +338,7 @@ fn copy_assets_makes_a_complete_tree() {
     let toml = fs::read_to_string(root.join("sphp.toml")).unwrap();
     write(
         &root.join("sphp.toml"),
-        &format!("copyAssets = true\n{toml}"),
+        &toml.replace("copyAssets = false", "copyAssets = true"),
     );
     build(root, &[]).success();
     assert_eq!(
