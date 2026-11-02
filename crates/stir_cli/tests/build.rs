@@ -162,9 +162,9 @@ fn errors_block_the_build_unless_forced() {
     build(root, &["--force"])
         .code(1)
         .stdout(contains("error[SPHP0001]"))
-        .stdout(contains("Built 2 files"));
+        .stdout(contains("Built 1 file"));
     assert!(root.join("build/main.php").is_file());
-    assert!(root.join("build/bad.php").is_file());
+    assert!(!root.join("build/bad.php").is_file());
 }
 
 #[test]
@@ -317,7 +317,7 @@ fn strict_types_can_be_turned_off() {
     let toml = fs::read_to_string(root.join("sphp.toml")).unwrap();
     write(
         &root.join("sphp.toml"),
-        &format!("{toml}\nstrictTypes = false\n"),
+        &format!("strictTypes = false\n{toml}"),
     );
     build(root, &[]).success();
     assert!(
@@ -338,7 +338,7 @@ fn copy_assets_makes_a_complete_tree() {
     let toml = fs::read_to_string(root.join("sphp.toml")).unwrap();
     write(
         &root.join("sphp.toml"),
-        &format!("{toml}\ncopyAssets = true\n"),
+        &format!("copyAssets = true\n{toml}"),
     );
     build(root, &[]).success();
     assert_eq!(
