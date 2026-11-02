@@ -336,12 +336,41 @@ fn for_stmt(p: &mut Parser<'_>) {
     m.complete(p, FOR_STMT);
 }
 
+fn foreach_has_cast(p: &Parser<'_>) -> bool {
+    let (mut depth, mut seen, mut i) = (0, 0, 0);
+    loop {
+        match p.nth(i) {
+            EOF => return false,
+            L_PAREN | L_BRACK | L_CURLY | L_ANGLE => depth += 1,
+            R_PAREN if depth == 0 => return false,
+            R_PAREN | R_BRACK | R_CURLY | R_ANGLE => depth -= 1,
+            AS_KW if depth == 0 => {
+                seen += 1;
+                if seen == 2 {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+}
+
 fn foreach_stmt(p: &mut Parser<'_>) {
     let m = p.start();
     p.bump(FOREACH_KW);
     p.expect(L_PAREN);
     p.with_newlines(false, |p| {
-        p.with_no_as(true, |p| expr(p));
+        let subject = p.with_no_as(true, |p| expr(p));
+        // `foreach (e as T as $v)`: two `as` here, so the first is a cast
+        if let Some(subject) = subject
+            && foreach_has_cast(p)
+        {
+            let m = subject.precede(p);
+            p.bump(AS_KW);
+            types::type_(p);
+            m.complete(p, AS_EXPR);
+        }
         p.expect(AS_KW);
         p.eat(AMP);
         expr(p);

@@ -4792,7 +4792,17 @@ impl<'a, 'db> Checker<'a, 'db> {
                 self.def(callee.text_range(), Def::Local { decl: l.range });
                 return self.call_value(node, &l.ty, expected);
             }
+            // a bare call means what it means in PHP if there's a global function to call:
+            // `$this->count()` reaches a method named like one
+            let global_function = {
+                let r = self.scope(node).resolve_function(&text);
+                self.ctx.function(r.primary.as_str()).is_some()
+                    || r.fallback
+                        .as_ref()
+                        .is_some_and(|f| self.ctx.function(f.as_str()).is_some())
+            };
             if self.stir()
+                && !global_function
                 && !text.contains('\\')
                 && let Some(this) = self.this_ty()
                 && let Some((owner, m, map)) = self.ctx.find_method(&this, &text)
@@ -5614,7 +5624,16 @@ impl<'a, 'db> Checker<'a, 'db> {
                     map
                 };
                 let ret = self.check_args(node, &sig, &map, None, expected, &extra);
-                resolve_self(&ret, &cls)
+                // `static::make()` returns whatever class is running this, not the one named here
+                let via_static = fetch
+                    .children()
+                    .next()
+                    .is_some_and(|b| text_of(&b).eq_ignore_ascii_case("static"));
+                if via_static && self.stir() {
+                    ret
+                } else {
+                    resolve_self(&ret, &cls)
+                }
             }
             None => {
                 if self.has_magic(&cls, "__callStatic") || !self.class_known(&cls) {

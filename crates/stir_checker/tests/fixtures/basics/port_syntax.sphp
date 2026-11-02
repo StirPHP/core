@@ -51,3 +51,36 @@ function not_shared(x: R1|R2): int = x->only() // error: SPHP0009
 val ignored_next: String = 1
 val ignored_same: String = 1 // @sphp-ignore
 val not_ignored: String = 1 // error: SPHP0005
+
+class Counts {
+    private var $s: array<int> = []
+    function count(): int = count($this->s)
+    function twice(): int = $this->count() * 2
+    function own_method_without_a_global(): int = helper_only_here()
+    function helper_only_here(): int = 1
+}
+
+function foreach_cast(a: unknown): Unit {
+    foreach (a as array as $v) {
+        echo 1
+    }
+    foreach (a as array as $k => $v) {
+        echo 2
+    }
+}
+
+function by_ref_new_style(&x: array, n: int): Unit {
+    x[] = n
+}
+
+open class Maker {
+    static function make(): static? = null
+    function self_again(): static? = $this
+    static function chain(): static? {
+        val p = static::make()
+        if (p === null) {
+            return null
+        }
+        return p->self_again()
+    }
+}

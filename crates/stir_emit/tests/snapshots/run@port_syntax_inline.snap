@@ -51,3 +51,35 @@ function shared(\R1|\R2 $x): int
 }
 
 echo \shared(new \R1()) . ' ' . \shared(new \R2()) . "\n";
+
+final class Counts
+{
+    /** @var array<int> */
+    private array $s = [1, 2];
+
+    public function count(): int
+    {
+        return \count($this->s);
+    }
+
+    public function twice(): int
+    {
+        return $this->count() * 2;
+    }
+}
+
+echo (new \Counts())->twice() . "\n";
+
+function push(array &$x, int $n): void
+{
+    $x[] = $n;
+}
+
+$list = [];
+\push($list, 5);
+echo \count($list) . "\n";
+$anything = [1, 2];
+$__c1 = $anything;
+foreach (\is_array($__c1) ? $__c1 : throw new \TypeError('cast to array failed') as $v) {
+    echo \strval($v) . "\n";
+}

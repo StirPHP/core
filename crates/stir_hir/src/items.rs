@@ -699,7 +699,7 @@ impl Lowerer {
         let has_mods = p.child(MODIFIERS).is_some();
         let is_val = p.has_ident("val");
         let is_var_kw = p.has_token(VAR_KW);
-        let binding = if p.has_ident("mut") {
+        let binding = if p.has_ident("mut") || (p.has_token(AMP) && p.token(VARIABLE).is_none()) {
             Binding::Mut
         } else if var.is_some() {
             Binding::Php

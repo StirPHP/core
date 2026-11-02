@@ -28,3 +28,22 @@ class R2 {
 }
 function shared(x: R1|R2): int = x->a() + x->p
 echo "${shared(new R1())} ${shared(new R2())}\n"
+
+class Counts {
+    private var $s: array<int> = [1, 2]
+    function count(): int = count($this->s)
+    function twice(): int = $this->count() * 2
+}
+echo "${new Counts()->twice()}\n"
+
+function push(&x: array, n: int): Unit {
+    x[] = n
+}
+var $list: array = []
+push($list, 5)
+echo "${count($list)}\n"
+
+val anything: unknown = [1, 2]
+foreach (anything as array as $v) {
+    echo strval($v) . "\n"
+}

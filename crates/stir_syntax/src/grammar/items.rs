@@ -290,6 +290,10 @@ fn param(p: &mut Parser<'_>) {
     } else if p.at(VAR_KW) && p.nth(1) == VARIABLE {
         p.bump(VAR_KW);
     }
+    // `&x: array` is a by-reference parameter
+    if p.stir() && p.at(AMP) && p.nth(2) == COLON {
+        p.bump(AMP);
+    }
     let stir_style = {
         let mut n = 0;
         if p.nth(0) == ELLIPSIS {

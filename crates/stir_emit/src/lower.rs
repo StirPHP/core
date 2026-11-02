@@ -1056,7 +1056,7 @@ impl<'a, 'db> Lowerer<'a, 'db> {
             };
             self.declare(
                 &name,
-                if var.is_some() || p.has_ident("mut") {
+                if var.is_some() || p.has_ident("mut") || p.has_token(AMP) {
                     Bind::Var
                 } else {
                     Bind::Val
