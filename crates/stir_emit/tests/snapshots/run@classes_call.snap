@@ -1,6 +1,5 @@
 ---
 source: crates/stir_emit/tests/programs.rs
-assertion_line: 72
 expression: out.code
 ---
 <?php
@@ -11,9 +10,11 @@ namespace App;
 
 interface Shape
 {
-    public function area(): float;
+    /** @return float */
+    public function area();
 
-    public function name(): string;
+    /** @return string */
+    public function name();
 }
 
 class Base

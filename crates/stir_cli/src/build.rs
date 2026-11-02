@@ -151,7 +151,20 @@ pub async fn build(
     }
 
     let out_dir = project.out_dir();
-    let jobs = plan(project, loaded)?;
+    let mut jobs = plan(project, loaded)?;
+    // `--force` can't make sense of a file that doesn't parse: emitting it would be garbage
+    let db = &loaded.db;
+    jobs.retain(|job| {
+        let broken =
+            job.kind != JobKind::Copy && !stir_db::syntax_diagnostics(db, job.file).is_empty();
+        if broken {
+            tracing::warn!(
+                "{} has syntax errors, so it wasn't written",
+                job.file.path(db).display()
+            );
+        }
+        !broken
+    });
     let (mut outputs, needs_runtime) = emit(loaded, &jobs, &out_dir, opts).await?;
 
     let db = &loaded.db;

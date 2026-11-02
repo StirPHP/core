@@ -989,6 +989,55 @@ impl<'a, 'db> Lowerer<'a, 'db> {
         (native, doc)
     }
 
+    /// Puts the doc comment written on `node` ahead of the generated tags; a tag the
+    /// signature generated replaces its handwritten line.
+    fn source_doc(&self, node: &SyntaxNode, doc: &mut DocComment) {
+        let Some(comment) = node.doc_comment() else {
+            return;
+        };
+        let text = comment.text();
+        let Some(body) = text.strip_prefix("/**").and_then(|t| t.strip_suffix("*/")) else {
+            return;
+        };
+        let generated = |name: &str, var: Option<&str>| {
+            doc.tags.iter().any(|t| {
+                t.name == name
+                    && var.is_none_or(|v| {
+                        t.text
+                            .split_whitespace()
+                            .any(|w| w.trim_start_matches("...") == v)
+                    })
+            })
+        };
+        let mut lines: Vec<String> = Vec::new();
+        for line in body.lines() {
+            let line = line.trim().trim_start_matches('*');
+            let line = line.strip_prefix(' ').unwrap_or(line).trim_end();
+            let mut words = line.split_whitespace();
+            let replaced = match words.next() {
+                Some("@return") => generated("return", None),
+                Some("@var") => generated("var", None),
+                Some("@param") => {
+                    let var = line
+                        .split_whitespace()
+                        .find(|w| w.starts_with('$') || w.starts_with("...$"));
+                    var.is_some_and(|v| generated("param", Some(v.trim_start_matches("..."))))
+                }
+                _ => false,
+            };
+            if !replaced {
+                lines.push(line.to_owned());
+            }
+        }
+        while lines.first().is_some_and(|l| l.is_empty()) {
+            lines.remove(0);
+        }
+        while lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+        }
+        doc.summary = lines;
+    }
+
     /// Lowers parameters; returns them plus `@param` doc tags.
     fn params(
         &mut self,
@@ -1153,6 +1202,7 @@ impl<'a, 'db> Lowerer<'a, 'db> {
         self.in_extension = false;
         self.frames = saved_frames;
         let attrs = self.attributes(node);
+        self.source_doc(node, &mut doc);
         out.push(Stmt::new(StmtKind::Function(FunctionDecl {
             doc: (!doc.is_empty()).then_some(doc),
             attrs,
@@ -1257,8 +1307,15 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                     });
                 }
                 let default = exprs_of(p).first().map(|e| self.expr(e));
-                // PHP doesn't allow `callable` as a property type
-                let native = native.filter(|n| promote.is_none() || !mentions_callable(n));
+                // PHP doesn't allow `callable` as a property type, and a PHP subclass may
+                // redeclare an inheritable property untyped (see `property`)
+                let inheritable = model.is_stir()
+                    && !model.is_final()
+                    && promote.as_ref().is_some_and(|p| {
+                        !p.readonly && !matches!(p.visibility, Some(Visibility::Private))
+                    });
+                let native =
+                    native.filter(|n| promote.is_none() || (!inheritable && !mentions_callable(n)));
                 // a readonly property must be typed
                 let native = native.or_else(|| {
                     promote
@@ -1395,6 +1452,7 @@ impl<'a, 'db> Lowerer<'a, 'db> {
         }
         self.frames = saved_frames;
         let name = SmolStr::new(def.name.short());
+        self.source_doc(node, &mut doc);
         let doc = (!doc.is_empty()).then_some(doc);
         let origin = self.origin(node);
         let attrs = self.attributes(node);
@@ -1481,9 +1539,14 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                 .as_ref()
                 .map(|t| self.types_doc(t))
                 .unwrap_or((None, None));
-            // PHP doesn't allow `callable` as a property type
+            // PHP doesn't allow `callable` as a property type. A subclass in plain PHP may
+            // redeclare a property untyped, which is a fatal if the parent's has a native type.
+            let inheritable = model.is_stir()
+                && !model.is_final()
+                && !readonly
+                && !matches!(vis, Visibility::Private);
             let (native, d) = match (&native, &ty) {
-                (Some(n), Some(t)) if mentions_callable(n) => {
+                (Some(n), Some(t)) if mentions_callable(n) || inheritable => {
                     (None, d.or_else(|| Some(stir_types::to_phpdoc(t))))
                 }
                 _ => (native, d),
@@ -1498,14 +1561,19 @@ impl<'a, 'db> Lowerer<'a, 'db> {
                     ctor_init.push(Stmt::expr(Expr::this().prop(name.as_str()).assign(v)));
                 }
             }
-            members.push(Member::Property(PropertyDecl {
-                doc: d.map(|d| DocComment {
-                    summary: Vec::new(),
-                    tags: vec![DocTag {
+            let mut prop_doc = DocComment {
+                summary: Vec::new(),
+                tags: d
+                    .map(|d| DocTag {
                         name: "var".into(),
                         text: d,
-                    }],
-                }),
+                    })
+                    .into_iter()
+                    .collect(),
+            };
+            self.source_doc(m, &mut prop_doc);
+            members.push(Member::Property(PropertyDecl {
+                doc: (!prop_doc.is_empty()).then_some(prop_doc),
                 attrs: Vec::new(),
                 visibility: vis,
                 set_visibility: None,
@@ -1541,7 +1609,11 @@ impl<'a, 'db> Lowerer<'a, 'db> {
         // method that declares a return type without declaring one itself, and
         // untyped PHP subclasses must be able to override it. Parameter types
         // stay native (an override may widen them).
-        let open = model.is_stir() && md.mods.is_open;
+        let open = model.is_stir()
+            && (md.mods.is_open
+                || md.mods.is_abstract
+                || !md.has_body
+                || model.kind() == stir_hir::ClassKind::Interface);
         let (ret_native, ret_doc) = if is_ctor {
             (None, None)
         } else if open && !sig.ret.is_error() {
@@ -1559,6 +1631,7 @@ impl<'a, 'db> Lowerer<'a, 'db> {
         self.frames = saved;
         let interface = model.kind() == stir_hir::ClassKind::Interface;
         let attrs = self.attributes(m);
+        self.source_doc(m, &mut doc);
         members.push(Member::Method(MethodDecl {
             doc: (!doc.is_empty()).then_some(doc),
             attrs,

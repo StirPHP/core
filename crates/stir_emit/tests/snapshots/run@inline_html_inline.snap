@@ -11,6 +11,10 @@ expression: out.code
 
 declare(strict_types=1);
 
+/**
+ * Title: A pattern
+ * Slug: demo/pattern
+ */
 function title(): string
 {
     return 'Hi';

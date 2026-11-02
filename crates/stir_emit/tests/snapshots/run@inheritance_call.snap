@@ -1,6 +1,5 @@
 ---
 source: crates/stir_emit/tests/programs.rs
-assertion_line: 72
 expression: out.code
 ---
 <?php
@@ -13,9 +12,11 @@ require_once __DIR__ . '/stir-runtime.php';
 
 abstract class Shape
 {
-    public int $hits = 0;
+    /** @var int */
+    public $hits = 0;
 
-    abstract public function area(): int;
+    /** @return int */
+    abstract public function area();
 }
 
 final class Square extends \App\Shape

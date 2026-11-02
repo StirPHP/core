@@ -62,7 +62,12 @@ struct InitArgs {
 #[tokio::main]
 async fn main() -> anyhow::Result<ExitCode> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_env("SPHP_LOG"))
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(tracing_subscriber::filter::LevelFilter::WARN.into())
+                .with_env_var("SPHP_LOG")
+                .from_env_lossy(),
+        )
         .with_writer(std::io::stderr)
         .init();
 

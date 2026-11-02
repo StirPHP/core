@@ -1,6 +1,5 @@
 ---
 source: crates/stir_emit/tests/programs.rs
-assertion_line: 72
 expression: out.code
 ---
 <?php
@@ -58,7 +57,8 @@ class Settings
         $this->tags = ['a', 'br'];
     }
 
-    protected bool $safe = false;
+    /** @var bool */
+    protected $safe = false;
 
     /** @var array<string, \App\Settings> */
     private static array $made = [];

@@ -13,6 +13,10 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/stir-runtime.php';
 
+/**
+ * Title: A pattern
+ * Slug: demo/pattern
+ */
 function title(): string
 {
     return 'Hi';
