@@ -1737,6 +1737,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "futures",
+ "ignore",
  "inquire",
  "mimalloc",
  "notify-debouncer-full",

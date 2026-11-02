@@ -61,3 +61,19 @@ function not_any_type(s: string): Unit {
     var $i = 0
     $i = s // error: SPHP0005
 }
+
+function array_functions_keep_types(m: Map<String, int>, a: array<string, int>, s: string): string {
+    val keys = array_keys(a)
+    foreach (keys as $k) {
+        echo strlen($k)
+    }
+    foreach (array_values(a) as $v) {
+        echo $v + 1
+    }
+    foreach (array_filter(a) as $k => $v) {
+        echo strlen($k) + $v
+    }
+    return str_replace(array_keys(["a" => "b"]), array_values(["a" => "b"]), s)
+}
+
+function explode_is_indexable(s: string): string = trim(explode(",", s)[0])

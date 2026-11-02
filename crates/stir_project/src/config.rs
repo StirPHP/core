@@ -30,6 +30,11 @@ pub struct Config {
     pub strict: bool,
     /// Inline extension function calls instead of emitting helper functions.
     pub inline_extensions: bool,
+    /// Generate `declare(strict_types=1)`. Turn it off while porting code whose callers rely
+    /// on PHP's scalar coercion.
+    pub strict_types: bool,
+    /// Copy the other files under `srcDir` to `outDir` too, so it's a complete tree.
+    pub copy_assets: bool,
     /// Path to a `phpstan.neon` file, relative to the project root.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phpstan: Option<PathBuf>,
@@ -51,6 +56,8 @@ impl Default for Config {
             check_php: false,
             strict: true,
             inline_extensions: false,
+            strict_types: true,
+            copy_assets: false,
             phpstan: None,
             composer: None,
         }

@@ -30,7 +30,7 @@ pub(crate) fn lower_file(
     let mut l = Lowerer::new(db, &ctx, file, typed, opts);
     let root = stir_db::parse(db, file).syntax();
     let mut out = File {
-        strict_types: true,
+        strict_types: !opts.loose_types,
         ..File::default()
     };
     out.doc = file_level_comment(&root);

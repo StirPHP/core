@@ -7,6 +7,8 @@ use crate::print::Mapping;
 /// Options for code generation.
 #[derive(Debug, Clone, Default)]
 pub struct EmitOptions {
+    /// Leave out `declare(strict_types=1)` (`strictTypes = false`).
+    pub loose_types: bool,
     /// Inline extension functions at call sites instead of calling them.
     pub inline_extensions: bool,
     /// `require_once` expression (PHP source) for the runtime file, relative to

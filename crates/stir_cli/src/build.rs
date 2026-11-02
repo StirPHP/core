@@ -55,6 +55,8 @@ pub struct BuildArgs {
 /// Settings of one build, resolved from the CLI flags and the project config.
 #[derive(Debug, Clone)]
 pub struct BuildOptions {
+    pub loose_types: bool,
+    pub copy_assets: bool,
     pub inline_extensions: bool,
     pub source_maps: bool,
     pub force: bool,
@@ -99,6 +101,8 @@ pub fn apply_overrides(project: &mut Project, args: &BuildArgs, cwd: &Path) {
 pub fn options(project: &Project, args: &BuildArgs) -> BuildOptions {
     BuildOptions {
         inline_extensions: args.inline_extensions || project.config.inline_extensions,
+        loose_types: !project.config.strict_types,
+        copy_assets: project.config.copy_assets,
         source_maps: !args.no_source_maps,
         force: args.force,
     }
@@ -177,6 +181,9 @@ pub async fn build(
         });
     }
     check_unique(&outputs, &jobs, loaded)?;
+    if opts.copy_assets {
+        outputs.extend(read_assets(project).await?);
+    }
 
     let written: BTreeSet<String> = outputs.iter().map(|o| slash_path(&o.rel)).collect();
     let changed = write_outputs(&out_dir, outputs).await?;
@@ -207,6 +214,40 @@ fn plural(n: usize, word: &str) -> String {
     } else {
         format!("{n} {word}s")
     }
+}
+
+/// The files under `srcDir` that aren't PHP source (`copyAssets`), gitignored ones included:
+/// generated assets are often ignored, and the output needs them all the same.
+async fn read_assets(project: &Project) -> anyhow::Result<Vec<Output>> {
+    let src_dir = project.src_dir();
+    let out_dir = project.out_dir();
+    let paths = tokio::task::spawn_blocking({
+        let src_dir = src_dir.clone();
+        move || {
+            ignore::WalkBuilder::new(&src_dir)
+                .standard_filters(false)
+                .filter_entry(move |e| {
+                    !(e.path().starts_with(&out_dir)
+                        || e.file_name() == "node_modules"
+                        || e.file_name() == ".git")
+                })
+                .build()
+                .flatten()
+                .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
+                .map(|e| e.into_path())
+                .filter(|p| !p.extension().is_some_and(|e| e == "php" || e == "sphp"))
+                .collect::<Vec<PathBuf>>()
+        }
+    })
+    .await?;
+    let mut outputs = Vec::with_capacity(paths.len());
+    for path in paths {
+        outputs.push(Output {
+            rel: path.strip_prefix(&src_dir)?.to_path_buf(),
+            bytes: tokio::fs::read(&path).await?,
+        });
+    }
+    Ok(outputs)
 }
 
 /// Maps each project source to its output path under `outDir`.
@@ -267,6 +308,7 @@ fn check_unique(outputs: &[Output], jobs: &[Job], loaded: &Loaded) -> anyhow::Re
 fn emit_options(opts: &BuildOptions, runtime_require: Option<String>) -> EmitOptions {
     EmitOptions {
         inline_extensions: opts.inline_extensions,
+        loose_types: opts.loose_types,
         runtime_require,
         ..EmitOptions::default()
     }

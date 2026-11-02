@@ -4876,10 +4876,67 @@ impl<'a, 'db> Checker<'a, 'db> {
                 .name
                 .as_str()
                 .to_ascii_lowercase();
-            return self.refine_by_subject(node, &name, ret);
+            let ret = self.refine_by_subject(node, &name, ret);
+            return self.refine_array_function(node, &name, ret);
         }
         let ct = self.expr(&callee, None);
         self.call_value(node, &ct, expected)
+    }
+
+    /// In `.sphp`, what PHP's array functions return is known from what they're given, where
+    /// the stubs only say `array`: the keys and values of an array, or an array like it.
+    fn refine_array_function(&mut self, node: &SyntaxNode, name: &str, ret: Ty) -> Ty {
+        if !self.stir()
+            || !matches!(
+                name,
+                "array_keys"
+                    | "array_values"
+                    | "array_filter"
+                    | "array_unique"
+                    | "array_reverse"
+                    | "array_slice"
+                    | "array_merge"
+                    | "array_diff"
+                    | "array_intersect"
+            )
+        {
+            return ret;
+        }
+        let args = self.args_of(node);
+        let tys: Vec<Ty> = args
+            .iter()
+            .filter_map(|a| {
+                exprs_of(a)
+                    .first()
+                    .and_then(|e| self.types.get(&e.text_range()))
+                    .cloned()
+            })
+            .collect();
+        let Some(first) = tys.first().map(strip_platform) else {
+            return ret;
+        };
+        let parts = match first.kind() {
+            TyKind::Array { key, value, .. } => Some((key.clone(), value.clone())),
+            TyKind::Map(k, v) | TyKind::MutableMap(k, v) => Some((k.clone(), v.clone())),
+            TyKind::List(v) | TyKind::MutableList(v) => Some((Ty::int(), v.clone())),
+            TyKind::PhpList { elem, .. } => Some((Ty::php_int(), elem.clone())),
+            _ => None,
+        };
+        let Some((key, value)) = parts else {
+            return ret;
+        };
+        if is_bare_array(&first) && !matches!(name, "array_keys" | "array_values") {
+            return ret;
+        }
+        match name {
+            "array_keys" if !matches!(key.kind(), TyKind::ArrayKey) => Ty::php_list(key),
+            "array_values" => Ty::php_list(value),
+            "array_keys" => ret,
+            // merging arrays of different types gives what the stubs say
+            "array_merge" if tys.iter().any(|t| strip_platform(t) != first) => ret,
+            // these keep the array's keys, so a list may no longer be one
+            _ => Ty::array(key, value),
+        }
     }
 
     /// `str_replace` and friends return an array only when given an array subject.

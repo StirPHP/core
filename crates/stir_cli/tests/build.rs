@@ -5,6 +5,7 @@ use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 use assert_cmd::Command;
+use predicates::prelude::*;
 use predicates::str::contains;
 use tempfile::TempDir;
 
@@ -300,4 +301,73 @@ fn watch_rebuilds_on_change() {
         "watcher still running"
     );
     assert!(stdout().contains("Watching"), "stdout: {}", stdout());
+}
+
+#[test]
+fn strict_types_can_be_turned_off() {
+    let tmp = project();
+    let root = tmp.path();
+    write(&root.join("src/a.sphp"), "echo \"a\"\n");
+    build(root, &[]).success();
+    assert!(
+        fs::read_to_string(root.join("build/a.php"))
+            .unwrap()
+            .contains("strict_types")
+    );
+    let toml = fs::read_to_string(root.join("sphp.toml")).unwrap();
+    write(
+        &root.join("sphp.toml"),
+        &format!("{toml}\nstrictTypes = false\n"),
+    );
+    build(root, &[]).success();
+    assert!(
+        !fs::read_to_string(root.join("build/a.php"))
+            .unwrap()
+            .contains("strict_types")
+    );
+}
+
+#[test]
+fn copy_assets_makes_a_complete_tree() {
+    let tmp = project();
+    let root = tmp.path();
+    write(&root.join("src/a.sphp"), "echo \"a\"\n");
+    write(&root.join("src/css/site.css"), "body {}\n");
+    build(root, &[]).success();
+    assert!(!root.join("build/css/site.css").exists());
+    let toml = fs::read_to_string(root.join("sphp.toml")).unwrap();
+    write(
+        &root.join("sphp.toml"),
+        &format!("{toml}\ncopyAssets = true\n"),
+    );
+    build(root, &[]).success();
+    assert_eq!(
+        fs::read_to_string(root.join("build/css/site.css")).unwrap(),
+        "body {}\n"
+    );
+    assert!(root.join("build/a.php").exists());
+}
+
+#[test]
+fn an_ignored_port_gets_a_warning() {
+    let tmp = project();
+    let root = tmp.path();
+    write(&root.join(".gitignore"), "/src/assets/*\n");
+    write(&root.join("src/assets/hidden.sphp"), "echo 1\n");
+    sphp()
+        .current_dir(root)
+        .arg("check")
+        .assert()
+        .stderr(contains("hidden.sphp").and(contains("is ignored")));
+}
+
+#[test]
+fn force_doesnt_write_a_file_that_doesnt_parse() {
+    let tmp = project();
+    let root = tmp.path();
+    write(&root.join("src/good.sphp"), "echo 1\n");
+    write(&root.join("src/broken.sphp"), "function f(: {\n");
+    build(root, &["--force"]);
+    assert!(root.join("build/good.php").exists());
+    assert!(!root.join("build/broken.php").exists());
 }

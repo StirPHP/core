@@ -53,6 +53,8 @@ outDir = "build"
 allowPhp = true          # load .php files from srcDir
 checkPhp = false         # also check them (or opt in per file with `// @sphp-check`)
 inlineExtensions = false
+strictTypes = true       # generate declare(strict_types=1); turn off while porting code that relies on coercion
+copyAssets = false       # also copy non-PHP files from srcDir, so outDir is a complete tree
 # phpstan = "phpstan.neon"   # level and ignoreErrors apply to .php files
 ```
 
