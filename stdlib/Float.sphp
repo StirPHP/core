@@ -20,13 +20,13 @@ function Float.roundToInt(): Int =
     else intval(round(this))
 
 /** Rounds to `decimals` digits after the point, ties away from zero. */
-function Float.round(decimals: Int = 0): Float = round(this, decimals) as Float
+function Float.round(decimals: Int = 0): Float = round(this, decimals)
 
 /** Returns the largest integral Float not greater than this value. */
-function Float.floor(): Float = floor(this) as Float
+function Float.floor(): Float = floor(this)
 
 /** Returns the smallest integral Float not less than this value. */
-function Float.ceil(): Float = ceil(this) as Float
+function Float.ceil(): Float = ceil(this)
 
 /** Returns the absolute value. */
 function Float.abs(): Float = abs(this) as Float

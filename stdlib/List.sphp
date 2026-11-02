@@ -72,10 +72,10 @@ function <T> List<T>.indexOf(element: T): Int? = nullIfFalse(array_search(elemen
 function <T> List<T>.lastIndexOf(element: T): Int? = nullIfFalse(array_search(element, array_reverse(this, true), true) as (Int | false))
 
 /** Returns the index of the first element matching `predicate`, or null if none. */
-function <T> List<T>.indexOfFirst(predicate: (T) -> Bool): Int? = array_find_key(this, { element: T, index: Int -> predicate(element) }) as Int?
+function <T> List<T>.indexOfFirst(predicate: (T) -> Bool): Int? = array_find_key(this, { element: T, index: Int -> predicate(element) })
 
 /** Returns the index of the last element matching `predicate`, or null if none. */
-function <T> List<T>.indexOfLast(predicate: (T) -> Bool): Int? = array_find_key(array_reverse(this, true), { element: T, index: Int -> predicate(element) }) as Int?
+function <T> List<T>.indexOfLast(predicate: (T) -> Bool): Int? = array_find_key(array_reverse(this, true), { element: T, index: Int -> predicate(element) })
 
 /** Returns a list of `transform` applied to each element. */
 function <T, R> List<T>.map(transform: (T) -> R): List<R> = array_map(transform, this) as List<R>
@@ -128,10 +128,10 @@ function <T> List<T>.none(predicate: (T) -> Bool): Bool = !this->any(predicate)
 function <T> List<T>.count(predicate: (T) -> Bool): Int = count(array_filter(this, { element: T -> predicate(element) }))
 
 /** Returns the first element matching `predicate`, or null if none. */
-function <T> List<T>.find(predicate: (T) -> Bool): T? = array_find(this, { element: T, index: Int -> predicate(element) }) as T?
+function <T> List<T>.find(predicate: (T) -> Bool): T? = array_find(this, { element: T, index: Int -> predicate(element) })
 
 /** Returns the last element matching `predicate`, or null if none. */
-function <T> List<T>.findLast(predicate: (T) -> Bool): T? = array_find(array_reverse(this), { element: T, index: Int -> predicate(element) }) as T?
+function <T> List<T>.findLast(predicate: (T) -> Bool): T? = array_find(array_reverse(this), { element: T, index: Int -> predicate(element) })
 
 /** Accumulates from `initial`, applying `operation(accumulator, element)` left to right. */
 function <T, R> List<T>.fold(initial: R, operation: (R, T) -> R): R = array_reduce(this, { accumulator: R, element: T -> operation(accumulator, element) }, initial) as R

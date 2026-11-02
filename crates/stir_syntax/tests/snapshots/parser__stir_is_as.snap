@@ -53,11 +53,10 @@ SOURCE_FILE
           NAME_REF
             IDENT "a"
         AS_KW "as"
-        NULLABLE_TYPE
-          QUESTION "?"
-          NAMED_TYPE
-            NAME_REF
-              IDENT "Int"
+        QUESTION "?"
+        NAMED_TYPE
+          NAME_REF
+            IDENT "Int"
       QUESTION "?"
       COLON ":"
       LITERAL
