@@ -4659,7 +4659,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             arg_tys[i] = Some(t);
         }
-        if !self.stir() || sig.external {
+        if !self.stir() {
             // PHP code can't spell type arguments: nothing was said about this variable
             let ctx = self.ctx;
             inf.finish_with(|id| {
@@ -4792,26 +4792,27 @@ impl<'a, 'db> Checker<'a, 'db> {
                 self.def(callee.text_range(), Def::Local { decl: l.range });
                 return self.call_value(node, &l.ty, expected);
             }
-            // a bare call means what it means in PHP if there's a global function to call:
-            // `$this->count()` reaches a method named like one
-            let global_function = {
-                let r = self.scope(node).resolve_function(&text);
-                self.ctx.function(r.primary.as_str()).is_some()
-                    || r.fallback
-                        .as_ref()
-                        .is_some_and(|f| self.ctx.function(f.as_str()).is_some())
-            };
             if self.stir()
-                && !global_function
                 && !text.contains('\\')
                 && let Some(this) = self.this_ty()
                 && let Some((owner, m, map)) = self.ctx.find_method(&this, &text)
             {
-                self.implicit_this.insert(callee.text_range());
-                self.member_def(callee.text_range(), &owner, MemberKind::Method, &m.name);
                 let sig = self.ctx.method_sig(&owner, m);
+                let start = self.diags.len();
                 let ret = self.check_args(node, &sig, &map, None, expected, &[]);
-                return resolve_self(&ret, &this);
+                // a method named like a global function, called with arguments that only fit
+                // the function: `function count(): int = count($this->items)`
+                let r = self.scope(node).resolve_function(&text);
+                let global_function = self.ctx.function(r.primary.as_str()).is_some()
+                    || r.fallback
+                        .as_ref()
+                        .is_some_and(|f| self.ctx.function(f.as_str()).is_some());
+                if self.diags.len() == start || !global_function {
+                    self.implicit_this.insert(callee.text_range());
+                    self.member_def(callee.text_range(), &owner, MemberKind::Method, &m.name);
+                    return resolve_self(&ret, &this);
+                }
+                self.diags.truncate(start);
             }
             let scope = self.scope(node);
             let r = scope.resolve_function(&text);

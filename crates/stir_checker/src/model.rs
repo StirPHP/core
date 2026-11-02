@@ -1194,12 +1194,27 @@ pub(crate) fn view(ty: &Ty) -> Ty {
         TyKind::Numeric => Ty::union([Ty::int(), Ty::float()]),
         TyKind::Scalar => Ty::union([Ty::int(), Ty::float(), Ty::string(), Ty::bool()]),
         TyKind::PhpList { elem, .. } => Ty::list(view(elem)),
-        TyKind::Array { key, value, .. } => {
-            if matches!(key.kind(), TyKind::ArrayKey) && matches!(value.kind(), TyKind::Mixed) {
-                // a bare `array`: known to be an array, with elements that must be narrowed
-                ty.clone()
+        // a PHP array stays a PHP array: it can be written to and may hold any key. Only its
+        // contents read as StirPHP types.
+        TyKind::Array {
+            key,
+            value,
+            non_empty,
+        } => {
+            let key = if matches!(key.kind(), TyKind::ArrayKey) {
+                key.clone()
             } else {
-                Ty::map(view(key), view(value))
+                view(key)
+            };
+            let value = if matches!(value.kind(), TyKind::Mixed) {
+                value.clone()
+            } else {
+                view(value)
+            };
+            if *non_empty {
+                Ty::non_empty_array(key, value)
+            } else {
+                Ty::array(key, value)
             }
         }
         TyKind::Literal(l) if l.family == Family::Php => Ty::literal(l.value.clone(), Family::Safe),
