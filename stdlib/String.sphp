@@ -78,7 +78,7 @@ function String.substringBefore(delimiter: String): String =
 
 /** Returns the part of the string after the first occurrence of `delimiter`, or the whole string if absent. */
 function String.substringAfter(delimiter: String): String =
-    if (str_contains(this, delimiter)) substr(strstr(this, delimiter), strlen(delimiter)) else this
+    if (str_contains(this, delimiter)) substr(strstr(this, delimiter) as String, strlen(delimiter)) else this
 
 /** Returns the first `n` characters (the whole string if shorter; negative `n` is treated as 0). */
 function String.take(n: Int): String = mb_substr(this, 0, n->coerceAtLeast(0))

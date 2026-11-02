@@ -148,7 +148,7 @@ function List<Int>.sum(): Int = intOrOverflow(array_sum(this))
 function List<Float>.sum(): Float = floatval(array_sum(this))
 
 /** Returns the sum of `selector` over the elements; throws \ArithmeticError on overflow. */
-function <T> List<T>.sumOf(selector: (T) -> Int): Int = intOrOverflow(array_sum(array_map(selector, this)) as (Int | Float))
+function <T> List<T>.sumOf(selector: (T) -> Int): Int = intOrOverflow(array_sum(array_map(selector, this)))
 
 /** Returns the arithmetic mean, or NaN for an empty list. */
 function <T of Int | Float> List<T>.average(): Float = fdiv(array_sum(this), count(this))
