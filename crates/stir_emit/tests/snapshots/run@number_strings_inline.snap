@@ -1,0 +1,17 @@
+---
+source: crates/stir_emit/tests/programs.rs
+expression: out.code
+---
+<?php
+
+declare(strict_types=1);
+
+$i = 3;
+$f = 1.5;
+echo 'a' . $i . "\n";
+echo $f . "b\n";
+$out = 'n=';
+$out .= $i;
+$out .= $f;
+echo $out . "\n";
+echo 'sum ' . $i + 1 . "\n";

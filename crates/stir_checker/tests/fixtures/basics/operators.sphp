@@ -3,7 +3,7 @@ namespace App
 val a = 1 + 2
 val b: Int = 1 + 2.5 // error: SPHP0005
 val c = "a" . "b"
-val d = "a" . 1 // error: SPHP0015
+val d = "a" . 1
 val e = 1 == "1" // error: SPHP0013
 val f = 1 < 2
 val g = "a" < 1 // error: SPHP0013

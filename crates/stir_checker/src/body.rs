@@ -3052,13 +3052,12 @@ impl<'a, 'db> Checker<'a, 'db> {
             DOT => {
                 if stir {
                     for (e, t) in [(&es[0], &l), (&es[1], &r)] {
-                        let ok = self.assignable(t, &Ty::string())
-                            || self.assignable(t, &Ty::php_string());
-                        if !ok {
+                        // strings and what converts predictably: not bools, null or `unknown`
+                        if !self.is_printable(t) {
                             self.error(
                                 e.text_range(),
                                 codes::INVALID_OPERAND,
-                                format!("`.` concatenates strings, found `{t}`; use a template (`\"${{...}}\"`) or `toString()`"),
+                                format!("`.` needs strings or numbers, found `{t}`"),
                             );
                         }
                     }
@@ -3518,17 +3517,11 @@ impl<'a, 'db> Checker<'a, 'db> {
                     }
                     _ => widen_literals(&lt),
                 };
-                if op == DOT_EQ
-                    && self.stir()
-                    && !self.assignable(&vt, &Ty::string())
-                    && !((lt.is_php() || declared.is_php())
-                        && self.assignable(&vt, &Ty::php_string()))
-                    && !vt.is_error()
-                {
+                if op == DOT_EQ && self.stir() && !self.is_printable(&vt) && !vt.is_error() {
                     self.error(
                         rhs.text_range(),
                         codes::INVALID_OPERAND,
-                        format!("`.=` appends strings, found `{vt}`"),
+                        format!("`.=` needs strings or numbers, found `{vt}`"),
                     );
                 }
                 // a property declared in PHP takes PHP values, however it reads from StirPHP
@@ -4952,6 +4945,21 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
+    fn in_string_context(&self, node: &SyntaxNode) -> bool {
+        let Some(parent) = node.parent() else {
+            return false;
+        };
+        match parent.kind() {
+            ECHO_STMT | ECHO_TAG_STMT | INTERP_EXPR | INTERP_VAR => true,
+            BIN_EXPR => op_token(&parent).is_some_and(|t| t.kind() == DOT),
+            ASSIGN_EXPR => {
+                op_token(&parent).is_some_and(|t| t.kind() == DOT_EQ)
+                    && exprs_of(&parent).get(1).is_some_and(|rhs| rhs == node)
+            }
+            _ => false,
+        }
+    }
+
     /// `strval()` of a `String`, `intval()` of an `Int`. A PHP `string` isn't reported: reading
     /// it as a `String` is what `strval` is for.
     fn warn_redundant_conversion(&mut self, node: &SyntaxNode, name: &str) {
@@ -4969,6 +4977,15 @@ impl<'a, 'db> Checker<'a, 'db> {
         else {
             return;
         };
+        // `.`, `echo` and templates convert a number or a string themselves
+        if name == "strval" && self.in_string_context(node) && self.is_printable(&t) {
+            self.warn(
+                node.text_range(),
+                codes::REDUNDANT_CONVERSION,
+                format!("`strval` is redundant here: `{t}` converts by itself"),
+            );
+            return;
+        }
         let same = match name {
             "strval" => matches!(t.kind(), TyKind::String),
             "intval" => matches!(t.kind(), TyKind::Int),
