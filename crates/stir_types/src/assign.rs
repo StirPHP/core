@@ -496,6 +496,19 @@ impl<'a> Checker<'a> {
         if matches!(to.kind(), K::Mixed | K::AnyPlatform) {
             return Ok(());
         }
+        // `array-key` is `int|string`
+        if matches!(from.kind(), K::ArrayKey)
+            && to
+                .members()
+                .iter()
+                .any(|m| matches!(m.kind(), K::Int | K::PhpInt))
+            && to
+                .members()
+                .iter()
+                .any(|m| matches!(m.kind(), K::String | K::PhpString))
+        {
+            return Ok(());
+        }
         let to_union = match to.kind() {
             K::Union(ms) => {
                 if ms.iter().any(|m| self.ok(from, m)) {

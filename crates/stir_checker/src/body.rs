@@ -837,6 +837,23 @@ impl<'a, 'db> Checker<'a, 'db> {
                 for part in [FOR_INIT, FOR_COND, FOR_STEP] {
                     if let Some(p) = node.child(part) {
                         for e in exprs_of(&p) {
+                            // `for (var $i = 0; ...)` declares it
+                            if p.has_token(VAR_KW)
+                                && e.kind() == ASSIGN_EXPR
+                                && let [lhs, rhs] = exprs_of(&e).as_slice()
+                                && lhs.kind() == VARIABLE_EXPR
+                            {
+                                let t = self.expr(rhs, None);
+                                let name = text_of(lhs);
+                                self.declare(
+                                    name.trim_start_matches('$'),
+                                    widen_literals(&t),
+                                    LocalKind::Var,
+                                    lhs.text_range(),
+                                );
+                                self.types.insert(lhs.text_range(), t);
+                                continue;
+                            }
                             if part == FOR_COND {
                                 self.condition(&e);
                             } else {
@@ -3000,8 +3017,11 @@ impl<'a, 'db> Checker<'a, 'db> {
             L_ANGLE | R_ANGLE | LTEQ | GTEQ | SPACESHIP => {
                 if stir {
                     let both_num = self.is_numeric(&l) && self.is_numeric(&r);
-                    let both_str =
-                        self.assignable(&l, &Ty::string()) && self.assignable(&r, &Ty::string());
+                    // PHP strings order as PHP orders them
+                    let is_str = |this: &Self, t: &Ty| {
+                        this.assignable(t, &Ty::string()) || this.assignable(t, &Ty::php_string())
+                    };
+                    let both_str = is_str(self, &l) && is_str(self, &r);
                     let orderable = Ty::union([Ty::int(), Ty::float(), Ty::string()]);
                     let both_orderable = self.assignable(&l, &orderable)
                         && self.assignable(&r, &orderable)
@@ -4932,7 +4952,7 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     fn member_type(&mut self, recv: &Ty, name: &str, range: TextRange) -> Ty {
         let recv = &stir_types::unfold(self.ctx, &self.bound_of(recv));
-        if !self.stir() && recv.is_union() {
+        if recv.is_union() && (!self.stir() || all_classes(recv)) {
             return self.union_member_type(recv, name, range);
         }
         match recv.kind() {
@@ -5168,7 +5188,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             self.check_args_untyped(node);
             return Ty::error();
         }
-        if !self.stir() && recv.is_union() {
+        if recv.is_union() && (!self.stir() || all_classes(recv)) {
             return self.union_method_call(node, recv, name, range, expected);
         }
         let cls = class_of(recv);
@@ -6335,6 +6355,12 @@ fn php_callable_value(ty: &Ty) -> bool {
                 | TyKind::Callable { .. }
         ) || matches!(m.kind(), TyKind::Literal(l) if matches!(l.value, LitValue::String(_)))
     })
+}
+
+fn all_classes(ty: &Ty) -> bool {
+    ty.members()
+        .iter()
+        .all(|m| matches!(m.kind(), TyKind::Class { .. }))
 }
 
 fn is_bare_array(ty: &Ty) -> bool {

@@ -1,0 +1,53 @@
+---
+source: crates/stir_emit/tests/programs.rs
+expression: out.code
+---
+<?php
+
+declare(strict_types=1);
+
+$total = 0;
+for ($i = 0; $i < 3; $i++) {
+    $total += $i;
+}
+echo "{$total}\n";
+
+function pick(int $a): int
+{
+    return $a > 1 ? 10 : ($a > 0 ? 20 : 30);
+}
+
+echo \pick(2) . ' ' . \pick(1) . ' ' . \pick(0) . "\n";
+$b = true;
+$x = $b ? 'yes' : 'no';
+echo $x . "\n";
+$f = fn (int|string $a): string => 'got';
+echo $f(1) . "\n";
+echo 'a' < 'b' ? "ordered\n" : "unordered\n";
+
+final class R1
+{
+    public function a(): int
+    {
+        return 1;
+    }
+
+    public int $p = 10;
+}
+
+final class R2
+{
+    public function a(): int
+    {
+        return 2;
+    }
+
+    public int $p = 20;
+}
+
+function shared(\R1|\R2 $x): int
+{
+    return $x->a() + $x->p;
+}
+
+echo \shared(new \R1()) . ' ' . \shared(new \R2()) . "\n";

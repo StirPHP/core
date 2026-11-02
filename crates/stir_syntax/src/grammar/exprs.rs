@@ -215,8 +215,8 @@ fn newline_breaks(p: &Parser<'_>) -> bool {
     if p.at_ts(CONTINUATION) {
         return false;
     }
-    // elvis on a continuation line
-    if p.at(QUESTION) && p.nth(1) == COLON && p.nth_joint(0) {
+    // a ternary or elvis on a continuation line: `?` can't start a statement
+    if p.at(QUESTION) {
         return false;
     }
     true
@@ -751,6 +751,43 @@ fn primary(p: &mut Parser<'_>) -> Option<CompletedMarker> {
             p.bump_any();
             m.complete(p, MAGIC_CONST)
         }
+        // `(int) $x` is PHP's cast, which `.sphp` doesn't have
+        L_PAREN
+            if p.stir()
+                && p.nth(1) == IDENT
+                && p.nth(2) == R_PAREN
+                && matches!(
+                    p.nth_text(1).to_ascii_lowercase().as_str(),
+                    "int"
+                        | "integer"
+                        | "float"
+                        | "double"
+                        | "string"
+                        | "bool"
+                        | "boolean"
+                        | "array"
+                        | "object"
+                )
+                && matches!(
+                    p.nth(3),
+                    VARIABLE | IDENT | INT_NUMBER | FLOAT_NUMBER | STRING_LITERAL | L_PAREN
+                ) =>
+        {
+            let target = p.nth_text(1).to_ascii_lowercase();
+            p.error(match target.as_str() {
+                "int" | "integer" => "PHP casts aren't part of `.sphp`: use `intval(...)`, or `as int` for a checked conversion",
+                "float" | "double" => "PHP casts aren't part of `.sphp`: use `floatval(...)`, or `as float` for a checked conversion",
+                "string" => "PHP casts aren't part of `.sphp`: use `strval(...)`, or `as string` for a checked conversion",
+                "bool" | "boolean" => "PHP casts aren't part of `.sphp`: use `boolval(...)`, or `as bool` for a checked conversion",
+                _ => "PHP casts aren't part of `.sphp`: use `as` for a checked conversion",
+            });
+            let m = p.start();
+            p.bump(L_PAREN);
+            p.bump(IDENT);
+            p.bump(R_PAREN);
+            operand(p, bp::ASSIGN);
+            m.complete(p, PAREN_EXPR)
+        }
         L_PAREN => {
             let m = p.start();
             p.bump(L_PAREN);
@@ -1066,7 +1103,7 @@ pub(super) fn lambda(p: &mut Parser<'_>) -> CompletedMarker {
                 member_name(p);
             }
             if p.eat(COLON) {
-                types::type_no_union(p);
+                types::type_(p);
             }
             prm.complete(p, PARAM);
             if !p.eat(COMMA) {
@@ -1129,11 +1166,20 @@ fn at_lambda_params(p: &Parser<'_>) -> bool {
 fn if_expr(p: &mut Parser<'_>) -> CompletedMarker {
     let m = p.start();
     p.bump(IF_KW);
+    if_expr_rest(p, m)
+}
+
+fn if_expr_rest(p: &mut Parser<'_>, m: crate::parser::Marker) -> CompletedMarker {
     p.expect(L_PAREN);
     p.with_newlines(false, |p| expr(p));
     p.expect(R_PAREN);
     branch(p);
-    if p.at(ELSE_KW) || (p.newline_before() && p.nth(0) == ELSE_KW) {
+    if p.at(ELSEIF_KW) {
+        // `elseif (c) a else b` is `else if (c) a else b`
+        let nested = p.start();
+        p.bump(ELSEIF_KW);
+        if_expr_rest(p, nested);
+    } else if p.at(ELSE_KW) || (p.newline_before() && p.nth(0) == ELSE_KW) {
         p.bump(ELSE_KW);
         branch(p);
     }

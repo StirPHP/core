@@ -1,0 +1,30 @@
+var $total: int = 0
+for (var $i = 0; $i < 3; $i++) {
+    $total += $i
+}
+echo "${$total}\n"
+
+function pick(a: int): int = if (a > 1) 10 elseif (a > 0) 20 else 30
+echo "${pick(2)} ${pick(1)} ${pick(0)}\n"
+
+val b = true
+val x = b
+    ? "yes"
+    : "no"
+echo x . "\n"
+
+val f = { a: int|string -> "got" }
+echo f(1) . "\n"
+
+echo if ("a" < "b") "ordered\n" else "unordered\n"
+
+class R1 {
+    function a(): int = 1
+    public var $p: int = 10
+}
+class R2 {
+    function a(): int = 2
+    public var $p: int = 20
+}
+function shared(x: R1|R2): int = x->a() + x->p
+echo "${shared(new R1())} ${shared(new R2())}\n"

@@ -313,6 +313,10 @@ fn for_stmt(p: &mut Parser<'_>) {
         for (i, kind) in [FOR_INIT, FOR_COND, FOR_STEP].into_iter().enumerate() {
             let c = p.start();
             let end = if i == 2 { R_PAREN } else { SEMI };
+            if i == 0 && p.stir() {
+                // `for (var $i = 0; ...)`
+                p.eat(VAR_KW);
+            }
             while !p.at(end) && !p.at(EOF) {
                 if exprs::opt_expr(p).is_none() {
                     p.err_and_bump("expected an expression");

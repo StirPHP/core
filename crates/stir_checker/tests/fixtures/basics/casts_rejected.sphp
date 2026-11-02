@@ -1,0 +1,1 @@
+function casts(s: string): int = (int) s // error: SPHP0001
