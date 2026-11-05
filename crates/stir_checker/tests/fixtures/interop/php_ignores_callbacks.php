@@ -7,6 +7,14 @@ new Missing2();
 new Missing3();
 new Missing4(); // @phpstan-ignore-line
 new Missing5(); // error: class.notFound
+// @phpstan-ignore return.type
+new Missing6(); // error: class.notFound
+// @phpstan-ignore return.type, class.notFound (a reason)
+new Missing7();
+/* @phpstan-ignore class.notFound */
+new Missing8();
+// @phpstan-ignore // error: ignore.parseError
+new Missing9(); // error: class.notFound
 
 /**
  * @template T

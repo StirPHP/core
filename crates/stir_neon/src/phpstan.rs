@@ -387,11 +387,8 @@ impl PhpstanConfig {
                         }
                     }
                 }
-                if e.messages.is_empty() && e.identifiers.is_empty() {
-                    return Err(self.invalid(
-                        KEY,
-                        "entry needs `message`, `messages`, `rawMessage`, `rawMessages` or `identifier`",
-                    ));
+                if e.messages.is_empty() && e.identifiers.is_empty() && e.paths.is_empty() {
+                    return Err(self.invalid(KEY, "entry needs a message, an identifier or a path"));
                 }
             }
             _ => return Err(self.invalid(KEY, format!("unexpected entry {item}"))),

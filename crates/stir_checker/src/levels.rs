@@ -1,5 +1,5 @@
-//! PHPStan-style rule levels for diagnostics in `.php` files, plus
-//! `ignoreErrors` and the per-file `// @sphp-nocheck` directive.
+//! PHPStan-style rule levels for diagnostics in `.php` files, plus `@phpstan-ignore` comments,
+//! `ignoreErrors`, baselines and the per-file `// @sphp-nocheck` directive.
 //!
 //! | level | what is reported |
 //! |-------|------------------|
@@ -18,7 +18,10 @@
 
 use std::path::Path;
 
-use stir_db::{Diagnostic, IgnoreRule, Settings};
+use rustc_hash::FxHashMap;
+
+use stir_db::{Diagnostic, IgnoreRule, IgnoreRules, Settings};
+use stir_syntax::{SyntaxKind, SyntaxNode, TextRange, TextSize};
 
 use crate::codes;
 
@@ -102,21 +105,83 @@ pub fn is_nocheck(text: &str) -> bool {
     false
 }
 
-/// Drops `.php` diagnostics above the configured level, matched by `ignoreErrors`
-/// or outside the analysed paths.
+/// Drops `.php` diagnostics above the configured level or outside the analysed paths.
 pub fn filter_php(diags: &mut Vec<Diagnostic>, settings: &Settings) {
     let level = settings.level();
-    let rules: Vec<CompiledRule<'_>> = settings
-        .ignore_errors
-        .iter()
-        .map(CompiledRule::new)
-        .collect();
     diags.retain(|d| {
-        min_level(d) <= level
-            && is_analysed(&d.file, settings)
-            && !is_held_back(d, settings)
-            && !rules.iter().any(|r| r.matches(d))
+        min_level(d) <= level && is_analysed(&d.file, settings) && !is_held_back(d, settings)
     });
+}
+
+/// Can `code` be hidden at all? As in PHPStan, what PHP itself can't run can't: it's left out of
+/// baselines, and `@phpstan-ignore` and `ignoreErrors` don't apply to it (`RuleErrorBuilder`'s
+/// `nonIgnorable()`, and the errors of its parser).
+pub fn is_ignorable(code: &str) -> bool {
+    !matches!(
+        code,
+        codes::SYNTAX
+            | codes::IGNORE_PARSE_ERROR
+            | codes::ASSIGN_THIS
+            | codes::NULLSAFE_ASSIGN
+            | codes::NAMED_ARGUMENTS_NOT_SUPPORTED
+            | codes::CALLABLE_NOT_SUPPORTED
+            | codes::CAST_VOID_NOT_SUPPORTED
+            | codes::CATCH_NON_CAPTURING_NOT_SUPPORTED
+            | codes::CLASS_CONSTANT_DYNAMIC_FETCH
+            | codes::CLASS_CONSTANT_FINAL_NOT_SUPPORTED
+            | codes::CLASS_CONSTANT_IN_TRAIT
+            | codes::CLASS_CONSTANT_NATIVE_TYPE_NOT_SUPPORTED
+            | codes::CLASS_CONSTANT_NOT_SUPPORTED
+            | codes::CONSTANT_ATTRIBUTES_NOT_SUPPORTED
+            | codes::PARAMETER_UNION_NOT_SUPPORTED
+            | codes::PROPERTY_HOOKS_NOT_SUPPORTED
+            | codes::PROPERTY_PROMOTED_NOT_SUPPORTED
+            | codes::PROPERTY_READONLY_NOT_SUPPORTED
+            | codes::PROPERTY_STATIC_ASYMMETRIC_VISIBILITY
+            | codes::RETURN_NEVER_NOT_SUPPORTED
+            | codes::RETURN_UNION_NOT_SUPPORTED
+            | codes::THROW_NOT_SUPPORTED
+    )
+}
+
+/// Hides what `rules` cover in `diags`, which are of one file, in order: past a rule's `count`
+/// the rest show. Returns how many each rule that applied hid, by the rule's index.
+pub fn apply_ignore_rules(
+    diags: &mut Vec<Diagnostic>,
+    file: &Path,
+    rules: &IgnoreRules,
+) -> Vec<(u32, u32)> {
+    if rules.is_empty() || diags.is_empty() {
+        return Vec::new();
+    }
+    let mut applying: Vec<(u32, &IgnoreRule, u32)> = rules
+        .for_file(file, &path_matches)
+        .map(|(i, r)| (i, r, 0))
+        .collect();
+    if applying.is_empty() {
+        return Vec::new();
+    }
+    diags.retain(|d| {
+        if !is_ignorable(d.code) {
+            return true;
+        }
+        let rule = applying.iter_mut().find(|(_, r, hidden)| {
+            r.count.is_none_or(|n| *hidden < n)
+                && (r.identifiers.is_empty() || r.identifiers.iter().any(|i| i == d.code))
+        });
+        match rule {
+            Some((_, _, hidden)) => {
+                *hidden += 1;
+                false
+            }
+            None => true,
+        }
+    });
+    applying
+        .into_iter()
+        .filter(|(_, _, hidden)| *hidden > 0)
+        .map(|(i, _, hidden)| (i, hidden))
+        .collect()
 }
 
 /// Composer's packages aren't installed as declared, and `d` is about a name they might declare:
@@ -135,105 +200,308 @@ pub fn is_analysed(file: &Path, settings: &Settings) -> bool {
         && !settings.php_excludes.iter().any(|p| path_matches(p, file))
 }
 
-/// Drops diagnostics on lines silenced by `@phpstan-ignore-line`,
-/// `@phpstan-ignore-next-line` or `@phpstan-ignore <identifier>` (the next line if the
-/// comment is alone on its line). The identifiers are PHPStan's, so any error counts.
-pub fn filter_phpstan_ignores(diags: &mut Vec<Diagnostic>, text: &str) {
-    let marker = "@phpstan-ignore";
-    let mut ignored = std::collections::HashSet::new();
-    for (i, line) in text.lines().enumerate() {
-        let Some(at) = line.find(marker) else {
-            continue;
-        };
-        let rest = &line[at + marker.len()..];
-        let before = line[..at].trim_start();
-        let comment_only =
-            before.starts_with("//") || before.starts_with('#') || before.starts_with("/*");
-        if rest.starts_with("-next-line") || (!rest.starts_with("-line") && comment_only) {
-            ignored.insert(i + 1);
-        } else {
-            ignored.insert(i);
+/// What the comments of a file say to ignore, by 0-based line: everything, or one error for each
+/// time an identifier is listed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LineIgnore {
+    All,
+    Identifiers(Vec<String>),
+}
+
+/// The `@phpstan-ignore` comments of a file, read as PHPStan's `RichParser` does.
+#[derive(Debug, Default)]
+struct LocalIgnores {
+    lines: FxHashMap<usize, LineIgnore>,
+    /// Comments it can't read.
+    errors: Vec<(TextRange, String)>,
+}
+
+impl LocalIgnores {
+    fn add(&mut self, line: usize, identifiers: Vec<String>) {
+        match self
+            .lines
+            .entry(line)
+            .or_insert_with(|| LineIgnore::Identifiers(Vec::new()))
+        {
+            LineIgnore::Identifiers(all) => all.extend(identifiers),
+            LineIgnore::All => {}
         }
     }
-    if ignored.is_empty() {
+
+    fn add_parsed(&mut self, line: usize, range: TextRange, text: &str) {
+        match parse_ignored_identifiers(text) {
+            Ok(identifiers) => self.add(line, identifiers),
+            Err(message) => self.errors.push((range, message)),
+        }
+    }
+
+    fn read(root: &SyntaxNode, source: &str) -> Self {
+        let line_of = |offset: TextSize| {
+            source.as_bytes()[..usize::from(offset).min(source.len())]
+                .iter()
+                .filter(|b| **b == b'\n')
+                .count()
+        };
+        let mut out = LocalIgnores::default();
+        // the line of the last token that isn't a comment, and a comment alone on its line:
+        // that's about the next token, if that's on the next line
+        let mut previous = None;
+        let mut pending: Option<(String, usize, TextRange)> = None;
+        for token in root
+            .descendants_with_tokens()
+            .filter_map(|e| e.into_token())
+        {
+            let line = line_of(token.text_range().start());
+            let kind = token.kind();
+            if kind == SyntaxKind::WHITESPACE {
+                continue;
+            }
+            if kind != SyntaxKind::COMMENT && kind != SyntaxKind::DOC_COMMENT {
+                if let Some((text, last, range)) = pending.take() {
+                    let target = if line == last + 1 { line } else { last };
+                    out.add_parsed(target, range, &text);
+                }
+                previous = Some(line);
+                continue;
+            }
+            let text = token.text();
+            let last = line + text.matches('\n').count();
+            let next_line = text.contains("@phpstan-ignore-next-line");
+            let this_line = text.contains("@phpstan-ignore-line");
+            if kind == SyntaxKind::DOC_COMMENT && (next_line || this_line) {
+                for (at, _) in text.match_indices("@phpstan-ignore-line") {
+                    let target = line + text[..at].matches('\n').count();
+                    out.lines.insert(target, LineIgnore::All);
+                }
+                for (at, _) in text.match_indices("@phpstan-ignore-next-line") {
+                    let target = line + text[..at].matches('\n').count() + 1;
+                    out.lines.insert(target, LineIgnore::All);
+                }
+                // the last tag of the comment reaches what's after it
+                if next_line && last_phpdoc_tag(text) == Some("@phpstan-ignore-next-line") {
+                    out.lines.insert(last + 1, LineIgnore::All);
+                }
+                continue;
+            }
+            if next_line || this_line {
+                let target = last + usize::from(next_line);
+                out.lines.insert(target, LineIgnore::All);
+                continue;
+            }
+            let Some(at) = text.find(IGNORE_TAG) else {
+                continue;
+            };
+            let rest = &text[at + IGNORE_TAG.len()..];
+            if previous == Some(line) {
+                out.add_parsed(line, token.text_range(), rest);
+            } else {
+                pending = Some((rest.to_owned(), last, token.text_range()));
+            }
+        }
+        if let Some((text, last, range)) = pending {
+            out.add_parsed(last, range, &text);
+        }
+        out
+    }
+}
+
+const IGNORE_TAG: &str = "@phpstan-ignore";
+
+/// The last `@tag` at the start of a line of a PHPDoc comment.
+fn last_phpdoc_tag(text: &str) -> Option<&str> {
+    text.lines().rev().find_map(|line| {
+        let line = line.trim_start().trim_start_matches("/**").trim_start();
+        let line = line.strip_prefix('*').unwrap_or(line).trim_start();
+        line.starts_with('@')
+            .then(|| line.split_whitespace().next())
+            .flatten()
+    })
+}
+
+/// What comes after `@phpstan-ignore`: `a.b, c.d (why) ...`, as `RichParser::parseIdentifiers`.
+fn parse_ignored_identifiers(text: &str) -> Result<Vec<String>, String> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Token<'a> {
+        End,
+        Identifier(&'a str),
+        Comma,
+        Open,
+        Close,
+        Other(&'a str),
+    }
+    fn is_identifier(word: &str) -> bool {
+        let edge = |c: char| c.is_ascii_alphanumeric();
+        word.starts_with(edge)
+            && word.ends_with(edge)
+            && word.chars().all(|c| c.is_ascii_alphanumeric() || c == '.')
+    }
+    let mut tokens = Vec::new();
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        if c == ' ' || c == '\t' {
+            rest = &rest[1..];
+        } else if c == ',' {
+            tokens.push(Token::Comma);
+            rest = &rest[1..];
+        } else if c == '(' {
+            tokens.push(Token::Open);
+            rest = &rest[1..];
+        } else if c == ')' {
+            tokens.push(Token::Close);
+            rest = &rest[1..];
+        } else if rest.starts_with("*/") {
+            tokens.push(Token::End);
+            rest = &rest[2..];
+        } else if c == '\n' || rest.starts_with("\r\n") {
+            tokens.push(Token::End);
+            rest = rest[rest.find('\n').unwrap_or(0) + 1..].trim_start_matches([' ', '\t']);
+            if rest.starts_with('*') && !rest.starts_with("*/") {
+                rest = rest[1..].strip_prefix(' ').unwrap_or(&rest[1..]);
+            }
+        } else if c.is_whitespace() {
+            rest = &rest[c.len_utf8()..];
+        } else {
+            let len = rest
+                .find(|c: char| c.is_ascii_whitespace() || c == '(' || c == ')')
+                .unwrap_or(rest.len());
+            let word = &rest[..len];
+            let identifier = word
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '.'))
+                .map_or(word, |end| &word[..end]);
+            let identifier = identifier.trim_end_matches('.');
+            if is_identifier(identifier) {
+                tokens.push(Token::Identifier(identifier));
+                rest = &rest[identifier.len()..];
+            } else {
+                tokens.push(Token::Other(word));
+                rest = &rest[len..];
+            }
+        }
+    }
+    if tokens.last() != Some(&Token::End) {
+        tokens.push(Token::End);
+    }
+
+    let label = |t: Token<'_>| match t {
+        Token::End => "end".to_owned(),
+        Token::Identifier(_) => "identifier".to_owned(),
+        Token::Comma => "comma (,)".to_owned(),
+        Token::Open => "T_OPEN_PARENTHESIS".to_owned(),
+        Token::Close => "T_CLOSE_PARENTHESIS".to_owned(),
+        Token::Other(o) => format!("T_OTHER '{o}'"),
+    };
+    let mut identifiers = Vec::new();
+    let mut depth = 0u32;
+    let mut after_identifier = false;
+    let mut last = "@phpstan-ignore".to_owned();
+    let mut in_comment_tail = false;
+    for token in tokens {
+        if depth > 0 {
+            match token {
+                Token::Open => depth += 1,
+                Token::Close => {
+                    depth -= 1;
+                    in_comment_tail = depth == 0;
+                }
+                _ => {}
+            }
+            last = label(token);
+            continue;
+        }
+        let allowed = match token {
+            Token::Identifier(_) => !after_identifier && !in_comment_tail,
+            Token::Comma | Token::End => after_identifier || in_comment_tail,
+            Token::Open => after_identifier && !in_comment_tail,
+            Token::Close | Token::Other(_) => false,
+        };
+        if !allowed {
+            if token == Token::End && identifiers.is_empty() {
+                return Err("Missing identifier".to_owned());
+            }
+            let expected = if after_identifier {
+                "comma (,) or end or T_OPEN_PARENTHESIS"
+            } else if in_comment_tail {
+                "comma (,) or end"
+            } else {
+                "identifier"
+            };
+            return Err(format!(
+                "Unexpected {} after {last}, expected {expected}",
+                label(token)
+            ));
+        }
+        match token {
+            Token::Identifier(name) => {
+                identifiers.push(name.to_owned());
+                after_identifier = true;
+            }
+            Token::Comma => {
+                after_identifier = false;
+                in_comment_tail = false;
+            }
+            Token::Open => depth = 1,
+            _ => {}
+        }
+        last = label(token);
+    }
+    if depth > 0 {
+        return Err("Unexpected end, unclosed opening parenthesis".to_owned());
+    }
+    if identifiers.is_empty() {
+        return Err("Missing identifier".to_owned());
+    }
+    Ok(identifiers)
+}
+
+/// Applies the `@phpstan-ignore` comments of a file to its diagnostics: `-line` and `-next-line`
+/// hide all of a line's, and each identifier listed one error of that identifier. Reports the
+/// comments it can't read, as PHPStan does.
+pub fn apply_phpstan_ignores(
+    diags: &mut Vec<Diagnostic>,
+    root: &SyntaxNode,
+    text: &str,
+    file: &Path,
+) {
+    if !text.contains(IGNORE_TAG) {
         return;
     }
-    diags.retain(|d| {
-        let start = usize::from(d.range.start()).min(text.len());
-        let line = text.as_bytes()[..start]
-            .iter()
-            .filter(|b| **b == b'\n')
-            .count();
-        !ignored.contains(&line)
-    });
-}
-
-/// An ignore rule whose patterns are compiled the first time a diagnostic reaches them: a
-/// baseline has thousands of rules, and nearly all are for some other file.
-struct CompiledRule<'a> {
-    rule: &'a IgnoreRule,
-    patterns: std::cell::OnceCell<Vec<fancy_regex::Regex>>,
-}
-
-impl<'a> CompiledRule<'a> {
-    fn new(rule: &'a IgnoreRule) -> Self {
-        CompiledRule {
-            rule,
-            patterns: std::cell::OnceCell::new(),
-        }
+    let mut ignores = LocalIgnores::read(root, text);
+    if !diags.is_empty() && !ignores.lines.is_empty() {
+        let starts: Vec<usize> = std::iter::once(0)
+            .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+            .collect();
+        diags.retain(|d| {
+            if !is_ignorable(d.code) {
+                return true;
+            }
+            let start = usize::from(d.range.start()).min(text.len());
+            let line = starts.partition_point(|&s| s <= start) - 1;
+            match ignores.lines.get_mut(&line) {
+                Some(LineIgnore::All) => false,
+                Some(LineIgnore::Identifiers(listed)) => {
+                    match listed.iter().position(|i| i == d.code) {
+                        Some(at) => {
+                            listed.remove(at);
+                            false
+                        }
+                        None => true,
+                    }
+                }
+                None => true,
+            }
+        });
     }
-
-    fn matches(&self, d: &Diagnostic) -> bool {
-        let r = self.rule;
-        let has_message = !r.patterns.is_empty() || !r.raw_messages.is_empty();
-        if !has_message && r.identifiers.is_empty() {
-            return false;
-        }
-        if !r.paths.is_empty() && !r.paths.iter().any(|p| path_matches(p, &d.file)) {
-            return false;
-        }
-        if !r.identifiers.is_empty() && !r.identifiers.iter().any(|i| i == d.code) {
-            return false;
-        }
-        !has_message
-            || r.raw_messages.contains(&d.message)
-            || self
-                .patterns
-                .get_or_init(|| r.patterns.iter().filter_map(|p| pcre(p)).collect())
-                .iter()
-                .any(|p| p.is_match(&d.message).unwrap_or(false))
+    for (range, message) in ignores.errors {
+        diags.push(Diagnostic::error(
+            file,
+            range,
+            codes::IGNORE_PARSE_ERROR,
+            format!("Parse error in @phpstan-ignore: {message}"),
+        ));
     }
 }
 
-/// Compiles a PCRE pattern with delimiters and flags (`#^Foo$#i`).
-fn pcre(pattern: &str) -> Option<fancy_regex::Regex> {
-    let mut chars = pattern.chars();
-    let open = chars.next()?;
-    let close = match open {
-        '(' => ')',
-        '{' => '}',
-        '[' => ']',
-        '<' => '>',
-        c if c.is_alphanumeric() || c == '\\' || c.is_whitespace() => {
-            return fancy_regex::Regex::new(pattern).ok();
-        }
-        c => c,
-    };
-    let end = pattern.rfind(close).filter(|&e| e > 0)?;
-    let body = &pattern[open.len_utf8()..end];
-    let flags: String = pattern[end + close.len_utf8()..]
-        .chars()
-        .filter(|c| matches!(c, 'i' | 'm' | 's' | 'x'))
-        .collect();
-    let src = if flags.is_empty() {
-        body.to_owned()
-    } else {
-        format!("(?{flags}){body}")
-    };
-    fancy_regex::Regex::new(&src).ok()
-}
-
-fn path_matches(rule: &Path, file: &Path) -> bool {
+pub fn path_matches(rule: &Path, file: &Path) -> bool {
     let r = rule.to_string_lossy();
     if r.contains(['*', '?']) {
         // a source directory of `.` leaves `/./` in the file's path, which `components` drops
@@ -257,7 +525,6 @@ fn fnmatch(pat: &[u8], s: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stir_syntax::TextRange;
 
     #[test]
     fn analysed_paths() {
@@ -313,46 +580,232 @@ mod tests {
 
         let settings = Settings {
             php_level: 4,
-            ignore_errors: vec![
-                IgnoreRule {
-                    patterns: vec!["#^unknown function `ig.*`$#i".into()],
-                    ..IgnoreRule::default()
-                },
-                IgnoreRule {
-                    identifiers: vec![codes::CLASS_NOT_FOUND.into()],
-                    paths: vec!["/p/legacy/*".into()],
-                    ..IgnoreRule::default()
-                },
-            ],
             ..Settings::default()
         };
-        let mut diags = vec![
-            diag(
-                codes::FUNCTION_NOT_FOUND,
-                "unknown function `IGNORED`",
-                "/p/a.php",
-            ),
-            diag(
-                codes::FUNCTION_NOT_FOUND,
-                "unknown function `kept`",
-                "/p/a.php",
-            ),
-            diag(
-                codes::ARGUMENT_TYPE,
-                "type mismatch in argument `a`",
-                "/p/a.php",
-            ),
-            diag(codes::CLASS_NOT_FOUND, "unknown class", "/p/legacy/x.php"),
-            diag(codes::CLASS_NOT_FOUND, "unknown class", "/p/src/x.php"),
-        ];
+        let rules = IgnoreRules::new(vec![IgnoreRule {
+            identifiers: vec![codes::CLASS_NOT_FOUND.into()],
+            paths: vec!["/p/legacy/*".into()],
+            ..IgnoreRule::default()
+        }]);
+        let mut diags = vec![diag(
+            codes::ARGUMENT_TYPE,
+            "type mismatch in argument `a`",
+            "/p/a.php",
+        )];
         filter_php(&mut diags, &settings);
-        let kept: Vec<_> = diags.iter().map(|d| (d.code, d.file.clone())).collect();
-        assert_eq!(
-            kept,
-            [
-                (codes::FUNCTION_NOT_FOUND, "/p/a.php".into()),
-                (codes::CLASS_NOT_FOUND, "/p/src/x.php".into()),
-            ]
+        assert!(diags.is_empty(), "level 5 at level 4");
+
+        let mut diags = vec![diag(
+            codes::CLASS_NOT_FOUND,
+            "unknown class",
+            "/p/legacy/x.php",
+        )];
+        let hits = apply_ignore_rules(&mut diags, Path::new("/p/legacy/x.php"), &rules);
+        assert!(diags.is_empty());
+        assert_eq!(hits, [(0, 1)]);
+
+        let mut diags = vec![diag(
+            codes::CLASS_NOT_FOUND,
+            "unknown class",
+            "/p/src/x.php",
+        )];
+        let hits = apply_ignore_rules(&mut diags, Path::new("/p/src/x.php"), &rules);
+        assert_eq!(diags.len(), 1);
+        assert!(hits.is_empty());
+    }
+
+    /// `(identifier, path, count)` rules over `codes` of one file: what's left, and the hits.
+    fn hide(
+        rules: Vec<IgnoreRule>,
+        file: &str,
+        codes: &[&'static str],
+    ) -> (Vec<&'static str>, Vec<(u32, u32)>) {
+        let mut diags: Vec<_> = codes.iter().map(|c| diag(c, "m", file)).collect();
+        let hits = apply_ignore_rules(&mut diags, Path::new(file), &IgnoreRules::new(rules));
+        (diags.iter().map(|d| d.code).collect(), hits)
+    }
+
+    fn rule(identifier: &str, path: &str, count: Option<u32>) -> IgnoreRule {
+        IgnoreRule {
+            identifiers: if identifier.is_empty() {
+                Vec::new()
+            } else {
+                vec![identifier.into()]
+            },
+            paths: if path.is_empty() {
+                Vec::new()
+            } else {
+                vec![path.into()]
+            },
+            count,
+            ..IgnoreRule::default()
+        }
+    }
+
+    #[test]
+    fn count_hides_up_to_that_many_per_file() {
+        let codes = [codes::RETURN_TYPE; 3];
+        let (left, hits) = hide(
+            vec![rule(codes::RETURN_TYPE, "/p/a.php", Some(2))],
+            "/p/a.php",
+            &codes,
         );
+        assert_eq!(left, [codes::RETURN_TYPE]);
+        assert_eq!(hits, [(0, 2)]);
+
+        // per file, through a glob or a directory too
+        for path in ["/p/*", "/p"] {
+            let (left, _) = hide(
+                vec![rule(codes::RETURN_TYPE, path, Some(1))],
+                "/p/b.php",
+                &codes,
+            );
+            assert_eq!(left.len(), 2, "{path}");
+        }
+        // no count: all of them
+        let (left, _) = hide(
+            vec![rule(codes::RETURN_TYPE, "/p/a.php", None)],
+            "/p/a.php",
+            &codes,
+        );
+        assert!(left.is_empty());
+        // two entries of an identifier add up, as a baseline's split by message do
+        let (left, hits) = hide(
+            vec![
+                rule(codes::RETURN_TYPE, "/p/a.php", Some(1)),
+                rule(codes::RETURN_TYPE, "/p/a.php", Some(1)),
+            ],
+            "/p/a.php",
+            &codes,
+        );
+        assert_eq!(left.len(), 1);
+        assert_eq!(hits, [(0, 1), (1, 1)]);
+    }
+
+    #[test]
+    fn rules_by_identifier_path_or_both() {
+        let codes = [codes::RETURN_TYPE, codes::ARGUMENT_TYPE];
+        // an identifier alone: every file
+        let (left, _) = hide(vec![rule(codes::RETURN_TYPE, "", None)], "/q/a.php", &codes);
+        assert_eq!(left, [codes::ARGUMENT_TYPE]);
+        // a path alone: everything in it
+        let (left, _) = hide(vec![rule("", "/q", None)], "/q/a.php", &codes);
+        assert!(left.is_empty());
+        let (left, _) = hide(vec![rule("", "/r", None)], "/q/a.php", &codes);
+        assert_eq!(left.len(), 2);
+    }
+
+    #[test]
+    fn what_php_refuses_cant_be_hidden() {
+        let codes = [codes::SYNTAX, codes::ASSIGN_THIS, codes::RETURN_TYPE];
+        let (left, _) = hide(vec![rule("", "/q", None)], "/q/a.php", &codes);
+        assert_eq!(left, [codes::SYNTAX, codes::ASSIGN_THIS]);
+        let (left, _) = hide(
+            vec![rule(codes::SYNTAX, "/q", None)],
+            "/q/a.php",
+            &[codes::SYNTAX],
+        );
+        assert_eq!(left, [codes::SYNTAX]);
+    }
+
+    fn ignored(source: &str, codes_at: &[(&'static str, usize)]) -> Vec<(usize, String)> {
+        let parse = stir_syntax::parse(source);
+        let starts: Vec<usize> = std::iter::once(0)
+            .chain(source.match_indices('\n').map(|(i, _)| i + 1))
+            .collect();
+        let mut diags: Vec<Diagnostic> = codes_at
+            .iter()
+            .map(|(code, line)| {
+                let at = TextSize::try_from(starts[*line]).unwrap();
+                Diagnostic::error("a.php", TextRange::empty(at), code, "m")
+            })
+            .collect();
+        apply_phpstan_ignores(&mut diags, &parse.syntax(), source, Path::new("a.php"));
+        diags
+            .iter()
+            .map(|d| {
+                let line = starts.partition_point(|&s| s <= usize::from(d.range.start())) - 1;
+                (line, d.code.to_owned())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ignore_comments_name_identifiers() {
+        let kept = |c: &str, l: usize| (l, c.to_owned());
+        // an identifier only silences itself
+        assert_eq!(
+            ignored(
+                "<?php\nfoo(); // @phpstan-ignore return.type\n",
+                &[(codes::RETURN_TYPE, 1), (codes::ARGUMENT_TYPE, 1)]
+            ),
+            [kept(codes::ARGUMENT_TYPE, 1)]
+        );
+        // alone on its line: the next one
+        assert_eq!(
+            ignored(
+                "<?php\n// @phpstan-ignore return.type, argument.type (because)\nfoo();\n",
+                &[(codes::RETURN_TYPE, 2), (codes::ARGUMENT_TYPE, 2)]
+            ),
+            []
+        );
+        // one error for each time it's listed
+        assert_eq!(
+            ignored(
+                "<?php\nfoo(); // @phpstan-ignore return.type\n",
+                &[(codes::RETURN_TYPE, 1), (codes::RETURN_TYPE, 1)]
+            ),
+            [kept(codes::RETURN_TYPE, 1)]
+        );
+        // the whole line, whatever it is
+        assert_eq!(
+            ignored(
+                "<?php\nfoo(); // @phpstan-ignore-line\n// @phpstan-ignore-next-line\nbar();\n",
+                &[(codes::RETURN_TYPE, 1), (codes::ARGUMENT_TYPE, 3)]
+            ),
+            []
+        );
+        // in a block comment
+        assert_eq!(
+            ignored(
+                "<?php\n/* @phpstan-ignore return.type */\nfoo();\n",
+                &[(codes::RETURN_TYPE, 2)]
+            ),
+            []
+        );
+        // what can't be hidden isn't
+        assert_eq!(
+            ignored(
+                "<?php\nfoo(); // @phpstan-ignore-line\n",
+                &[(codes::SYNTAX, 1)]
+            ),
+            [kept(codes::SYNTAX, 1)]
+        );
+        // a string isn't a comment
+        assert_eq!(
+            ignored(
+                "<?php\n$a = '// @phpstan-ignore-line';\n",
+                &[(codes::RETURN_TYPE, 1)]
+            ),
+            [kept(codes::RETURN_TYPE, 1)]
+        );
+    }
+
+    #[test]
+    fn ignore_comments_that_cant_be_read() {
+        assert_eq!(
+            parse_ignored_identifiers(" a.b, c.d").unwrap(),
+            ["a.b", "c.d"]
+        );
+        assert_eq!(
+            parse_ignored_identifiers(" a.b (why, (ever)), c").unwrap(),
+            ["a.b", "c"]
+        );
+        assert_eq!(parse_ignored_identifiers(" a.b */").unwrap(), ["a.b"]);
+        for broken in ["", " ", " , a", " a b", " a,", " a (open", " a) b"] {
+            assert!(parse_ignored_identifiers(broken).is_err(), "{broken:?}");
+        }
+        let errors = ignored("<?php\nfoo(); // @phpstan-ignore\n", &[]);
+        assert_eq!(errors, [(1, codes::IGNORE_PARSE_ERROR.to_owned())]);
     }
 }

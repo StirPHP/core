@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use stir_db::{Db, Diagnostic, FileOrigin, SourceFile, Workspace};
+use stir_db::{Db, Diagnostic, FileOrigin, IgnoreRule, SourceFile, Workspace};
 
 mod body;
 pub mod codes;
@@ -27,14 +27,30 @@ pub use infer::widen_literals;
 pub use model::Ctx;
 pub use typed::{Def, MemberKind, TypedFile, typed_file};
 
+/// What checking a file comes to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileCheck {
+    pub diags: Arc<Vec<Diagnostic>>,
+    /// How many diagnostics each rule of the baseline hid here, by the rule's index.
+    pub baseline_hits: Vec<(u32, u32)>,
+}
+
 /// All diagnostics of `file` within `ws`.
+pub fn check_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> &Arc<Vec<Diagnostic>> {
+    &checked_file(db, ws, file).diags
+}
+
+/// [`check_file`], and what it's known from.
 #[salsa::tracked(returns(ref))]
-pub fn check_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> Arc<Vec<Diagnostic>> {
+pub fn checked_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> FileCheck {
     let settings = ws.settings(db);
     if file.origin(db) == FileOrigin::Source
         && (levels::is_nocheck(file.text(db)) || !levels::is_analysed(file.path(db), settings))
     {
-        return Arc::new(Vec::new());
+        return FileCheck {
+            diags: Arc::new(Vec::new()),
+            baseline_hits: Vec::new(),
+        };
     }
     let mut diags = stir_db::syntax_diagnostics(db, file).as_ref().clone();
     // Semantic errors on a broken tree are mostly noise: fix syntax first.
@@ -47,10 +63,69 @@ pub fn check_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> Arc<Vec<Diagn
         diags.extend(typed_file(db, ws, file).diags.iter().cloned());
     }
     levels::filter_php(&mut diags, settings);
-    levels::filter_phpstan_ignores(&mut diags, file.text(db));
     diags.sort_by_key(|d| (d.range.start(), d.range.end()));
     diags.dedup();
-    Arc::new(diags)
+    // in PHPStan's order, so that a comment doesn't take away from a `count`
+    levels::apply_phpstan_ignores(
+        &mut diags,
+        &stir_db::parse(db, file).syntax(),
+        file.text(db),
+        file.path(db),
+    );
+    let path = file.path(db);
+    levels::apply_ignore_rules(&mut diags, path, &settings.ignore_errors);
+    let baseline_hits = levels::apply_ignore_rules(&mut diags, path, &settings.baseline);
+    diags.sort_by_key(|d| (d.range.start(), d.range.end()));
+    FileCheck {
+        diags: Arc::new(diags),
+        baseline_hits,
+    }
+}
+
+/// An entry of the baseline that hides fewer diagnostics than it says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnmatchedRule {
+    pub rule: IgnoreRule,
+    /// How many it did hide.
+    pub hidden: u32,
+}
+
+/// The entries of the baseline with less to hide than they say in `files`, the files that were
+/// checked: PHPStan's `reportUnmatched`. Only for the baseline, not `ignoreErrors`: PHPStan's
+/// configuration is written for what PHPStan reports, which is not all this checker's. A file
+/// with syntax errors says nothing, because it only has those until they're fixed; nor does
+/// a project whose packages aren't installed.
+pub fn unmatched_baseline(db: &dyn Db, ws: Workspace, files: &[SourceFile]) -> Vec<UnmatchedRule> {
+    let settings = ws.settings(db);
+    let rules = settings.baseline.rules();
+    if rules.is_empty() || settings.pending_install.is_some() {
+        return Vec::new();
+    }
+    let mut hidden = vec![0u32; rules.len()];
+    let mut unknown = vec![false; rules.len()];
+    for &file in files {
+        for &(rule, hits) in &checked_file(db, ws, file).baseline_hits {
+            hidden[rule as usize] += hits;
+        }
+        if !stir_db::syntax_diagnostics(db, file).is_empty() {
+            let path = file.path(db);
+            for (i, _) in settings.baseline.for_file(path, &levels::path_matches) {
+                unknown[i as usize] = true;
+            }
+        }
+    }
+    rules
+        .iter()
+        .enumerate()
+        .filter(|(i, r)| {
+            let enough = r.count.map_or(hidden[*i] > 0, |n| hidden[*i] >= n);
+            r.report_unmatched && !enough && !unknown[*i]
+        })
+        .map(|(i, r)| UnmatchedRule {
+            rule: r.clone(),
+            hidden: hidden[i],
+        })
+        .collect()
 }
 
 /// How many errors about unknown names [`check_file`] leaves out of `file`, because Composer's

@@ -377,7 +377,7 @@ fn errors() {
     let f = write(
         &dir,
         "ign.neon",
-        "parameters:\n  ignoreErrors:\n    - {path: x.php}\n",
+        "parameters:\n  ignoreErrors:\n    - {count: 1}\n",
     );
     let e = PhpstanConfig::load_with(&f, &opts()).unwrap_err();
     assert!(
@@ -415,4 +415,24 @@ fn parameter_references() {
     assert_eq!(p("derived"), r#""/srv/app""#);
     assert_eq!(p("copy"), r#"["a", "b"]"#);
     assert_eq!(p("unknown"), r#""%nope%""#);
+}
+
+#[test]
+fn an_ignore_entry_can_be_only_a_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = root(&tmp);
+    let file = write(
+        &dir,
+        "phpstan.neon",
+        "parameters:\n    ignoreErrors:\n        -\n            path: src/a.php\n            count: 2\n",
+    );
+    let cfg = PhpstanConfig::load_with(&file, &opts()).unwrap();
+    assert_eq!(cfg.ignore_errors[0].paths, [dir.join("src/a.php")]);
+    assert_eq!(cfg.ignore_errors[0].count, Some(2));
+    let file = write(
+        &dir,
+        "phpstan.neon",
+        "parameters:\n    ignoreErrors:\n        -\n            count: 2\n",
+    );
+    assert!(PhpstanConfig::load_with(&file, &opts()).is_err());
 }

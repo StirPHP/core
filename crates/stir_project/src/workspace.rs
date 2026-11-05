@@ -14,7 +14,8 @@ use anyhow::Context as _;
 use futures::{StreamExt as _, TryStreamExt as _};
 use stir_composer::{Exclusions, InstallState};
 use stir_db::{
-    FileOrigin, IgnoreRule, PhpVersion, PhpVersions, RootDatabase, Settings, SourceFile, Workspace,
+    FileOrigin, IgnoreRule, IgnoreRules, PhpVersion, PhpVersions, RootDatabase, Settings,
+    SourceFile, Workspace,
 };
 
 /// Maximum number of files read concurrently.
@@ -144,7 +145,8 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
             files.push(SourceFile::new(&db, path, text, FileOrigin::Vendor));
         }
     }
-    let mut settings = settings_from(config, composer.as_ref());
+    let (mut settings, ignore_notice) = settings_from(&project.root, config, composer.as_ref());
+    notices.extend(ignore_notice);
     if let Some(level) = options.level {
         settings.php_level = level;
     }
@@ -253,7 +255,7 @@ pub fn builtin_files(db: &RootDatabase) -> Vec<SourceFile> {
 pub async fn load_settings(project: &Project) -> anyhow::Result<Settings> {
     let composer = crate::load_composer(project).await.ok().flatten();
     let config = load_phpstan_config(project, composer.as_ref()).await?;
-    Ok(settings_from(config, composer.as_ref()))
+    Ok(settings_from(&project.root, config, composer.as_ref()).0)
 }
 
 async fn load_phpstan_config(
@@ -284,13 +286,78 @@ async fn load_phpstan_config(
     })
     .await?
     .context("failed to load the PHPStan configuration")?;
-    for skipped in &config.skipped_includes {
+    for skipped in config.skipped_includes.iter().filter(|p| !is_php(p)) {
         tracing::warn!(
-            "skipping PHPStan include {}: not installed, or a PHP file, which is never run",
+            "skipping PHPStan include {}: not installed",
             skipped.display()
         );
     }
     Ok(Some(config))
+}
+
+/// The rules in `ignoreErrors` entries, which never match on messages. An entry with a message
+/// applies by its identifier and path alone, if it has both; otherwise it can't apply, and it's
+/// counted in what's returned.
+pub fn ignore_rules(entries: &[stir_neon::phpstan::IgnoreError]) -> (Vec<IgnoreRule>, usize) {
+    let mut rules = Vec::new();
+    let mut skipped = 0;
+    for e in entries {
+        let has_message = !e.messages.is_empty();
+        if has_message && (e.identifiers.is_empty() || e.paths.is_empty()) {
+            skipped += 1;
+            continue;
+        }
+        // PHPStan makes an entry of each message and each identifier, each with the count
+        let count = e
+            .count
+            .map(|n| n.saturating_mul(e.messages.len().max(1) as u32));
+        let rule = |identifiers: Vec<String>| IgnoreRule {
+            identifiers,
+            paths: e.paths.clone(),
+            count,
+            report_unmatched: e.report_unmatched.unwrap_or(true),
+        };
+        if e.identifiers.is_empty() {
+            rules.push(rule(Vec::new()));
+        }
+        rules.extend(e.identifiers.iter().map(|i| rule(vec![i.clone()])));
+    }
+    (rules, skipped)
+}
+
+fn is_php(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "php")
+}
+
+fn display(path: &Path, root: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+/// The one notice about what can't be applied of `ignoreErrors` and baselines.
+fn ignore_notice(skipped: usize, php: &[String]) -> Option<String> {
+    let entries = (skipped > 0).then(|| {
+        let (entry, them) = if skipped == 1 {
+            ("entry", "it matches")
+        } else {
+            ("entries", "they match")
+        };
+        format!(
+            "Skipped {skipped} `ignoreErrors` {entry}: {them} on a message without both an identifier and a path, and messages are never matched."
+        )
+    });
+    let php = (!php.is_empty()).then(|| {
+        format!(
+            "Skipped PHP configs and baselines, because reading them would mean running them: {}.",
+            php.join(", ")
+        )
+    });
+    match (entries, php) {
+        (Some(a), Some(b)) => Some(format!("{a} {b}")),
+        (a, b) => a.or(b),
+    }
 }
 
 /// The files PHPStan reads for their symbols (`bootstrapFiles`, `scanFiles` and
@@ -349,9 +416,10 @@ fn php_versions(
 }
 
 fn settings_from(
+    root: &Path,
     config: Option<stir_neon::phpstan::PhpstanConfig>,
     composer: Option<&Composer>,
-) -> Settings {
+) -> (Settings, Option<String>) {
     let mut settings = Settings {
         php_version: php_versions(config.as_ref(), composer),
         ..Settings::default()
@@ -363,7 +431,7 @@ fn settings_from(
         }
     }
     let Some(config) = config else {
-        return settings;
+        return (settings, None);
     };
     settings.php_paths = config.paths.clone();
     settings.php_excludes = config
@@ -379,25 +447,15 @@ fn settings_from(
             stir_neon::phpstan::Level::Max => stir_db::MAX_PHP_LEVEL,
         };
     }
-    settings.ignore_errors = config
-        .ignore_errors
-        .into_iter()
-        .map(|e| {
-            let mut rule = IgnoreRule {
-                identifiers: e.identifiers,
-                paths: e.paths,
-                ..IgnoreRule::default()
-            };
-            for m in e.messages {
-                match m {
-                    stir_neon::phpstan::IgnoreMessage::Regex(r) => rule.patterns.push(r),
-                    stir_neon::phpstan::IgnoreMessage::Raw(r) => rule.raw_messages.push(r),
-                }
-            }
-            rule
-        })
+    let (rules, skipped) = ignore_rules(&config.ignore_errors);
+    settings.ignore_errors = IgnoreRules::new(rules);
+    let php: Vec<String> = config
+        .skipped_includes
+        .iter()
+        .filter(|p| is_php(p))
+        .map(|p| display(p, root))
         .collect();
-    settings
+    (settings, ignore_notice(skipped, &php))
 }
 
 /// Collects every file reachable from the autoload rules, canonicalised and deduplicated,
@@ -697,15 +755,16 @@ mod tests {
         write(&root.join("sphp.toml"), "srcDir = \"src\"\n");
         write(
             &root.join("phpstan.neon.dist"),
-            "parameters:\n    level: 5\n    ignoreErrors:\n        - '#^unknown function#'\n        -\n            identifier: SPHP0007\n            path: src/legacy.php\n",
+            "parameters:\n    level: 5\n    ignoreErrors:\n        - '#^unknown function#'\n        -\n            identifier: function.notFound\n            path: src/legacy.php\n            count: 3\n",
         );
         let project = Project::load(root).await.unwrap();
         let settings = load_settings(&project).await.unwrap();
         assert_eq!(settings.php_level, 5);
-        assert_eq!(settings.ignore_errors.len(), 2);
-        assert_eq!(settings.ignore_errors[0].patterns, ["#^unknown function#"]);
-        assert_eq!(settings.ignore_errors[1].identifiers, ["SPHP0007"]);
-        assert!(settings.ignore_errors[1].paths[0].ends_with("src/legacy.php"));
+        let rules = settings.ignore_errors.rules();
+        assert_eq!(rules.len(), 1, "a message alone can't be matched");
+        assert_eq!(rules[0].identifiers, ["function.notFound"]);
+        assert!(rules[0].paths[0].ends_with("src/legacy.php"));
+        assert_eq!(rules[0].count, Some(3));
 
         write(
             &root.join("sphp.toml"),

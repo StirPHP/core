@@ -95,8 +95,12 @@ fn print_notices(loaded: &Loaded, filters: &[PathBuf]) {
         .filter(|f| filters.is_empty() || filters.iter().any(|p| f.path(&loaded.db).starts_with(p)))
         .map(|&f| stir_checker::held_back_count(&loaded.db, loaded.workspace, f))
         .sum();
+    let install = loaded
+        .composer
+        .as_ref()
+        .and_then(stir_project::Composer::install_notice);
     for notice in &loaded.notices {
-        if held_back > 0 {
+        if held_back > 0 && install.as_ref() == Some(notice) {
             eprintln!("notice: {notice} Held back so far: {held_back}.");
         } else {
             eprintln!("notice: {notice}");

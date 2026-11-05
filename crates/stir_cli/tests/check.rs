@@ -232,3 +232,98 @@ fn newer_syntax_than_composer_declares() {
     );
     sphp().current_dir(root).arg("check").assert().success();
 }
+
+/// A project with errors: two of one identifier in one file, one in another.
+fn project_with_errors() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    write(
+        &tmp.path().join("src/a.php"),
+        "<?php\nfunction one(): int { return 'a'; }\nfunction two(): int { return 'b'; }\necho missing_one();\n",
+    );
+    write(
+        &tmp.path().join("src/b.php"),
+        "<?php\necho missing_two();\n",
+    );
+    tmp
+}
+
+#[test]
+fn phpstans_ignore_errors_by_identifier_path_and_count() {
+    let tmp = project_with_errors();
+    let root = tmp.path();
+    write(
+        &root.join("phpstan.neon"),
+        "parameters:
+    ignoreErrors:
+        -
+            # a message on top of both: those two, however it's worded
+            message: '#^Function one\\(\\) should return#'
+            identifier: return.type
+            path: src/a.php
+            count: 1
+        -
+            identifier: function.notFound
+        - '#a message alone#'
+        -
+            message: '#a message and an identifier, no path#'
+            identifier: return.type
+",
+    );
+    sphp()
+        .current_dir(root)
+        .arg("check")
+        .assert()
+        .code(1)
+        .stdout(contains("1 error, 0 warnings"))
+        .stdout(contains("return.type"))
+        .stderr(contains("Skipped 2 `ignoreErrors` entries"));
+    // what's left of PHPStan's matching nothing is never mentioned
+    write(
+        &root.join("phpstan.neon"),
+        "parameters:\n    ignoreErrors:\n        -\n            identifier: nothing.reportsThis\n",
+    );
+    sphp()
+        .current_dir(root)
+        .arg("check")
+        .assert()
+        .code(1)
+        .stderr(contains("nothing.reportsThis").not());
+}
+
+#[test]
+fn a_php_baseline_is_part_of_the_notice() {
+    let tmp = project_with_errors();
+    let root = tmp.path();
+    write(&root.join("base.php"), "<?php return [];\n");
+    write(
+        &root.join("phpstan.neon"),
+        "includes:\n    - base.php\nparameters:\n    level: 5\n",
+    );
+    sphp()
+        .current_dir(root)
+        .arg("check")
+        .assert()
+        .code(1)
+        .stderr(contains("base.php"));
+}
+
+#[test]
+fn nothing_hides_a_syntax_error() {
+    let tmp = project_with_errors();
+    let root = tmp.path();
+    write(
+        &root.join("src/bad.php"),
+        "<?php\n$x = ; // @phpstan-ignore-line\n",
+    );
+    write(
+        &root.join("phpstan.neon"),
+        "parameters:\n    ignoreErrors:\n        -\n            path: src\n",
+    );
+    sphp()
+        .current_dir(root)
+        .arg("check")
+        .assert()
+        .code(1)
+        .stdout(contains("phpstan.parse"))
+        .stdout(contains("1 error, 0 warnings"));
+}

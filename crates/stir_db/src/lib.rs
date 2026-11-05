@@ -3,7 +3,8 @@
 //! Higher layers (`stir_hir`, `stir_checker`) add their own tracked queries
 //! over the inputs defined here; they all run against any `dyn Db`.
 
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use stir_syntax::{Parse, TextRange};
@@ -65,7 +66,7 @@ pub const MAX_PHP_LEVEL: u8 = 10;
 /// The rule level without a configured one: argument types and everything below.
 pub const DEFAULT_PHP_LEVEL: u8 = 5;
 
-/// How a workspace is checked (from `sphp.toml` and `phpstan.neon`).
+/// How a workspace is checked (from `stirphp.neon` or `phpstan.neon`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Settings {
     /// PHPStan rule level (0..=10) files are checked at.
@@ -73,7 +74,10 @@ pub struct Settings {
     /// The PHP versions the project has to run on.
     pub php_version: PhpVersions,
     /// PHPStan `ignoreErrors`, applied to diagnostics.
-    pub ignore_errors: Vec<IgnoreRule>,
+    pub ignore_errors: IgnoreRules,
+    /// The entries of the file `parameters.stirphp.baseline` names: `ignoreErrors` too, and what
+    /// `sphp check` says about the ones that match nothing.
+    pub baseline: IgnoreRules,
     /// PHPStan `paths`: if any, only `.php` files under these are reported.
     pub php_paths: Vec<PathBuf>,
     /// PHPStan `excludePaths` (may contain fnmatch globs): `.php` files not reported.
@@ -91,7 +95,8 @@ impl Default for Settings {
         Settings {
             php_level: DEFAULT_PHP_LEVEL,
             php_version: PhpVersions::default(),
-            ignore_errors: Vec::new(),
+            ignore_errors: IgnoreRules::default(),
+            baseline: IgnoreRules::default(),
             php_paths: Vec::new(),
             php_excludes: Vec::new(),
             pending_install: None,
@@ -107,17 +112,94 @@ impl Settings {
     }
 }
 
-/// One `ignoreErrors` entry.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+/// One rule hiding diagnostics, from an `ignoreErrors` entry. It never looks at their messages,
+/// because those may be translated.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IgnoreRule {
-    /// PCRE-style patterns (`#^Foo$#i`) matched against the message.
-    pub patterns: Vec<String>,
-    /// Exact messages (`rawMessage`).
-    pub raw_messages: Vec<String>,
-    /// Diagnostic codes (`identifier`), e.g. `SPHP0005`.
+    /// Diagnostic codes (`identifier`); empty means every code.
     pub identifiers: Vec<String>,
     /// Absolute paths or fnmatch globs; empty means every file.
     pub paths: Vec<PathBuf>,
+    /// How many diagnostics it hides per file; `None` means all of them.
+    pub count: Option<u32>,
+    /// `reportUnmatched`: should a baseline say when this matches nothing?
+    pub report_unmatched: bool,
+}
+
+impl Default for IgnoreRule {
+    fn default() -> Self {
+        IgnoreRule {
+            identifiers: Vec::new(),
+            paths: Vec::new(),
+            count: None,
+            report_unmatched: true,
+        }
+    }
+}
+
+/// Rules, and which apply where: a baseline has thousands, nearly all for some other file.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub struct IgnoreRules {
+    rules: Vec<IgnoreRule>,
+    /// Rules by a path without globs, which can be looked up.
+    by_path: BTreeMap<PathBuf, Vec<u32>>,
+    /// The other rules: those for every file, and those with globs.
+    others: Vec<u32>,
+}
+
+impl IgnoreRules {
+    pub fn new(rules: Vec<IgnoreRule>) -> Self {
+        let mut by_path: BTreeMap<PathBuf, Vec<u32>> = BTreeMap::new();
+        let mut others = Vec::new();
+        for (i, rule) in rules.iter().enumerate() {
+            let i = i as u32;
+            let plain = |p: &PathBuf| !p.to_string_lossy().contains(['*', '?']);
+            if rule.paths.is_empty() || !rule.paths.iter().all(plain) {
+                others.push(i);
+            } else {
+                for path in &rule.paths {
+                    by_path.entry(path.clone()).or_default().push(i);
+                }
+            }
+        }
+        IgnoreRules {
+            rules,
+            by_path,
+            others,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
+    }
+
+    pub fn rules(&self) -> &[IgnoreRule] {
+        &self.rules
+    }
+
+    /// The rules that apply to `file` with their indexes, in order. `matches` says whether a path
+    /// of a rule covers it.
+    pub fn for_file(
+        &self,
+        file: &Path,
+        matches: &dyn Fn(&Path, &Path) -> bool,
+    ) -> impl Iterator<Item = (u32, &IgnoreRule)> {
+        // a source directory of `.` leaves `/./` in the file's path, which `components` drops
+        let file: PathBuf = file.components().collect();
+        let mut found: Vec<u32> = file
+            .ancestors()
+            .filter_map(|dir| self.by_path.get(dir))
+            .flatten()
+            .copied()
+            .collect();
+        found.extend(self.others.iter().copied().filter(|&i| {
+            let paths = &self.rules[i as usize].paths;
+            paths.is_empty() || paths.iter().any(|p| matches(p, &file))
+        }));
+        found.sort_unstable();
+        found.dedup();
+        found.into_iter().map(|i| (i, &self.rules[i as usize]))
+    }
 }
 
 /// The PHP versions the stubs are read for. Only a stub's declarations depend on them, which is
