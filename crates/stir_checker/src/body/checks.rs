@@ -82,14 +82,8 @@ fn member_truth(ty: &Ty) -> Option<bool> {
         // an empty one of these is falsy
         TyKind::Class { name, .. } if name.eq_ignore_ascii_case("SimpleXMLElement") => None,
         TyKind::Class { .. } | TyKind::SelfType { .. } | TyKind::Object => Some(true),
-        TyKind::Array {
-            non_empty: true, ..
-        }
-        | TyKind::List {
-            non_empty: true, ..
-        } => Some(true),
-        TyKind::Shape(s) if s.fields.is_empty() && s.sealed => Some(false),
-        TyKind::Shape(s) if s.fields.iter().any(|f| !f.optional) => Some(true),
+        // what's known of an array is known of its literal and what's been put in on this path: not
+        // enough to say what it'll be by the time it's looked at
         _ => None,
     }
 }

@@ -77,3 +77,24 @@ function g(): void
     }
     echo 'after';
 }
+
+class Unrelated {}
+
+/** @param DateTime $d */
+function h($d): void
+{
+    if (!$d instanceof Unrelated) {
+        echo 'a';
+    } else {
+        // narrowed to nothing, which is no reason to think the next statement won't run
+        $x = $d;
+
+        $d = 1;
+    }
+}
+
+function i(): void
+{
+    $y = throw new Exception();
+    echo 'x'; // error: deadCode.unreachable
+}

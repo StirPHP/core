@@ -6363,6 +6363,7 @@ fn head_range(node: &SyntaxNode, name: TextRange) -> TextRange {
 fn can_end_a_path(node: &SyntaxNode) -> bool {
     match node.kind() {
         PAREN_EXPR => exprs_of(node).first().is_some_and(can_end_a_path),
+        ASSIGN_EXPR => exprs_of(node).last().is_some_and(can_end_a_path),
         CALL_EXPR
         | METHOD_CALL_EXPR
         | NULLSAFE_METHOD_CALL_EXPR
@@ -6370,7 +6371,6 @@ fn can_end_a_path(node: &SyntaxNode) -> bool {
         | NEW_EXPR
         | THROW_EXPR
         | EXIT_EXPR
-        | ASSIGN_EXPR
         | MATCH_EXPR => true,
         _ => false,
     }

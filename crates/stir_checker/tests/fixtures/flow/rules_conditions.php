@@ -131,6 +131,13 @@ function conditions(A $a, ?A $b, array $list): void
     if ($list) {
         echo 'maybe';
     }
+    $built = [];
+    if ($b) {
+        $built[] = 'x';
+    }
+    if ($built) {
+        echo 'maybe, however the list came to be';
+    }
     $n = $a ? 1 : 2; // error: ternary.alwaysTrue
     $m = $b ? 1 : 2;
     $k = $a ?: 2; // error: ternary.alwaysTrue
