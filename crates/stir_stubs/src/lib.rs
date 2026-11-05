@@ -14,7 +14,7 @@
 //! directory (so the extension list could not be a single `const`), embedding
 //! the whole submodule instead would pull in hundreds of irrelevant
 //! extensions plus tests, and the generated table is a plain `&'static [_]`
-//! with no runtime work or dependencies. The embedded text is roughly 3.3 MB.
+//! with no runtime work or dependencies. The embedded text is roughly 10 MB.
 //!
 //! # Interpreting phpstorm-stubs attributes
 //!
@@ -63,6 +63,10 @@
 mod extensions;
 
 pub use extensions::EXTENSIONS;
+
+/// The functions the `phpstan/phpstan` package declares inside its PHAR, where no source
+/// scan finds them: for projects that have that package installed.
+pub const PHPSTAN_HELPERS: &str = include_str!("phpstan_helpers.php");
 
 /// One embedded stub file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -85,6 +85,15 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         .count();
     files.extend(builtins);
 
+    if project.root.join("vendor/phpstan/phpstan").is_dir() {
+        files.push(SourceFile::new(
+            &db,
+            PathBuf::from("stubs://phpstan/helpers.php"),
+            stir_stubs::PHPSTAN_HELPERS.to_owned(),
+            FileOrigin::Stub,
+        ));
+    }
+
     let vendor_count = vendor_texts.len();
     for (path, text) in vendor_texts {
         files.push(SourceFile::new(&db, path, text, FileOrigin::Vendor));
@@ -455,6 +464,32 @@ mod tests {
         let project = Project::load(root).await.unwrap();
         let settings = load_settings(&project).await.unwrap();
         assert_eq!(settings.php_level, stir_db::MAX_PHP_LEVEL);
+    }
+
+    #[tokio::test]
+    async fn knows_phpstans_helpers_only_with_phpstan_installed() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        write(&root.join("sphp.toml"), "srcDir = \"src\"\n");
+        write(&root.join("src/a.php"), "<?php\n");
+        let has_helpers = |loaded: &Loaded| {
+            loaded
+                .workspace
+                .files(&loaded.db)
+                .iter()
+                .any(|f| f.path(&loaded.db).ends_with("phpstan/helpers.php"))
+        };
+        let project = Project::load(root).await.unwrap();
+        let loaded = load_workspace(&project, LoadOptions::default())
+            .await
+            .unwrap();
+        assert!(!has_helpers(&loaded));
+
+        std::fs::create_dir_all(root.join("vendor/phpstan/phpstan")).unwrap();
+        let loaded = load_workspace(&project, LoadOptions::default())
+            .await
+            .unwrap();
+        assert!(has_helpers(&loaded));
     }
 
     #[tokio::test]
