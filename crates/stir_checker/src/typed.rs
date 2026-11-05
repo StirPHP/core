@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
 use stir_db::{Db, Diagnostic, SourceFile, Workspace};
 use stir_syntax::TextRange;
