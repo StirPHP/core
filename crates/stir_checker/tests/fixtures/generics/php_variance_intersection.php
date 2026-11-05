@@ -1,5 +1,5 @@
 <?php declare(strict_types=1);
-// An intersection type in a variance-annotated class doesn't overflow the stack.
+// Variance is checked through intersection types.
 
 interface Tagged {}
 
@@ -14,7 +14,6 @@ final class Source
         throw new LogicException();
     }
 
-    // KNOWN GAP: `T` is in an input position here, which should be SPHP0027.
     /** @param T&Tagged $v */
-    public function write(object $v): void {}
+    public function write(object $v): void {} // error: SPHP0027
 }
