@@ -257,6 +257,10 @@ pub struct MemberInfo {
 
 /// Every member of `ty` (a class or record type), nearest declaration first.
 pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
+    let ty = match ty.kind() {
+        TyKind::SelfType { class, .. } => class,
+        _ => ty,
+    };
     let mut out: Vec<MemberInfo> = Vec::new();
     if let TyKind::Record(r) = ty.kind() {
         for f in &r.fields {
