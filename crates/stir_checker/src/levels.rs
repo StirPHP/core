@@ -1,5 +1,5 @@
 //! PHPStan-style rule levels for diagnostics in `.php` files, plus `@phpstan-ignore` comments,
-//! `ignoreErrors`, baselines and the per-file `// @sphp-nocheck` directive.
+//! `ignoreErrors`, baselines and the per-file `// @stirphp-nocheck` directive.
 //!
 //! | level | what is reported |
 //! |-------|------------------|
@@ -68,7 +68,7 @@ pub fn min_level(d: &Diagnostic) -> u8 {
     d.php_level.unwrap_or_else(|| level_of(d.code))
 }
 
-/// A leading `// @sphp-nocheck` comment opts a file out of checking: only the
+/// A leading `// @stirphp-nocheck` comment opts a file out of checking: only the
 /// comments before the first statement count.
 pub fn is_nocheck(text: &str) -> bool {
     let mut in_block = false;
@@ -98,7 +98,7 @@ pub fn is_nocheck(text: &str) -> bool {
         let Some(c) = comment else {
             return false;
         };
-        if c.contains("@sphp-nocheck") {
+        if c.contains("@stirphp-nocheck") {
             return true;
         }
     }
@@ -557,9 +557,11 @@ mod tests {
 
     #[test]
     fn nocheck_directive() {
-        assert!(is_nocheck("<?php // @sphp-nocheck\n"));
-        assert!(is_nocheck("<?php\n/**\n * header\n * @sphp-nocheck\n */\n"));
-        assert!(!is_nocheck("<?php\nfoo(); // @sphp-nocheck\n"));
+        assert!(is_nocheck("<?php // @stirphp-nocheck\n"));
+        assert!(is_nocheck(
+            "<?php\n/**\n * header\n * @stirphp-nocheck\n */\n"
+        ));
+        assert!(!is_nocheck("<?php\nfoo(); // @stirphp-nocheck\n"));
         assert!(!is_nocheck("<?php\n\nnamespace A;\n"));
     }
 

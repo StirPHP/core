@@ -139,7 +139,7 @@ fn stub_dir() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
         .unwrap_or_else(std::env::temp_dir);
-    base.join("sphp").join(env!("CARGO_PKG_VERSION"))
+    base.join("stirphp").join(env!("CARGO_PKG_VERSION"))
 }
 
 /// A URI for `file`: its path, or (for builtins) a copy in the cache directory.
@@ -191,7 +191,7 @@ fn lsp_diagnostic(
             Severity::Hint => DiagnosticSeverity::HINT,
         }),
         code: Some(NumberOrString::String(d.code.to_owned())),
-        source: Some("sphp".into()),
+        source: Some("stirphp".into()),
         message,
         related_information: related,
         ..Default::default()
@@ -517,8 +517,8 @@ fn completion_kind(kind: complete::ItemKind) -> CompletionItemKind {
     }
 }
 
-/// The rename edit for one occurrence: keeps the occurrence's `$` (mutable
-/// bindings and PHP properties are written with it, others without).
+/// The rename edit for one occurrence: keeps the occurrence's `$` (variables and
+/// static properties are written with it, others without).
 fn renamed(old: &str, new: &str) -> String {
     let bare = new.trim_start_matches('$');
     if old.starts_with('$') {
@@ -580,7 +580,7 @@ impl LanguageServer for Server {
         Ok(InitializeResult {
             offset_encoding: None,
             server_info: Some(ServerInfo {
-                name: "sphp".into(),
+                name: "stirphp".into(),
                 version: Some(env!("CARGO_PKG_VERSION").into()),
             }),
             capabilities: ServerCapabilities {
@@ -653,7 +653,7 @@ impl LanguageServer for Server {
             .collect();
             let options = DidChangeWatchedFilesRegistrationOptions { watchers };
             let registration = Registration {
-                id: "sphp-watch".into(),
+                id: "stirphp-watch".into(),
                 method: "workspace/didChangeWatchedFiles".into(),
                 register_options: serde_json::to_value(options).ok(),
             };

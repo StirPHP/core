@@ -14,7 +14,7 @@ if [ "${#projects[@]}" -eq 0 ]; then
 fi
 
 (cd "$root" && cargo build -q --release -p stir_cli)
-bin="$root/target/release/sphp"
+bin="$root/target/release/stirphp"
 out="$root/.corpus-results/$label"
 mkdir -p "$out"
 

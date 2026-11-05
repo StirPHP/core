@@ -6,8 +6,8 @@ use predicates::prelude::PredicateBooleanExt as _;
 use predicates::str::contains;
 use tempfile::TempDir;
 
-fn sphp() -> Command {
-    let mut cmd = Command::cargo_bin("sphp").unwrap();
+fn stirphp() -> Command {
+    let mut cmd = Command::cargo_bin("stirphp").unwrap();
     cmd.env("NO_COLOR", "1");
     cmd
 }
@@ -27,7 +27,7 @@ fn project() -> TempDir {
 #[test]
 fn a_project_needs_no_config() {
     let tmp = project();
-    sphp()
+    stirphp()
         .current_dir(tmp.path())
         .arg("check")
         .assert()
@@ -39,7 +39,7 @@ fn a_project_needs_no_config() {
 fn syntax_error_fails() {
     let tmp = project();
     write(&tmp.path().join("src/bad.php"), "<?php\n$x = ;\n");
-    sphp()
+    stirphp()
         .current_dir(tmp.path())
         .arg("check")
         .assert()
@@ -49,7 +49,7 @@ fn syntax_error_fails() {
         .stdout(contains("1 error, 0 warnings in 1 file"));
 
     // Restricting to another path hides it.
-    sphp()
+    stirphp()
         .current_dir(tmp.path())
         .args(["check", "src/main.php"])
         .assert()
@@ -62,9 +62,9 @@ fn nocheck_opts_a_file_out() {
     let tmp = project();
     write(
         &tmp.path().join("src/skipped.php"),
-        "<?php\n// @sphp-nocheck\n$x = ;\n",
+        "<?php\n// @stirphp-nocheck\n$x = ;\n",
     );
-    sphp()
+    stirphp()
         .current_dir(tmp.path())
         .arg("check")
         .assert()
@@ -79,18 +79,18 @@ fn level_flag_overrides_the_default() {
         &tmp.path().join("src/typed.php"),
         "<?php\nfunction f(int $n): string { return $n; }\n",
     );
-    sphp()
+    stirphp()
         .current_dir(tmp.path())
         .args(["check", "--level", "0"])
         .assert()
         .success();
-    sphp()
+    stirphp()
         .current_dir(tmp.path())
         .args(["check", "--level", "3"])
         .assert()
         .code(1)
         .stdout(contains("return.type"));
-    sphp()
+    stirphp()
         .current_dir(tmp.path())
         .args(["check", "--level", "11"])
         .assert()
@@ -101,7 +101,7 @@ fn level_flag_overrides_the_default() {
 fn json_output() {
     let tmp = project();
     write(&tmp.path().join("src/bad.php"), "<?php\n$x = 1;\n$y = (\n");
-    let output = sphp()
+    let output = stirphp()
         .current_dir(tmp.path())
         .args(["check", "--format", "json", "--no-vendor"])
         .output()
@@ -125,7 +125,7 @@ fn json_output() {
 fn json_position_is_one_based() {
     let tmp = project();
     write(&tmp.path().join("src/bad.php"), "<?php\n$ç = ;\n");
-    let output = sphp()
+    let output = stirphp()
         .current_dir(tmp.path())
         .args(["check", "--format", "json"])
         .output()
@@ -142,7 +142,7 @@ fn max_errors_truncates() {
     let tmp = project();
     write(&tmp.path().join("src/a.php"), "<?php\n$x = ;\n");
     write(&tmp.path().join("src/b.php"), "<?php\n$x = ;\n");
-    sphp()
+    stirphp()
         .current_dir(tmp.path())
         .args(["check", "--max-errors", "1"])
         .assert()
@@ -168,7 +168,7 @@ fn missing_composer_packages_are_one_notice_not_a_flood() {
          $this->log->pushHandler(new StreamHandler('php://stdout'));\n        $this->anything();\n\
          \\Monolog\\Registry::getInstance('x');\n        helper_from_a_package();\n    }\n}\n",
     );
-    sphp()
+    stirphp()
         .current_dir(root)
         .args(["check", "--no-vendor"])
         .assert()
@@ -182,7 +182,7 @@ fn missing_composer_packages_are_one_notice_not_a_flood() {
         &root.join("src/Own.php"),
         "<?php\nnamespace App;\nnew Missing();\n",
     );
-    sphp()
+    stirphp()
         .current_dir(root)
         .arg("check")
         .assert()
@@ -197,7 +197,7 @@ fn notices_stay_out_of_the_json() {
     let root = tmp.path();
     write(&root.join("composer.json"), r#"{"require": {"a/b": "*"}}"#);
     write(&root.join("a.php"), "<?php\nnew \\A\\B();\n");
-    let output = sphp()
+    let output = stirphp()
         .current_dir(root)
         .args(["check", "--format", "json"])
         .output()
@@ -217,7 +217,7 @@ fn newer_syntax_than_composer_declares() {
         r#"{"require": {"php": "^8.0"}}"#,
     );
     write(&root.join("a.php"), "<?php\nenum E {}\n");
-    sphp()
+    stirphp()
         .current_dir(root)
         .arg("check")
         .assert()
@@ -230,7 +230,7 @@ fn newer_syntax_than_composer_declares() {
         &root.join("composer.json"),
         r#"{"require": {"php": "^8.1"}}"#,
     );
-    sphp().current_dir(root).arg("check").assert().success();
+    stirphp().current_dir(root).arg("check").assert().success();
 }
 
 /// A project with errors: two of one identifier in one file, one in another.
@@ -267,14 +267,14 @@ const BASELINE: &str = "parameters:
 fn a_baseline_hides_what_was_there_and_only_that() {
     let tmp = project_with_errors();
     let root = tmp.path();
-    sphp()
+    stirphp()
         .current_dir(root)
         .arg("check")
         .assert()
         .code(1)
         .stdout(contains("4 errors"));
 
-    sphp()
+    stirphp()
         .current_dir(root)
         .args(["check", "--generate-baseline"])
         .assert()
@@ -290,7 +290,7 @@ fn a_baseline_hides_what_was_there_and_only_that() {
     );
 
     // nothing's reported, or said about the baseline
-    sphp()
+    stirphp()
         .current_dir(root)
         .arg("check")
         .assert()
@@ -300,7 +300,7 @@ fn a_baseline_hides_what_was_there_and_only_that() {
 
     // generating again changes nothing, whatever the baseline already hides
     let config = fs::read_to_string(root.join("stirphp.neon")).unwrap();
-    sphp()
+    stirphp()
         .current_dir(root)
         .args(["check", "--generate-baseline"])
         .assert()
@@ -316,7 +316,7 @@ fn a_baseline_hides_what_was_there_and_only_that() {
         &root.join("src/a.php"),
         "<?php\nfunction one(): int { return 'a'; }\nfunction two(): int { return 'b'; }\nfunction three(): int { return 'c'; }\necho missing_one();\n",
     );
-    sphp()
+    stirphp()
         .current_dir(root)
         .arg("check")
         .assert()
@@ -330,7 +330,7 @@ fn a_baseline_hides_what_was_there_and_only_that() {
         "<?php\nfunction one(): int { return 'a'; }\necho missing_one();\n",
     );
     fs::remove_file(root.join("src/b.php")).unwrap();
-    sphp()
+    stirphp()
         .current_dir(root)
         .arg("check")
         .assert()
@@ -346,7 +346,7 @@ fn a_baseline_hides_what_was_there_and_only_that() {
 fn a_baseline_at_a_path_of_its_own() {
     let tmp = project_with_errors();
     let root = tmp.path();
-    sphp()
+    stirphp()
         .current_dir(root)
         .args(["check", "--generate-baseline", "conf/base.neon"])
         .assert()
@@ -354,13 +354,13 @@ fn a_baseline_at_a_path_of_its_own() {
     let text = fs::read_to_string(root.join("conf/base.neon")).unwrap();
     assert!(text.contains("path: ../src/a.php"), "{text}");
     // the configuration's in the project folder, and so is this
-    sphp().current_dir(root).arg("check").assert().success();
+    stirphp().current_dir(root).arg("check").assert().success();
 
     // outside what the configuration's about, it's not touched
     let elsewhere = TempDir::new().unwrap();
     let tmp = project_with_errors();
     let target = elsewhere.path().join("b.neon");
-    sphp()
+    stirphp()
         .current_dir(tmp.path())
         .args(["check", "--generate-baseline", target.to_str().unwrap()])
         .assert()
@@ -377,7 +377,7 @@ fn a_baseline_through_a_config_elsewhere() {
     let config = conf.path().join("my.neon");
     write(&config, "parameters:\n    level: 5\n");
     let args = ["check", "-c", config.to_str().unwrap()];
-    sphp()
+    stirphp()
         .current_dir(tmp.path())
         .args(args)
         .arg("--generate-baseline")
@@ -385,7 +385,11 @@ fn a_baseline_through_a_config_elsewhere() {
         .success();
     assert!(conf.path().join("stirphp-baseline.neon").is_file());
     assert!(!tmp.path().join("stirphp-baseline.neon").exists());
-    sphp().current_dir(tmp.path()).args(args).assert().success();
+    stirphp()
+        .current_dir(tmp.path())
+        .args(args)
+        .assert()
+        .success();
 }
 
 #[test]
@@ -393,7 +397,7 @@ fn syntax_errors_stay_out_of_baselines() {
     let tmp = project_with_errors();
     let root = tmp.path();
     write(&root.join("src/bad.php"), "<?php\n$x = ;\n");
-    sphp()
+    stirphp()
         .current_dir(root)
         .args(["check", "--generate-baseline"])
         .assert()
@@ -402,7 +406,7 @@ fn syntax_errors_stay_out_of_baselines() {
         .stdout(contains("1 error can't go in a baseline"));
     let text = fs::read_to_string(root.join("stirphp-baseline.neon")).unwrap();
     assert!(!text.contains("phpstan.parse"), "{text}");
-    sphp()
+    stirphp()
         .current_dir(root)
         .arg("check")
         .assert()
@@ -419,7 +423,7 @@ fn syntax_errors_stay_out_of_baselines() {
         &root.join("phpstan.neon"),
         "parameters:\n    ignoreErrors:\n        -\n            path: src\n",
     );
-    sphp()
+    stirphp()
         .current_dir(root)
         .arg("check")
         .assert()
@@ -450,7 +454,7 @@ fn phpstans_ignore_errors_by_identifier_path_and_count() {
             identifier: return.type
 ",
     );
-    sphp()
+    stirphp()
         .current_dir(root)
         .arg("check")
         .assert()
@@ -463,7 +467,7 @@ fn phpstans_ignore_errors_by_identifier_path_and_count() {
         &root.join("phpstan.neon"),
         "parameters:\n    ignoreErrors:\n        -\n            identifier: nothing.reportsThis\n",
     );
-    sphp()
+    stirphp()
         .current_dir(root)
         .arg("check")
         .assert()
@@ -480,7 +484,7 @@ fn a_php_baseline_is_part_of_the_notice() {
         &root.join("phpstan.neon"),
         "includes:\n    - base.php\nparameters:\n    level: 5\n",
     );
-    sphp()
+    stirphp()
         .current_dir(root)
         .arg("check")
         .assert()
@@ -491,32 +495,32 @@ fn a_php_baseline_is_part_of_the_notice() {
 #[test]
 fn init_writes_what_check_reads() {
     let tmp = project();
-    sphp()
+    stirphp()
         .current_dir(tmp.path())
         .arg("init")
         .assert()
         .success()
         .stdout(contains("stirphp.neon"));
-    sphp()
+    stirphp()
         .current_dir(tmp.path())
         .arg("check")
         .assert()
         .success();
 
     let tmp = project();
-    sphp()
+    stirphp()
         .current_dir(tmp.path())
         .args(["init", "--phpstan"])
         .assert()
         .success()
         .stdout(contains("phpstan.neon"));
     assert!(!tmp.path().join("stirphp.neon").exists());
-    sphp()
+    stirphp()
         .current_dir(tmp.path())
         .arg("check")
         .assert()
         .success();
-    sphp()
+    stirphp()
         .current_dir(tmp.path())
         .arg("init")
         .assert()

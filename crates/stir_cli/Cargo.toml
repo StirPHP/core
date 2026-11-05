@@ -22,7 +22,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
-# musl's allocator is slow for a multi-threaded compiler: static musl builds
+# musl's allocator is slow for a multi-threaded program: static musl builds
 # use mimalloc instead
 [target.'cfg(target_env = "musl")'.dependencies]
 mimalloc = "0.1.52"
@@ -31,7 +31,7 @@ mimalloc = "0.1.52"
 workspace = true
 
 [[bin]]
-name = "sphp"
+name = "stirphp"
 path = "src/main.rs"
 
 [dev-dependencies]

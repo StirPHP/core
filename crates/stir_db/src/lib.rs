@@ -76,7 +76,7 @@ pub struct Settings {
     /// PHPStan `ignoreErrors`, applied to diagnostics.
     pub ignore_errors: IgnoreRules,
     /// The entries of the file `parameters.stirphp.baseline` names: `ignoreErrors` too, and what
-    /// `sphp check` says about the ones that match nothing.
+    /// `stirphp check` says about the ones that match nothing.
     pub baseline: IgnoreRules,
     /// PHPStan `paths`: if any, only `.php` files under these are reported.
     pub php_paths: Vec<PathBuf>,

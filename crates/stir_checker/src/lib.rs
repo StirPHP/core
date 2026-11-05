@@ -4,7 +4,7 @@
 //! file (syntax errors included).
 //!
 //! Project `.php` files are checked unless they opt out with a leading
-//! `// @sphp-nocheck` comment; their diagnostics are filtered by the PHPStan
+//! `// @stirphp-nocheck` comment; their diagnostics are filtered by the PHPStan
 //! rule level and `ignoreErrors` (see [`levels`]).
 
 #![allow(clippy::nonminimal_bool)]

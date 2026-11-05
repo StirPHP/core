@@ -7,9 +7,9 @@ use stir_project::Project;
 use stir_project::init::Outcome;
 use tracing_subscriber::EnvFilter;
 
-/// The version shown by `--version`: release builds set `SPHP_BUILD_VERSION`
+/// The version shown by `--version`: release builds set `STIRPHP_BUILD_VERSION`
 /// (e.g. `0.1.0-nightly.20261101+3f02c05` for nightlies).
-const VERSION: &str = match option_env!("SPHP_BUILD_VERSION") {
+const VERSION: &str = match option_env!("STIRPHP_BUILD_VERSION") {
     Some(v) => v,
     None => env!("CARGO_PKG_VERSION"),
 };
@@ -20,7 +20,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// StirPHP: a type checker and language server for PHP.
 #[derive(Debug, Parser)]
-#[command(name = "sphp", version = VERSION, about)]
+#[command(name = "stirphp", version = VERSION, about)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -43,7 +43,7 @@ struct InitArgs {
     phpstan: bool,
 }
 
-/// `sphp init`.
+/// `stirphp init`.
 async fn init(args: InitArgs) -> anyhow::Result<ExitCode> {
     let project = Project::load_or_default(std::env::current_dir()?).await?;
     match stir_project::init::init(&project.root, args.phpstan)? {
@@ -60,7 +60,7 @@ async fn main() -> anyhow::Result<ExitCode> {
         .with_env_filter(
             EnvFilter::builder()
                 .with_default_directive(tracing_subscriber::filter::LevelFilter::WARN.into())
-                .with_env_var("SPHP_LOG")
+                .with_env_var("STIRPHP_LOG")
                 .from_env_lossy(),
         )
         .with_writer(std::io::stderr)

@@ -90,7 +90,7 @@ pub struct StirphpParameters {
     pub exclude: Option<Vec<String>>,
     /// `composer`: the path of `composer.json`, if not in the project folder.
     pub composer: Option<PathBuf>,
-    /// `baseline`: the file `sphp check --generate-baseline` writes. PHPStan never sees it,
+    /// `baseline`: the file `stirphp check --generate-baseline` writes. PHPStan never sees it,
     /// which is why it isn't in `includes`.
     pub baseline: Option<PathBuf>,
     /// `rules`: the project's own rules, as scripts.

@@ -1,4 +1,4 @@
-//! `sphp check`: type-check the project and render diagnostics.
+//! `stirphp check`: type-check the project and render diagnostics.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{IsTerminal as _, Write as _};
@@ -163,7 +163,7 @@ fn print_unmatched_baseline(loaded: &Loaded, filters: &[PathBuf], cwd: &Path) {
     }
 }
 
-/// `sphp check --generate-baseline`: PHPStan's `generateBaseline`, by identifier and path.
+/// `stirphp check --generate-baseline`: PHPStan's `generateBaseline`, by identifier and path.
 async fn generate_baseline(
     args: &CheckArgs,
     project: &Project,
@@ -265,7 +265,7 @@ async fn generate_baseline(
     Ok(ExitCode::FAILURE)
 }
 
-/// Type-checks the project's sources, except `.php` ones with a `// @sphp-nocheck`
+/// Type-checks the project's sources, except `.php` ones with a `// @stirphp-nocheck`
 /// comment, limited to files under `filters` when non-empty. Returns the sorted diagnostics and the
 /// number of files checked.
 async fn collect_diagnostics(

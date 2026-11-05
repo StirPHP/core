@@ -1,7 +1,7 @@
 //! Building the salsa database for a project: project sources, builtin stubs and
 //! vendor PHP files reachable through Composer autoload rules. Composer itself is never run.
 //!
-//! Shared by `sphp check` and the language server.
+//! Shared by `stirphp check` and the language server.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

@@ -76,16 +76,6 @@ async fn config_errors_mention_the_file() {
 }
 
 #[tokio::test]
-async fn sphp_toml_means_nothing_now() {
-    let tmp = TempDir::new().unwrap();
-    let root = canon(&tmp);
-    write(root.join("sphp.toml"), "srcDir = [");
-    let project = Project::load_or_default(&root).await.unwrap();
-    assert_eq!(project.config, Config::default());
-    assert_eq!(project.config_file, None);
-}
-
-#[tokio::test]
 async fn load_searches_upward() {
     let tmp = TempDir::new().unwrap();
     let root = canon(&tmp);

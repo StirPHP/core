@@ -1,4 +1,4 @@
-//! Our own baseline: `sphp check --generate-baseline` writes what's reported now to a NEON file
+//! Our own baseline: `stirphp check --generate-baseline` writes what's reported now to a NEON file
 //! of `ignoreErrors` entries, by identifier, path and count, never by message.
 
 use std::collections::BTreeMap;

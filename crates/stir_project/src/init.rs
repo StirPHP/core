@@ -1,4 +1,4 @@
-//! `sphp init`: writes the configuration, or adds to the PHPStan one a project already has.
+//! `stirphp init`: writes the configuration, or adds to the PHPStan one a project already has.
 
 use std::path::{Path, PathBuf};
 
