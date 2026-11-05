@@ -1,0 +1,23 @@
+=== action: Extract method
+=== input
+<?php
+class A {
+    public function run(int $a, array $l): array {
+        ⟦$m = array_map(fn($x) => $x + $a, $l);⟧
+        return $m;
+    }
+}
+=== output
+<?php
+class A {
+    public function run(int $a, array $l): array {
+        $m = self::extracted($a, $l);
+        return $m;
+    }
+
+    private static function extracted(int $a, array $l): array
+    {
+        $m = array_map(fn($x) => $x + $a, $l);
+        return $m;
+    }
+}

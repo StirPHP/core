@@ -1,0 +1,31 @@
+=== action: Remove unused parameter `$b`
+=== file: /src/C.php
+<?php
+class C extends A {
+    public function __construct() { parent::__construct(1, 2); }
+}
+class D extends A {}
+=== output: /src/C.php
+<?php
+class C extends A {
+    public function __construct() { parent::__construct(1); }
+}
+class D extends A {}
+=== input
+<?php
+class A {
+    public function __construct(public int $a, int $b‸) {}
+    public static function make(): static { return new static(1, 2); }
+    public static function own(): self { return new self(3, 4); }
+}
+echo (new A(5, 6))->a;
+echo (new D(7, 8))->a;
+=== output
+<?php
+class A {
+    public function __construct(public int $a) {}
+    public static function make(): static { return new static(1); }
+    public static function own(): self { return new self(3); }
+}
+echo (new A(5))->a;
+echo (new D(7))->a;

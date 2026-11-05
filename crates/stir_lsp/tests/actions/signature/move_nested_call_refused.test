@@ -1,0 +1,6 @@
+=== action: Move `$a` right
+=== error: untangle
+=== input
+<?php
+function f(int $a‸, int $b): int { return $a - $b; }
+echo f(f(1, 2), 3);

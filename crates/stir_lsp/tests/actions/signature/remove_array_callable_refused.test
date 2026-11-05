@@ -1,0 +1,8 @@
+=== action: Remove unused parameter `$b`
+=== error: array
+=== input
+<?php
+class A {
+    public function ff(int $a, int $b‸): int { return $a; }
+    public function go(): mixed { return call_user_func([$this, 'ff'], 1, 2); }
+}

@@ -1,0 +1,10 @@
+=== action: Move `$a` right
+=== php: 8.0
+=== input
+<?php
+function f(int $a‸, string $b): string { return $b . $a; }
+echo f(b: 'x', a: 1);
+=== output
+<?php
+function f(string $b, int $a): string { return $b . $a; }
+echo f(b: 'x', a: 1);

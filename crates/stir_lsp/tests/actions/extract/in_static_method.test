@@ -1,0 +1,22 @@
+=== action: Extract method
+=== input
+<?php
+class A {
+    public static function run(int $x): void {
+        ⟦static::go($x);⟧
+    }
+    public static function go(int $x): void {}
+}
+=== output
+<?php
+class A {
+    public static function run(int $x): void {
+        self::extracted($x);
+    }
+
+    private static function extracted(int $x): void
+    {
+        static::go($x);
+    }
+    public static function go(int $x): void {}
+}

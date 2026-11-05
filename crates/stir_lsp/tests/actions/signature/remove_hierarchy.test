@@ -1,0 +1,35 @@
+=== action: Remove unused parameter `$b`
+=== file: /src/I.php
+<?php
+interface I { public function f(int $a, int $b): int; }
+class C implements I {
+    public function f(int $a, int $b): int { return $a; }
+}
+class D extends C {
+    public function f(int $a, int $b): int { return parent::f($a, 2); }
+}
+function use_it(I $i, D $d): int { return $i->f(1, 2) + $d->f(3, 4); }
+=== output: /src/I.php
+<?php
+interface I { public function f(int $a): int; }
+class C implements I {
+    public function f(int $a): int { return $a; }
+}
+class D extends C {
+    public function f(int $a): int { return parent::f($a); }
+}
+function use_it(I $i, D $d): int { return $i->f(1) + $d->f(3); }
+=== input
+<?php
+class E extends C {
+    public function f(int $a, int $b‸): int { return $this->g($a); }
+    private function g(int $a): int { return $a; }
+}
+echo (new E)->f(1, 2);
+=== output
+<?php
+class E extends C {
+    public function f(int $a): int { return $this->g($a); }
+    private function g(int $a): int { return $a; }
+}
+echo (new E)->f(1);

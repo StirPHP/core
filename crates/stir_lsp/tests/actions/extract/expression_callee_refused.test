@@ -1,0 +1,10 @@
+=== action: Extract method
+=== refused: this place
+=== input
+<?php
+class A {
+    public function b(): void {}
+    public function run(): void {
+        ⟦$this->b⟧();
+    }
+}

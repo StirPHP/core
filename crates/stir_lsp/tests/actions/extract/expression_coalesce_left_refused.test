@@ -1,0 +1,7 @@
+=== action: Extract function
+=== refused: `??`
+=== input
+<?php
+function f(array $a): int {
+    return ⟦$a['x']⟧ ?? 1;
+}

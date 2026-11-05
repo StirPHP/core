@@ -59,9 +59,20 @@ pub fn member_indent(cx: &Cx<'_>, body: &SyntaxNode) -> String {
 /// Where a member goes, and what to put there: `code` is written with `\n` and tabs, at the
 /// member's level, and goes after `after`, or at the start of the body with nothing before it.
 pub fn insert_member(cx: &Cx<'_>, body: &SyntaxNode, after: Option<&SyntaxNode>, code: &str) -> FileEdit {
-    let nl = cx.style.nl;
     let indent = member_indent(cx, body);
     let code = cx.style.block(code, &indent);
+    insert_written_member(cx, body, after, &code)
+}
+
+/// As [`insert_member`], for `code` that's as the file will have it.
+pub fn insert_written_member(
+    cx: &Cx<'_>,
+    body: &SyntaxNode,
+    after: Option<&SyntaxNode>,
+    code: &str,
+) -> FileEdit {
+    let nl = cx.style.nl;
+    let indent = member_indent(cx, body);
     let close = body
         .token(R_CURLY)
         .map_or_else(|| body.text_range().end(), |t| t.text_range().start());

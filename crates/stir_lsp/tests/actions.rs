@@ -14,6 +14,8 @@
 //! === output                    (or `=== no-offer`, with no text)
 //! <?php ...
 //! === output: /src/Other.php    (what's expected of another file, if it changes)
+//! === error: what it says        (instead of an output: chosen, it says this and does nothing)
+//! === refused: what it says      (instead of an output: it's shown greyed out, saying this)
 //! ```
 //!
 //! For each: the edits leave every file parsing, diagnostics they don't explain don't appear, and
@@ -41,6 +43,8 @@ struct Fixture {
     other_outputs: Vec<(String, String)>,
     no_offer: bool,
     refused: Option<String>,
+    /// It's offered, and when it's chosen says this instead of doing anything.
+    error: Option<String>,
 }
 
 fn parse_fixture(text: &str) -> Fixture {
@@ -87,6 +91,7 @@ fn parse_fixture(text: &str) -> Fixture {
             "output" => part = Part::OtherOutput(rest.to_owned()),
             "no-offer" => f.no_offer = true,
             "refused" => f.refused = Some(rest.to_owned()),
+            "error" => f.error = Some(rest.to_owned()),
             other => panic!("unknown fixture line: {other}"),
         }
     }
@@ -238,7 +243,18 @@ fn run(bench: &mut Bench, f: &Fixture) -> Result<(), String> {
         // through the protocol's way of finding it again, as an editor gets it
         let id = found.id.clone();
         drop(found);
-        actions::resolve(&cx, &id).map_err(|e| format!("couldn't be done: {e}"))?
+        match (actions::resolve(&cx, &id), &f.error) {
+            (Err(reason), Some(want)) => {
+                return if reason.contains(want.as_str()) {
+                    Ok(())
+                } else {
+                    Err(format!("refused for another reason: {reason}"))
+                };
+            }
+            (Err(reason), None) => return Err(format!("couldn't be done: {reason}")),
+            (Ok(_), Some(want)) => return Err(format!("done, not refused with: {want}")),
+            (Ok(change), None) => change,
+        }
     };
 
     let mut touched: Vec<(SourceFile, String)> = Vec::new();

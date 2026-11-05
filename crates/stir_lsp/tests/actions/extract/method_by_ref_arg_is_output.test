@@ -1,0 +1,19 @@
+=== action: Extract function
+=== input
+<?php
+function f(array $a): array {
+    ⟦sort($a);⟧
+    return $a;
+}
+=== output
+<?php
+function f(array $a): array {
+    $a = extracted($a);
+    return $a;
+}
+
+function extracted(array $a)
+{
+    sort($a);
+    return $a;
+}

@@ -1,0 +1,12 @@
+=== action: Extract function
+=== refused: not on every path
+=== input
+<?php
+function f(int $a): int {
+    try {
+        ⟦if ($a) { return 1; }⟧
+    } finally {
+        echo 'done';
+    }
+    return 2;
+}

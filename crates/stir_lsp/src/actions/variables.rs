@@ -148,7 +148,7 @@ fn extractable_place(expr: &SyntaxNode) -> Result<SyntaxNode, &'static str> {
 }
 
 /// Would giving the value of `expr` a variable change what's done with it?
-fn takes_reference(expr: &SyntaxNode) -> bool {
+pub fn takes_reference(expr: &SyntaxNode) -> bool {
     let Some(parent) = expr.parent() else {
         return false;
     };
@@ -178,7 +178,11 @@ fn takes_reference(expr: &SyntaxNode) -> bool {
         NEW_EXPR | CLASS_CONST_FETCH_EXPR | STATIC_PROPERTY_FETCH_EXPR | INSTANCEOF_EXPR => {
             expr.kind() == NAME_EXPR
         }
-        CALL_EXPR => parent.children().next().as_ref() == Some(expr),
+        // the callee, which isn't a value
+        CALL_EXPR | METHOD_CALL_EXPR | NULLSAFE_METHOD_CALL_EXPR | STATIC_CALL_EXPR => {
+            parent.children().next().as_ref() == Some(expr)
+                && !(parent.kind() == CALL_EXPR && expr.kind() != NAME_EXPR)
+        }
         RETURN_STMT => is_place && {
             parent
                 .ancestors()
@@ -190,7 +194,7 @@ fn takes_reference(expr: &SyntaxNode) -> bool {
 }
 
 /// The node that is exactly `range`, the outermost of those there are.
-fn expression_at(cx: &Cx<'_>, range: TextRange) -> Option<SyntaxNode> {
+pub fn expression_at(cx: &Cx<'_>, range: TextRange) -> Option<SyntaxNode> {
     if range.is_empty() {
         return None;
     }
@@ -346,7 +350,7 @@ struct Occurrences {
 }
 
 /// Is what's in `function` something a variable can't be followed through?
-fn dynamic_scope(function: &SyntaxNode) -> bool {
+pub fn dynamic_scope(function: &SyntaxNode) -> bool {
     function.descendants().any(|n| match n.kind() {
         VARIABLE_VARIABLE | GLOBAL_STMT | EVAL_EXPR | INCLUDE_EXPR => true,
         CALL_EXPR => n.children().next().is_some_and(|c| {
@@ -443,7 +447,7 @@ fn occurrences(cx: &Cx<'_>, function: &SyntaxNode, name: &str) -> Option<Occurre
 }
 
 /// Does what's called take this argument by value, as far as the checker can tell which it is?
-fn by_value(cx: &Cx<'_>, arg: &SyntaxNode) -> bool {
+pub fn by_value(cx: &Cx<'_>, arg: &SyntaxNode) -> bool {
     let Some(list) = arg.parent() else { return false };
     let Some(call) = list.parent() else { return false };
     let callee = match call.kind() {

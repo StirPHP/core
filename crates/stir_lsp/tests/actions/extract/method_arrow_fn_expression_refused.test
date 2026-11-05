@@ -1,0 +1,9 @@
+=== action: Extract method
+=== refused: closure
+=== input
+<?php
+class A {
+    public function run(int $a): callable {
+        return fn($b) => ⟦$a + $b⟧;
+    }
+}

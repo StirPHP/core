@@ -1,0 +1,6 @@
+=== action: Remove unused parameter `$b`
+=== error: string
+=== input
+<?php
+function ff(int $a, int $b‸): int { return $a; }
+echo call_user_func('ff', 1, 2);

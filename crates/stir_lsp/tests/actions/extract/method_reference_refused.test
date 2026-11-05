@@ -1,0 +1,8 @@
+=== action: Extract function
+=== refused: reference
+=== input
+<?php
+function f(array $a): void {
+    $r = &$a;
+    ⟦echo count($r);⟧
+}

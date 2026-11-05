@@ -1,0 +1,8 @@
+=== action: Extract function
+=== refused: by name
+=== input
+<?php
+function f(): void {
+    global $g;
+    ⟦echo $g;⟧
+}

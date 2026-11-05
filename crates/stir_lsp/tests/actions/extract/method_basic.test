@@ -1,0 +1,30 @@
+=== action: Extract method
+=== input
+<?php
+class A {
+    private int $total = 0;
+
+    public function run(int $a, string $b): int {
+        $c = $a + 1;
+        ⟦$this->total += $c;
+        echo $b;⟧
+        return $this->total;
+    }
+}
+=== output
+<?php
+class A {
+    private int $total = 0;
+
+    public function run(int $a, string $b): int {
+        $c = $a + 1;
+        $this->extracted($c, $b);
+        return $this->total;
+    }
+
+    private function extracted(int $c, string $b): void
+    {
+        $this->total += $c;
+        echo $b;
+    }
+}

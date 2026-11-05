@@ -1,0 +1,25 @@
+=== action: Extract function
+=== input
+<?php
+function f(array $a): void {
+    $n = 0;
+    foreach ($a as $x) {
+        echo $n;
+        ⟦$n = $n + $x;⟧
+    }
+}
+=== output
+<?php
+function f(array $a): void {
+    $n = 0;
+    foreach ($a as $x) {
+        echo $n;
+        $n = extracted($n, $x);
+    }
+}
+
+function extracted($n, $x): int|float
+{
+    $n = $n + $x;
+    return $n;
+}

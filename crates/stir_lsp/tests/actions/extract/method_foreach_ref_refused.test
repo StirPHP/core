@@ -1,0 +1,10 @@
+=== action: Extract function
+=== refused: references
+=== input
+<?php
+function f(array $a): array {
+    ⟦foreach ($a as &$v) {
+        $v = 1;
+    }⟧
+    return $a;
+}

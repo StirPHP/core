@@ -1,0 +1,25 @@
+=== action: Extract method
+=== file: /src/B.php
+<?php
+class B extends A { public function extracted2(): void {} }
+=== input
+<?php
+class P { protected function extracted(): void {} }
+class A extends P {
+    public function run(): void {
+        ⟦echo 1;⟧
+    }
+}
+=== output
+<?php
+class P { protected function extracted(): void {} }
+class A extends P {
+    public function run(): void {
+        self::extracted3();
+    }
+
+    private static function extracted3(): void
+    {
+        echo 1;
+    }
+}

@@ -1,0 +1,7 @@
+=== action: Move `$a` right
+=== error: swap order
+=== input
+<?php
+function g(): int { return 1; }
+function f(int $a‸, int $b): int { return $a - $b; }
+echo f(g(), g());

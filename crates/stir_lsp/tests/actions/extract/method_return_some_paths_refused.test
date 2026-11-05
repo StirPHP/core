@@ -1,0 +1,12 @@
+=== action: Extract method
+=== refused: not on every path
+=== input
+<?php
+class A {
+    public function run(int $n): int {
+        ⟦if ($n > 1) {
+            return 1;
+        }⟧
+        return 2;
+    }
+}

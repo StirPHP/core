@@ -1,0 +1,28 @@
+=== action: Extract method
+=== input
+<?php
+class A {
+    public function run(int $n): ?string {
+        echo $n;
+        ⟦if ($n > 1) {
+            return 'big';
+        }
+        return null;⟧
+    }
+}
+=== output
+<?php
+class A {
+    public function run(int $n): ?string {
+        echo $n;
+        return self::extracted($n);
+    }
+
+    private static function extracted(int $n): ?string
+    {
+        if ($n > 1) {
+            return 'big';
+        }
+        return null;
+    }
+}

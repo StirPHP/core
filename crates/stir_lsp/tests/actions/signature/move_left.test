@@ -1,0 +1,11 @@
+=== action: Move `$b` left
+=== input
+<?php
+function f(int $a, string $b‸): string { return $b . $a; }
+echo f(1, 'x');
+echo f(2, strtoupper('y'));
+=== output
+<?php
+function f(string $b, int $a): string { return $b . $a; }
+echo f('x', 1);
+echo f(strtoupper('y'), 2);

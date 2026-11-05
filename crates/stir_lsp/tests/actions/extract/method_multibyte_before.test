@@ -1,0 +1,16 @@
+=== action: Extract function
+=== input
+<?php
+function f(string $é): void {
+    echo "日本語𝄞"; ⟦echo $é;⟧
+}
+=== output
+<?php
+function f(string $é): void {
+    echo "日本語𝄞"; extracted($é);
+}
+
+function extracted(string $é): void
+{
+    echo $é;
+}

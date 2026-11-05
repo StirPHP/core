@@ -1,0 +1,7 @@
+=== action: Remove unused parameter `$a`
+=== no-offer
+=== input
+<?php
+function f(int $a‸): array {
+    return func_get_args();
+}

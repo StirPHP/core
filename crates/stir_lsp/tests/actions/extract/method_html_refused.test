@@ -1,0 +1,8 @@
+=== action: Extract function
+=== no-offer
+=== input
+<?php
+function f(): void {
+    ⟦?><b>hi</b><?php
+    echo 1;⟧
+}

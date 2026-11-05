@@ -1,0 +1,28 @@
+=== action: Remove unused parameter `$b`
+=== file: /src/other.php
+<?php
+echo f(1, 'x', true);
+=== output: /src/other.php
+<?php
+echo f(1, true);
+=== input
+<?php
+/**
+ * @param int $a
+ * @param string $b
+ * @param bool $c
+ */
+function f(int $a, string $b‸, bool $c): int {
+    return $c ? $a : 0;
+}
+echo f(1, 'y', false);
+=== output
+<?php
+/**
+ * @param int $a
+ * @param bool $c
+ */
+function f(int $a, bool $c): int {
+    return $c ? $a : 0;
+}
+echo f(1, false);

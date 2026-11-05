@@ -1,0 +1,18 @@
+=== action: Extract function
+=== input
+<?php
+namespace App {
+    $a = 1;
+    ⟦echo $a;⟧
+}
+=== output
+<?php
+namespace App {
+    $a = 1;
+    extracted($a);
+
+    function extracted($a): void
+    {
+        echo $a;
+    }
+}

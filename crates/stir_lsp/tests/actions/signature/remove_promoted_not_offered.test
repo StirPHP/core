@@ -1,0 +1,5 @@
+=== action: Remove unused parameter `$a`
+=== no-offer
+=== input
+<?php
+class A { public function __construct(private int $a‸) {} }

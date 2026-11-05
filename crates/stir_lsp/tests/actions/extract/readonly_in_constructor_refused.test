@@ -1,0 +1,11 @@
+=== action: Extract method
+=== php: 8.1
+=== refused: `readonly`
+=== input
+<?php
+class A {
+    private readonly int $x;
+    public function __construct(int $a) {
+        ⟦$this->x = $a;⟧
+    }
+}

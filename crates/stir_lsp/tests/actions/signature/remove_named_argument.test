@@ -1,0 +1,16 @@
+=== action: Remove unused parameter `$b`
+=== php: 8.0
+=== input
+<?php
+function f(int $a, string $b‸ = 'x', int $c = 1): int {
+    return $a + $c;
+}
+echo f(c: 2, a: 1, b: 'y');
+echo f(1);
+=== output
+<?php
+function f(int $a, int $c = 1): int {
+    return $a + $c;
+}
+echo f(c: 2, a: 1);
+echo f(1);

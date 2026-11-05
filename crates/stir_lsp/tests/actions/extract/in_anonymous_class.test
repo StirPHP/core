@@ -1,0 +1,20 @@
+=== action: Extract method
+=== input
+<?php
+$a = new class {
+    public function run(int $x): void {
+        ⟦echo $x;⟧
+    }
+};
+=== output
+<?php
+$a = new class {
+    public function run(int $x): void {
+        self::extracted($x);
+    }
+
+    private static function extracted(int $x): void
+    {
+        echo $x;
+    }
+};

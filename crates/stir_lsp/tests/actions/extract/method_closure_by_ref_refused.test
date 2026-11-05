@@ -1,0 +1,10 @@
+=== action: Extract method
+=== refused: by reference
+=== input
+<?php
+class A {
+    public function run(int $a): void {
+        ⟦$f = function () use (&$a) { $a++; };
+        $f();⟧
+    }
+}

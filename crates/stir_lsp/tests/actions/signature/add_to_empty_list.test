@@ -1,0 +1,10 @@
+=== action: Add a parameter
+=== new: constant.notFound
+=== input
+<?php
+function f‸(): int { return 1; }
+echo f();
+=== output
+<?php
+function f($newParameter): int { return 1; }
+echo f(TODO_NEW_ARGUMENT);

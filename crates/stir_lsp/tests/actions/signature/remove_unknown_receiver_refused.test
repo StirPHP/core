@@ -1,0 +1,8 @@
+=== action: Remove unused parameter `$b`
+=== error: isn't known
+=== input
+<?php
+class A {
+    public function ffoo(int $a, int $b‸): int { return $a; }
+}
+function go($x): void { $x->ffoo(1, 2); }

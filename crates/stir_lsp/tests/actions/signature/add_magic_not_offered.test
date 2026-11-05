@@ -1,0 +1,5 @@
+=== action: Add a parameter
+=== no-offer
+=== input
+<?php
+class A { public function __toString‸(): string { return ''; } }

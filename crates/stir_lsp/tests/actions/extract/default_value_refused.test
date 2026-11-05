@@ -1,0 +1,5 @@
+=== action: Extract function
+=== refused: constant
+=== input
+<?php
+function f(int $a = ⟦1 + 2⟧): void {}

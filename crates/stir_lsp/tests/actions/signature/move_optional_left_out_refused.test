@@ -1,0 +1,6 @@
+=== action: Move `$a` right
+=== error: leaves one of them out
+=== input
+<?php
+function f(int $a‸ = 1, int $b = 2): int { return $a - $b; }
+echo f(5);

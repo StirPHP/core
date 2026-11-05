@@ -1,0 +1,8 @@
+=== action: Extract function
+=== refused: used elsewhere
+=== input
+<?php
+function f(): int {
+    echo strlen(⟦$x = 'a'⟧);
+    return strlen($x);
+}

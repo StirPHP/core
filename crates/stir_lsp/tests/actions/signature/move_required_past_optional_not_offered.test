@@ -1,0 +1,5 @@
+=== action: Move `$a` right
+=== no-offer
+=== input
+<?php
+function f(int $a‸, string $b = ''): string { return $b . $a; }

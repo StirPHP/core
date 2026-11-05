@@ -1,0 +1,22 @@
+=== action: Extract function
+=== input
+<?php
+function f(array $a): void {
+    ⟦foreach ($a as $x) {
+        if ($x) { break; }
+    }⟧
+    echo 1;
+}
+=== output
+<?php
+function f(array $a): void {
+    extracted($a);
+    echo 1;
+}
+
+function extracted(array $a): void
+{
+    foreach ($a as $x) {
+        if ($x) { break; }
+    }
+}

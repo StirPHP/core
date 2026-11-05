@@ -1,0 +1,29 @@
+=== action: Extract method
+=== input
+<?php
+class A {
+    public function run(int $a): callable {
+        ⟦$f = function (int $b) use ($a) {
+            $c = $b + $a;
+            return $c;
+        };⟧
+        return $f;
+    }
+}
+=== output
+<?php
+class A {
+    public function run(int $a): callable {
+        $f = self::extracted($a);
+        return $f;
+    }
+
+    private static function extracted(int $a): Closure
+    {
+        $f = function (int $b) use ($a) {
+            $c = $b + $a;
+            return $c;
+        };
+        return $f;
+    }
+}

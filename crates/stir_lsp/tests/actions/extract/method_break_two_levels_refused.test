@@ -1,0 +1,11 @@
+=== action: Extract function
+=== refused: `break` or `continue`
+=== input
+<?php
+function f(array $a): void {
+    foreach ($a as $x) {
+        ⟦foreach ($a as $y) {
+            if ($y) { break 2; }
+        }⟧
+    }
+}

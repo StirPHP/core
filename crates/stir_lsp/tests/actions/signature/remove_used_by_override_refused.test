@@ -1,0 +1,12 @@
+=== action: Remove unused parameter `$b`
+=== error: uses it
+=== file: /src/D.php
+<?php
+class D extends C {
+    public function f(int $a, int $b): int { return $b; }
+}
+=== input
+<?php
+class C {
+    public function f(int $a, int $b‸): int { return $a; }
+}

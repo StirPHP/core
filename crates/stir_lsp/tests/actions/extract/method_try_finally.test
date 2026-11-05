@@ -1,0 +1,26 @@
+=== action: Extract function
+=== input
+<?php
+function f(int $a): void {
+    ⟦try {
+        echo $a;
+    } finally {
+        echo 'done';
+    }⟧
+    echo 'after';
+}
+=== output
+<?php
+function f(int $a): void {
+    extracted($a);
+    echo 'after';
+}
+
+function extracted(int $a): void
+{
+    try {
+        echo $a;
+    } finally {
+        echo 'done';
+    }
+}

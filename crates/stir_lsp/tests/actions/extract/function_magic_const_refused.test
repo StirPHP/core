@@ -1,0 +1,7 @@
+=== action: Extract function
+=== refused: `__FUNCTION__`
+=== input
+<?php
+function f(): void {
+    ⟦echo __FUNCTION__;⟧
+}

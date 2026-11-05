@@ -1,0 +1,8 @@
+=== action: Extract function
+=== refused: `static`
+=== input
+<?php
+function f(): void {
+    ⟦static $n = 0;
+    $n++;⟧
+}

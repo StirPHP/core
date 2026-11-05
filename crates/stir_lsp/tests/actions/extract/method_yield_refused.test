@@ -1,0 +1,7 @@
+=== action: Extract function
+=== refused: `yield`
+=== input
+<?php
+function f(): iterable {
+    ⟦yield 1;⟧
+}

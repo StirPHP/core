@@ -1,0 +1,16 @@
+=== action: Extract function
+=== input
+<?php
+function f(bool $a): int {
+    return $a ? ⟦1 + 2⟧ : 3;
+}
+=== output
+<?php
+function f(bool $a): int {
+    return $a ? extracted() : 3;
+}
+
+function extracted(): int
+{
+    return 1 + 2;
+}

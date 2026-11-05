@@ -1,0 +1,28 @@
+=== action: Extract method
+=== input
+<?php
+class A {
+    public function run(int $n): int {
+        ⟦$a = $n + 1;
+        $b = 'x';⟧
+        echo $b;
+        return $a;
+    }
+}
+=== output
+<?php
+class A {
+    public function run(int $n): int {
+        [$a, $b] = self::extracted($n);
+        echo $b;
+        return $a;
+    }
+
+    /** @return array{int, string} */
+    private static function extracted(int $n): array
+    {
+        $a = $n + 1;
+        $b = 'x';
+        return [$a, $b];
+    }
+}

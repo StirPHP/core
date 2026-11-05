@@ -1,0 +1,20 @@
+=== action: Extract function
+=== input
+<?php
+function f(?int $n): void {
+    if ($n !== null) {
+        ⟦echo $n;⟧
+    }
+}
+=== output
+<?php
+function f(?int $n): void {
+    if ($n !== null) {
+        extracted($n);
+    }
+}
+
+function extracted(?int $n): void
+{
+    echo $n;
+}

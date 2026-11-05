@@ -1,0 +1,31 @@
+=== action: Extract method
+=== crlf
+=== input
+<?php
+class A
+{
+	public function run(int $a): void
+	{
+		⟦// first
+		echo $a;
+		/* then */
+		echo $a + 1;⟧
+	}
+}
+=== output
+<?php
+class A
+{
+	public function run(int $a): void
+	{
+		self::extracted($a);
+	}
+
+	private static function extracted(int $a): void
+	{
+		// first
+		echo $a;
+		/* then */
+		echo $a + 1;
+	}
+}

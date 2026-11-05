@@ -1,0 +1,7 @@
+=== action: Remove unused parameter `$b`
+=== php: 8.1
+=== error: callable
+=== input
+<?php
+function f(int $a, int $b‸): int { return $a; }
+$g = f(...);

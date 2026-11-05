@@ -1,0 +1,23 @@
+=== action: Extract method
+=== input
+<?php
+class A {
+    public function run(int $a): int {
+        ⟦$b = $a * 2;⟧
+        return $b;
+    }
+}
+=== output
+<?php
+class A {
+    public function run(int $a): int {
+        $b = self::extracted($a);
+        return $b;
+    }
+
+    private static function extracted(int $a): int
+    {
+        $b = $a * 2;
+        return $b;
+    }
+}

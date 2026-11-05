@@ -1,0 +1,7 @@
+=== action: Extract function
+=== refused: differently
+=== input
+<?php
+function f(array $a): string {
+    return "a{⟦$a['x']⟧}";
+}

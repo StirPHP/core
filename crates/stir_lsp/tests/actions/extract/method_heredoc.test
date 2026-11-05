@@ -1,0 +1,24 @@
+=== action: Extract function
+=== input
+<?php
+function f(string $a): void {
+    if ($a) {
+        ⟦echo <<<EOT
+            text $a
+            EOT;⟧
+    }
+}
+=== output
+<?php
+function f(string $a): void {
+    if ($a) {
+        extracted($a);
+    }
+}
+
+function extracted(string $a): void
+{
+    echo <<<EOT
+            text $a
+            EOT;
+}

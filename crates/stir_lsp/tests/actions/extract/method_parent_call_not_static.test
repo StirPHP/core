@@ -1,0 +1,22 @@
+=== action: Extract method
+=== input
+<?php
+class P { public function go(): void {} }
+class A extends P {
+    public function run(): void {
+        ⟦parent::go();⟧
+    }
+}
+=== output
+<?php
+class P { public function go(): void {} }
+class A extends P {
+    public function run(): void {
+        $this->extracted();
+    }
+
+    private function extracted(): void
+    {
+        parent::go();
+    }
+}

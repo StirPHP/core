@@ -1,0 +1,10 @@
+=== action: Remove unused parameter `$b`
+=== error: outside this project
+=== input
+<?php
+class A implements ArrayAccess {
+    public function offsetExists(mixed $offset): bool { return true; }
+    public function offsetGet(mixed $offset): mixed { return 1; }
+    public function offsetSet(mixed $offset, mixed $b‸): void {}
+    public function offsetUnset(mixed $offset): void {}
+}

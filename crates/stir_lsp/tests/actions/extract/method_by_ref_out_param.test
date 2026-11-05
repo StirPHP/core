@@ -1,0 +1,19 @@
+=== action: Extract function
+=== input
+<?php
+function f(string $s): array {
+    ⟦preg_match('/a/', $s, $m);⟧
+    return $m;
+}
+=== output
+<?php
+function f(string $s): array {
+    $m = extracted($s);
+    return $m;
+}
+
+function extracted(string $s)
+{
+    preg_match('/a/', $s, $m);
+    return $m;
+}

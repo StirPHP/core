@@ -1,0 +1,10 @@
+=== action: Extract method
+=== php: 8.0
+=== refused: `never`
+=== input
+<?php
+class A {
+    public function run(): int {
+        ⟦throw new Exception('no');⟧
+    }
+}

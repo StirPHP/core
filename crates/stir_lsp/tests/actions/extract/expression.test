@@ -1,0 +1,22 @@
+=== action: Extract method
+=== input
+<?php
+class A {
+    private int $x = 1;
+    public function run(int $a): int {
+        return 2 * ⟦($a + $this->x)⟧;
+    }
+}
+=== output
+<?php
+class A {
+    private int $x = 1;
+    public function run(int $a): int {
+        return 2 * $this->extracted($a);
+    }
+
+    private function extracted(int $a): int
+    {
+        return ($a + $this->x);
+    }
+}

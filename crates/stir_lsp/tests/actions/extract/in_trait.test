@@ -1,0 +1,22 @@
+=== action: Extract method
+=== input
+<?php
+trait T {
+    public int $n = 0;
+    public function run(): void {
+        ⟦$this->n++;⟧
+    }
+}
+=== output
+<?php
+trait T {
+    public int $n = 0;
+    public function run(): void {
+        $this->extracted();
+    }
+
+    private function extracted(): void
+    {
+        $this->n++;
+    }
+}

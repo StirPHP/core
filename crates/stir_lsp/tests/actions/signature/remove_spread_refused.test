@@ -1,0 +1,6 @@
+=== action: Remove unused parameter `$b`
+=== error: spreads
+=== input
+<?php
+function f(int $a, int $b‸): int { return $a; }
+echo f(...[1, 2]);

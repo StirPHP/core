@@ -1,0 +1,6 @@
+=== action: Extract function
+=== refused: HTML
+=== input
+<b>x</b>
+<?php
+⟦echo 1;⟧

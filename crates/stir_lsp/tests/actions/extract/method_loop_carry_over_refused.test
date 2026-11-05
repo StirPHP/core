@@ -1,0 +1,9 @@
+=== action: Extract function
+=== refused: carries over
+=== input
+<?php
+function f(array $a): void {
+    foreach ($a as $x) {
+        ⟦$n = ($n ?? 0) + $x;⟧
+    }
+}

@@ -1,0 +1,10 @@
+=== action: Extract function
+=== refused: only set on some paths
+=== input
+<?php
+function f(bool $b): void {
+    ⟦if ($b) {
+        $n = 2;
+    }⟧
+    echo $n ?? 0;
+}

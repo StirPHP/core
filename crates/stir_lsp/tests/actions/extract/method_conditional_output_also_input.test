@@ -1,0 +1,25 @@
+=== action: Extract function
+=== input
+<?php
+function f(bool $b): int {
+    $n = 1;
+    ⟦if ($b) {
+        $n = 2;
+    }⟧
+    return $n;
+}
+=== output
+<?php
+function f(bool $b): int {
+    $n = 1;
+    $n = extracted($b, $n);
+    return $n;
+}
+
+function extracted(bool $b, int $n)
+{
+    if ($b) {
+        $n = 2;
+    }
+    return $n;
+}

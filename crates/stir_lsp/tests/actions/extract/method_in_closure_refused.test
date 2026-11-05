@@ -1,0 +1,11 @@
+=== action: Extract method
+=== refused: closure
+=== input
+<?php
+class A {
+    public function run(): callable {
+        return function () {
+            ⟦echo 1;⟧
+        };
+    }
+}
