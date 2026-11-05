@@ -1,4 +1,4 @@
-//! Signatures of stub functions as seen from StirPHP.
+//! Signatures of stub functions.
 
 use stir_db::{FileOrigin, RootDatabase, Settings, SourceFile, Workspace};
 use stir_syntax::Dialect;
@@ -20,7 +20,7 @@ fn workspace(db: &RootDatabase) -> Workspace {
     Workspace::new(db, files, Settings::default())
 }
 
-/// `name(params): ret` of a stub function viewed from `.sphp` code.
+/// `name(params): ret` of a stub function.
 fn sig(ctx: &Ctx<'_>, name: &str) -> String {
     let sig = ctx.function_sig(ctx.function(name).unwrap());
     let params: Vec<String> = sig
@@ -47,16 +47,15 @@ fn stub_signatures_follow_attributes_and_phpdoc() {
     let cases = [
         // `$arrays` (PHP <= 7.4 only) is dropped, leaving the variadic.
         "array_map(?callable $callback, array $array, array ...$arrays): array",
-        // `[optional]` in the PHPDoc; `int[]|string[]` refines `array`, whose
-        // nullability the native type settles (not a platform type).
-        "array_keys(array $array, mixed $filter_value?, bool $strict?): array<Int>|array<String>",
-        "str_contains(string $haystack, string $needle): Bool",
-        "json_decode(string $json, ?bool $associative?, int $depth?, int $flags?): Any!",
+        // `[optional]` in the PHPDoc; `int[]|string[]` refines `array`.
+        "array_keys(array $array, mixed $filter_value?, bool $strict?): array<int>|array<string>",
+        "str_contains(string $haystack, string $needle): bool",
+        "json_decode(string $json, ?bool $associative?, int $depth?, int $flags?): mixed",
         // `#[LanguageLevelTypeAware(['8.0' => 'string[]'])]` is the native type.
-        "explode(string $separator, string $string, int $limit?): array<String>",
-        // `int<0, max>` adds nothing to `int` from StirPHP.
-        "strlen(string $string): Int",
-        "array_key_first(array $array): String | Int | null",
+        "explode(string $separator, string $string, int $limit?): array<string>",
+        // `int<0, max>` from the PHPDoc refines `int`.
+        "strlen(string $string): non-negative-int",
+        "array_key_first(array $array): string|int|null",
     ];
     for want in cases {
         let name = &want[..want.find('(').unwrap()];
@@ -71,13 +70,4 @@ fn stub_signatures_follow_attributes_and_phpdoc() {
             .collect::<Vec<_>>(),
         ["TKey", "TValue"]
     );
-
-    // PHP code sees the PHP types.
-    let mut php = Ctx::new(&db, ws);
-    php.viewer = Dialect::Php;
-    assert_eq!(
-        sig(&php, "str_contains"),
-        "str_contains(string $haystack, string $needle): bool"
-    );
-    assert_eq!(sig(&php, "json_decode").rsplit(": ").next(), Some("mixed"));
 }

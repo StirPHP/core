@@ -1,7 +1,6 @@
 //! PHPDoc (PHPStan dialect) types and tags lowered into HIR [`TypeRef`]s.
 //!
-//! Only `.php` files (project sources, vendor and stubs) carry PHPDoc types;
-//! `.sphp` files have their own type syntax and their doc comments are ignored.
+//! Project sources, vendor files and stubs all carry PHPDoc types.
 
 use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
@@ -453,9 +452,7 @@ fn mentions_type_param(t: &TypeRef) -> bool {
         TypeRefKind::Union(ms) | TypeRefKind::Intersection(ms) => {
             ms.iter().any(mentions_type_param)
         }
-        TypeRefKind::Named(_, args) | TypeRefKind::Stir(_, args) => {
-            args.iter().any(mentions_type_param)
-        }
+        TypeRefKind::Named(_, args) => args.iter().any(mentions_type_param),
         TypeRefKind::PhpList { elem, .. } => mentions_type_param(elem),
         TypeRefKind::PhpArray { key, value, .. } | TypeRefKind::Iterable { key, value } => {
             key.as_deref().is_some_and(mentions_type_param) || mentions_type_param(value)

@@ -148,7 +148,7 @@ pub fn resolve_type_name(
     if let Some(loc) = index.type_aliases.get(&key).and_then(|v| v.first()) {
         return Some(Def::TypeAlias(*loc));
     }
-    // `Stir\...` types are visible from every `.sphp` file
+    // a name resolves in `Stir\` as a last resort
     let stir = SmolStr::new(format!("stir\\{key}"));
     if index.classes.contains_key(&stir) {
         return Some(Def::Class(stir));

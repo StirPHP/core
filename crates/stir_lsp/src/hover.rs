@@ -93,7 +93,7 @@ pub fn describe(
     def: &Def,
     narrowed: Option<Ty>,
 ) -> Option<String> {
-    let ctx = Ctx::for_file(db, ws, file);
+    let ctx = Ctx::new(db, ws);
     match def {
         Def::Local { decl } => {
             let typed = typed_file(db, ws, file);

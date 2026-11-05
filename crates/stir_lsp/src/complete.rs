@@ -6,7 +6,7 @@ use stir_checker::model_api::{self, MemberTy};
 use stir_checker::{Ctx, Def, LocalKind, typed_file};
 use stir_db::{Db, SourceFile, Workspace};
 use stir_hir::{ClassKind, Visibility, file_items};
-use stir_syntax::{Dialect, SyntaxKind::*, SyntaxNode, TextRange, TextSize};
+use stir_syntax::{SyntaxKind::*, SyntaxNode, TextRange, TextSize};
 use stir_types::{Ty, TyKind};
 
 use crate::hover::local_label;
@@ -50,56 +50,6 @@ pub struct Completions {
     /// More results exist for a longer prefix.
     pub incomplete: bool,
 }
-
-const STIR_KEYWORDS: &[&str] = &[
-    "val",
-    "var",
-    "function",
-    "class",
-    "data",
-    "record",
-    "interface",
-    "sealed",
-    "open",
-    "abstract",
-    "enum",
-    "typealias",
-    "when",
-    "if",
-    "else",
-    "for",
-    "foreach",
-    "while",
-    "do",
-    "return",
-    "throw",
-    "try",
-    "catch",
-    "finally",
-    "is",
-    "as",
-    "in",
-    "out",
-    "of",
-    "where",
-    "mut",
-    "null",
-    "true",
-    "false",
-    "this",
-    "new",
-    "namespace",
-    "use",
-    "break",
-    "continue",
-    "echo",
-    "private",
-    "protected",
-    "public",
-    "static",
-    "override",
-    "const",
-];
 
 const PHP_KEYWORDS: &[&str] = &[
     "function",
@@ -148,19 +98,6 @@ const PHP_KEYWORDS: &[&str] = &[
     "empty",
 ];
 
-const STIR_TYPES: &[&str] = &[
-    "Int",
-    "Float",
-    "String",
-    "Bool",
-    "Unit",
-    "Nothing",
-    "List",
-    "MutableList",
-    "Map",
-    "MutableMap",
-];
-
 fn ident_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || !c.is_ascii()
 }
@@ -191,7 +128,7 @@ pub fn complete(db: &dyn Db, ws: Workspace, file: SourceFile, offset: TextSize) 
         ..Completions::default()
     };
     let before = &text[..replace_start];
-    let ctx = Ctx::for_file(db, ws, file);
+    let ctx = Ctx::new(db, ws);
     let enclosing = enclosing_class(db, file, offset);
     if before.ends_with("->") {
         let arrow = TextSize::from(replace_start as u32 - 1);
@@ -236,26 +173,11 @@ pub fn complete(db: &dyn Db, ws: Workspace, file: SourceFile, offset: TextSize) 
         }
         return out;
     }
-    let stir = file.dialect(db) == Dialect::Stir;
     local_items(db, ws, file, offset, dollar, &mut out.items);
     if dollar {
         return out;
     }
-    // members of `this` are in scope without `$this->` in StirPHP methods
-    if stir
-        && let Some(key) = &enclosing
-        && let Some(model) = ctx.class(key)
-    {
-        member_items(
-            &ctx,
-            &model.self_ty(),
-            false,
-            enclosing.as_deref(),
-            &mut out.items,
-        );
-    }
-    let keywords = if stir { STIR_KEYWORDS } else { PHP_KEYWORDS };
-    for kw in keywords {
+    for kw in PHP_KEYWORDS {
         out.items.push(Item {
             label: (*kw).into(),
             kind: ItemKind::Keyword,
@@ -263,17 +185,6 @@ pub fn complete(db: &dyn Db, ws: Workspace, file: SourceFile, offset: TextSize) 
             insert: (*kw).into(),
             rank: 6,
         });
-    }
-    if stir {
-        for t in STIR_TYPES {
-            out.items.push(Item {
-                label: (*t).into(),
-                kind: ItemKind::Type,
-                detail: None,
-                insert: (*t).into(),
-                rank: 3,
-            });
-        }
     }
     if prefix.is_empty() {
         // globals only once something is typed: the stubs are large
@@ -303,7 +214,7 @@ fn receiver_type(db: &dyn Db, ws: Workspace, file: SourceFile, arrow: TextSize) 
     let typed = typed_file(db, ws, file);
     let mut ty = typed.types.get(&base.text_range()).cloned()?;
     ty = stir_checker::strip_platform(&stir_types::without_null(&ty));
-    let ctx = Ctx::for_file(db, ws, file);
+    let ctx = Ctx::new(db, ws);
     for _ in 0..8 {
         match ty.kind() {
             TyKind::Param { id, .. } => match stir_types::TypeEnv::param_bound(&ctx, *id) {
@@ -376,16 +287,12 @@ fn member_items(
 }
 
 /// Nodes that bound the visibility of the bindings declared in them.
-fn scope_node(node: &SyntaxNode, php: bool) -> Option<SyntaxNode> {
+fn scope_node(node: &SyntaxNode) -> Option<SyntaxNode> {
     node.ancestors().find(|n| {
         matches!(
             n.kind(),
-            FUNCTION_DECL | METHOD_DECL | CLOSURE_EXPR | ARROW_FN_EXPR | LAMBDA_EXPR
-        ) || (!php
-            && matches!(
-                n.kind(),
-                BLOCK | FOREACH_STMT | FOR_STMT | CATCH_CLAUSE | WHEN_EXPR
-            ))
+            FUNCTION_DECL | METHOD_DECL | CLOSURE_EXPR | ARROW_FN_EXPR
+        )
     })
 }
 
@@ -398,7 +305,6 @@ fn local_items(
     out: &mut Vec<Item>,
 ) {
     let root = stir_db::parse(db, file).syntax();
-    let php = file.dialect(db) == Dialect::Php;
     let Some(here) = root.token_at_offset(offset).left_biased() else {
         return;
     };
@@ -424,7 +330,7 @@ fn local_items(
         {
             continue;
         }
-        if let Some(scope) = scope_node(&node, php)
+        if let Some(scope) = scope_node(&node)
             && !scope.text_range().contains(offset)
         {
             continue;
@@ -472,14 +378,13 @@ fn global_items(
 ) {
     let index = stir_hir::def_index(db, ws);
     let scope = file_items(db, file).scope_at(offset).clone();
-    let stir = file.dialect(db) == Dialect::Stir;
     let ns = scope.namespace.to_ascii_lowercase();
     let reachable = |fqn: &str| {
         let lower = fqn.to_ascii_lowercase();
         let parent = lower.rsplit_once('\\').map_or("", |(p, _)| p);
-        parent.is_empty() || parent == ns || (stir && parent == "stir")
+        parent.is_empty() || parent == ns
     };
-    let ctx = Ctx::for_file(db, ws, file);
+    let ctx = Ctx::new(db, ws);
     let mut seen = FxHashSet::default();
     for locs in index.functions.values() {
         let Some(&loc) = locs.first() else { continue };
@@ -514,9 +419,7 @@ fn global_items(
             continue;
         }
         let resolved = scope.resolve_class(short).key();
-        let insert = if resolved == c.name.key()
-            || (stir && c.name.namespace().eq_ignore_ascii_case("stir"))
-        {
+        let insert = if resolved == c.name.key() {
             short.to_owned()
         } else {
             format!("\\{}", c.name.as_str())

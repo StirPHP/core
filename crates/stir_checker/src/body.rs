@@ -10,7 +10,7 @@ use stir_hir::ast::NodeExt;
 use stir_hir::name::Scope;
 use stir_hir::type_ref::{parse_int, unquote};
 use stir_hir::{Binding, ClassKind, FileItems, Visibility};
-use stir_syntax::{Dialect, SyntaxKind, SyntaxKind::*, SyntaxNode, SyntaxToken, TextRange};
+use stir_syntax::{SyntaxKind, SyntaxKind::*, SyntaxNode, SyntaxToken, TextRange};
 use stir_types::{Family, LitValue, Ty, TyKind};
 
 use crate::codes;
@@ -76,7 +76,6 @@ pub struct Checker<'a, 'db> {
     pub ctx: &'a Ctx<'db>,
     pub file: SourceFile,
     pub path: std::path::PathBuf,
-    pub dialect: Dialect,
     pub items: &'db FileItems,
     pub diags: Vec<Diagnostic>,
     conditional_depth: u32,
@@ -210,7 +209,6 @@ impl<'a, 'db> Checker<'a, 'db> {
             ctx,
             file,
             path: file.path(ctx.db).clone(),
-            dialect: file.dialect(ctx.db),
             items: ctx.items(file),
             diags: Vec::new(),
             conditional_depth: 0,
@@ -219,10 +217,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             frames: vec![FxHashMap::default()],
             fns: Vec::new(),
             class: None,
-            lower_cx: LowerCx {
-                dialect: Some(file.dialect(ctx.db)),
-                ..LowerCx::default()
-            },
+            lower_cx: LowerCx::default(),
             in_ctor: false,
             types: FxHashMap::default(),
             function_calls: FxHashMap::default(),
@@ -316,7 +311,6 @@ impl<'a, 'db> Checker<'a, 'db> {
             .collect();
         let tcx = stir_hir::type_ref::TypeCtx {
             scope: &scope,
-            dialect: self.dialect,
             type_params: &names,
         };
         let tr = tcx.lower(node);
@@ -508,16 +502,11 @@ impl<'a, 'db> Checker<'a, 'db> {
         let items = self.items;
         for (i, f) in items.functions.iter().enumerate() {
             let mut sink = Vec::new();
-            let cx = LowerCx {
-                dialect: Some(self.dialect),
-                ..LowerCx::default()
-            };
             let _ = self.ctx.build_sig(
                 &format!("check:{i}"),
                 &f.name.0,
                 &f.sig,
-                self.file,
-                &cx,
+                &LowerCx::default(),
                 &mut sink,
             );
             for e in sink {
@@ -1117,7 +1106,6 @@ impl<'a, 'db> Checker<'a, 'db> {
             "m:check",
             &m.name,
             &m.sig,
-            self.file,
             &self.ctx.class_cx(model),
             &mut sink,
         );
@@ -1467,10 +1455,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         };
         let def = self.ctx.function_def(loc);
         let args = self.args_of(node);
-        let cx = LowerCx {
-            dialect: Some(loc.file.dialect(self.ctx.db)),
-            ..LowerCx::default()
-        };
+        let cx = LowerCx::default();
         let (mut when_true, mut when_false) = (Facts::default(), Facts::default());
         for assert in &def.sig.asserts {
             let Some(index) = def.sig.params.iter().position(|p| p.name == assert.param) else {
@@ -2400,26 +2385,6 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
-    fn is_php_declared_property(&self, node: &SyntaxNode) -> bool {
-        if node.kind() != PROPERTY_FETCH_EXPR {
-            return false;
-        }
-        let Some(base) = exprs_of(node).into_iter().next() else {
-            return false;
-        };
-        let Some(base_ty) = self.types.get(&base.text_range()) else {
-            return false;
-        };
-        let class = class_of(&strip_platform(&stir_types::without_null(base_ty)));
-        let Some(name) = node.child(SyntaxKind::NAME).map(|n| text_of(&n)) else {
-            return false;
-        };
-        // the class that declares it, which an inheriting `.sphp` class doesn't change
-        self.ctx
-            .find_property(&class, &name)
-            .is_some_and(|p| !p.class.is_stir())
-    }
-
     fn local_name(&self, node: &SyntaxNode) -> Option<String> {
         match node.kind() {
             VARIABLE_EXPR => Some(text_of(node).trim_start_matches('$').to_owned()),
@@ -2474,27 +2439,6 @@ impl<'a, 'db> Checker<'a, 'db> {
                             format!("property `{name}` is immutable"),
                         );
                     }
-                }
-            }
-            INDEX_EXPR => {
-                let es = exprs_of(lhs);
-                let Some(base) = es.first() else { return };
-                let Some(bt) = self.types.get(&base.text_range()).cloned() else {
-                    return;
-                };
-                // a PHP-declared array property is a PHP array, however it reads from StirPHP
-                if matches!(
-                    strip_platform(&bt).kind(),
-                    TyKind::List(_) | TyKind::Map(_, _)
-                ) && !self.is_php_declared_property(base)
-                {
-                    self.error(
-                        lhs.text_range(),
-                        codes::REASSIGN_IMMUTABLE,
-                        format!(
-                            "`{bt}` is read-only; use a `MutableList`/`MutableMap` to modify it"
-                        ),
-                    );
                 }
             }
             _ => {}

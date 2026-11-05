@@ -60,7 +60,7 @@ pub struct TypedFile {
 /// Runs the checker on `file` and keeps its type information.
 #[salsa::tracked(returns(ref))]
 pub fn typed_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> Arc<TypedFile> {
-    let ctx = Ctx::for_file(db, ws, file);
+    let ctx = Ctx::new(db, ws);
     let mut checker = Checker::new(&ctx, file);
     let root = stir_db::parse(db, file).syntax();
     checker.check_root(&root);

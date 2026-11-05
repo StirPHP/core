@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use rowan::ast::SyntaxNodePtr;
 use smol_str::SmolStr;
-use stir_syntax::{
-    Dialect, StirLanguage, SyntaxKind, SyntaxKind::*, SyntaxNode, TextRange, TextSize,
-};
+use stir_syntax::{StirLanguage, SyntaxKind, SyntaxKind::*, SyntaxNode, TextRange, TextSize};
 
 use stir_phpdoc::{DocBlock, TagKind};
 
@@ -71,7 +69,7 @@ pub struct ParamDef {
     pub binding: Binding,
     /// The native type (for stubs, the `#[LanguageLevelTypeAware]` one).
     pub ty: Option<TypeRef>,
-    /// The PHPDoc `@param` type (`.php` files only); merged with `ty` by the checker.
+    /// The PHPDoc `@param` type; merged with `ty` by the checker.
     pub doc_ty: Option<TypeRef>,
     pub has_default: bool,
     /// `= null`: a PHP parameter with this default implicitly accepts null.
@@ -99,7 +97,7 @@ pub struct Signature {
     pub params: Vec<ParamDef>,
     /// The native return type.
     pub ret: Option<TypeRef>,
-    /// The PHPDoc `@return` type (`.php` files only).
+    /// The PHPDoc `@return` type.
     pub doc_ret: Option<TypeRef>,
     pub by_ref: bool,
     /// `@phpstan-assert-if-true` / `-if-false` on parameters.
@@ -222,7 +220,6 @@ pub struct ClassDef {
     pub kind: ClassKind,
     pub name: Fqn,
     pub scope: u32,
-    pub dialect: Dialect,
     pub mods: ClassMods,
     pub type_params: Vec<TypeParamDef>,
     pub extends: Vec<TypeRef>,
@@ -286,9 +283,8 @@ impl FileItems {
     }
 }
 
-pub(crate) fn lower_file(root: &SyntaxNode, dialect: Dialect, php_version: (u8, u8)) -> FileItems {
+pub(crate) fn lower_file(root: &SyntaxNode, php_version: (u8, u8)) -> FileItems {
     let mut l = Lowerer {
-        dialect,
         php_version,
         out: FileItems::default(),
         scope: Scope::default(),
@@ -300,7 +296,6 @@ pub(crate) fn lower_file(root: &SyntaxNode, dialect: Dialect, php_version: (u8, 
 }
 
 struct Lowerer {
-    dialect: Dialect,
     /// Target version for the phpstorm-stubs attributes.
     php_version: (u8, u8),
     out: FileItems,
@@ -330,19 +325,13 @@ impl Lowerer {
         }
     }
 
-    /// The parsed doc comment of `node` (`.php` files only).
+    /// The parsed doc comment of `node`.
     fn doc_block(&self, node: &SyntaxNode) -> Option<DocBlock> {
-        if self.dialect != Dialect::Php {
-            return None;
-        }
         let t = node.doc_comment()?;
         Some(doc::parse(t.text(), t.text_range().start()))
     }
 
     fn attrs(&self, node: &SyntaxNode) -> StubAttrs {
-        if self.dialect != Dialect::Php {
-            return StubAttrs::default();
-        }
         stub_attrs(node, self.cur_scope(), self.php_version)
     }
 
@@ -362,7 +351,6 @@ impl Lowerer {
     fn ctx<'a>(&'a self, type_params: &'a [SmolStr]) -> TypeCtx<'a> {
         TypeCtx {
             scope: &self.out.scopes.last().unwrap().1,
-            dialect: self.dialect,
             type_params,
         }
     }
@@ -894,7 +882,6 @@ impl Lowerer {
             kind,
             name: Fqn::join(&self.scope.namespace, name_node.text().to_string().trim()),
             scope: self.scope_id(),
-            dialect: self.dialect,
             mods,
             type_params,
             extends,

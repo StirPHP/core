@@ -1,10 +1,10 @@
 //! Semantic highlighting: lexical classes from the syntax tree, refined by name
-//! resolution (immutable bindings are `readonly`, mutable ones are not).
+//! resolution (readonly properties are `readonly`, other properties are `mutable`).
 
 use stir_checker::{Def, LocalKind, MemberKind, typed_file};
 use stir_db::{Db, FileOrigin, SourceFile, Workspace};
-use stir_hir::{Binding, ClassKind, file_items};
-use stir_syntax::{Dialect, SyntaxKind, SyntaxKind::*, TextRange};
+use stir_hir::{ClassKind, file_items};
+use stir_syntax::{SyntaxKind, SyntaxKind::*, TextRange};
 
 use crate::nav;
 
@@ -60,7 +60,7 @@ pub mod modifier {
     pub const STATIC: u32 = 1 << 2;
     pub const DEFAULT_LIBRARY: u32 = 1 << 3;
     pub const DOCUMENTATION: u32 = 1 << 4;
-    /// A mutable binding (`var $x`, `mut x`).
+    /// A property that can be written to, or a variable the checker didn't resolve.
     pub const MUTABLE: u32 = 1 << 5;
 }
 
@@ -91,8 +91,8 @@ fn lexical(kind: SyntaxKind, parent: Option<SyntaxKind>) -> Option<(TokenType, u
         STRING_SINGLE | STRING_DOUBLE | DQUOTE | BACKTICK | STRING_CONTENT | HEREDOC_START
         | HEREDOC_END => (TokenType::String, 0),
         OPEN_TAG | OPEN_TAG_WITH_ECHO | CLOSE_TAG => (TokenType::Keyword, 0),
-        // contextual keywords (`val`, `record`, `is`, `when`, ...) are identifiers
-        // sitting directly in their construct, not in a name
+        // contextual keywords (`enum`, `get`, ...) are identifiers sitting directly in
+        // their construct, not in a name
         IDENT if !matches!(parent, Some(NAME | NAME_REF)) => (TokenType::Keyword, 0),
         _ => return None,
     })
@@ -128,23 +128,12 @@ fn resolved(db: &dyn Db, ws: Workspace, file: SourceFile, def: &Def) -> Option<(
     Some(match def {
         Def::Local { decl } => {
             let (_, kind) = typed_file(db, ws, file).locals.get(decl)?.clone();
-            // every PHP variable is mutable, so marking it says nothing
-            if file.dialect(db) == Dialect::Php {
-                let ty = match kind {
-                    LocalKind::Param(_) => TokenType::Parameter,
-                    _ => TokenType::Variable,
-                };
-                return Some((ty, 0));
-            }
-            match kind {
-                LocalKind::Val => (TokenType::Variable, modifier::READONLY),
-                LocalKind::Param(Binding::Val) => (TokenType::Parameter, modifier::READONLY),
-                LocalKind::Param(_) => (TokenType::Parameter, modifier::MUTABLE),
-                LocalKind::This => (TokenType::Variable, modifier::READONLY),
-                LocalKind::Var | LocalKind::Php | LocalKind::Loop => {
-                    (TokenType::Variable, modifier::MUTABLE)
-                }
-            }
+            // every variable is mutable, so marking it says nothing
+            let ty = match kind {
+                LocalKind::Param(_) => TokenType::Parameter,
+                _ => TokenType::Variable,
+            };
+            (ty, 0)
         }
         Def::Function(loc) => (TokenType::Function, lib(loc.file)),
         Def::Const(loc) => (TokenType::Variable, modifier::READONLY | lib(loc.file)),

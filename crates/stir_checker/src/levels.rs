@@ -1,6 +1,5 @@
 //! PHPStan-style rule levels for diagnostics in `.php` files, plus
-//! `ignoreErrors` and the per-file `// @sphp-nocheck` directive. `.sphp` files
-//! are always fully checked.
+//! `ignoreErrors` and the per-file `// @sphp-nocheck` directive.
 //!
 //! | level | what is reported |
 //! |-------|------------------|
@@ -110,15 +109,7 @@ pub fn filter_php(diags: &mut Vec<Diagnostic>, settings: &Settings) {
 /// `@phpstan-ignore-next-line` or `@phpstan-ignore <identifier>` (the next line if the
 /// comment is alone on its line). The identifiers are PHPStan's, so any error counts.
 pub fn filter_phpstan_ignores(diags: &mut Vec<Diagnostic>, text: &str) {
-    filter_ignore_comments(diags, text, "@phpstan-ignore");
-}
-
-/// The same for `@sphp-ignore`, `.sphp`'s own: the way out of a false positive there.
-pub fn filter_sphp_ignores(diags: &mut Vec<Diagnostic>, text: &str) {
-    filter_ignore_comments(diags, text, "@sphp-ignore");
-}
-
-fn filter_ignore_comments(diags: &mut Vec<Diagnostic>, text: &str, marker: &str) {
+    let marker = "@phpstan-ignore";
     let mut ignored = std::collections::HashSet::new();
     for (i, line) in text.lines().enumerate() {
         let Some(at) = line.find(marker) else {

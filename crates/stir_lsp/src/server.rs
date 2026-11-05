@@ -76,13 +76,12 @@ impl State {
             }
             return file;
         }
-        let dialect = dialect_of(path);
         let origin = if self.foreign.iter().any(|d| path.starts_with(d)) {
             FileOrigin::Vendor
         } else {
             FileOrigin::Source
         };
-        let file = SourceFile::new(&self.db, path.to_owned(), text, dialect, origin);
+        let file = SourceFile::new(&self.db, path.to_owned(), text, Dialect::Php, origin);
         let mut files = self.ws.files(&self.db).clone();
         files.push(file);
         self.ws.set_files(&mut self.db).to(files);
@@ -119,12 +118,8 @@ impl State {
     }
 }
 
-fn dialect_of(path: &Path) -> Dialect {
-    Dialect::from_path(path).unwrap_or(Dialect::Php)
-}
-
 fn is_source_path(path: &Path) -> bool {
-    Dialect::from_path(path).is_some()
+    Dialect::from_path(path) == Some(Dialect::Php)
 }
 
 /// The canonical path of a `file://` URI.
@@ -607,7 +602,6 @@ impl LanguageServer for Server {
         self.load().await;
         if *self.watch_dynamic.lock().unwrap() {
             let watchers = [
-                "**/*.sphp",
                 "**/*.php",
                 "**/sphp.toml",
                 "**/phpstan.neon*",

@@ -1,47 +1,12 @@
 //! Syntactic types with names already resolved.
 
 use smol_str::SmolStr;
-use stir_syntax::{Dialect, SyntaxKind::*, SyntaxNode, TextRange};
+use stir_syntax::{SyntaxKind::*, SyntaxNode, TextRange};
 
 use crate::ast::NodeExt;
 use crate::name::{Fqn, Scope};
 
-/// StirPHP-family builtin type names (case-sensitive, `.sphp` only).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum StirBuiltin {
-    Int,
-    Float,
-    String,
-    Bool,
-    Unit,
-    Nothing,
-    Any,
-    List,
-    MutableList,
-    Map,
-    MutableMap,
-}
-
-impl StirBuiltin {
-    pub fn from_name(s: &str) -> Option<StirBuiltin> {
-        Some(match s {
-            "Int" => StirBuiltin::Int,
-            "Float" => StirBuiltin::Float,
-            "String" => StirBuiltin::String,
-            "Bool" | "Boolean" => StirBuiltin::Bool,
-            "Unit" => StirBuiltin::Unit,
-            "Nothing" => StirBuiltin::Nothing,
-            "Any" => StirBuiltin::Any,
-            "List" => StirBuiltin::List,
-            "MutableList" => StirBuiltin::MutableList,
-            "Map" => StirBuiltin::Map,
-            "MutableMap" => StirBuiltin::MutableMap,
-            _ => return None,
-        })
-    }
-}
-
-/// PHP builtin type keywords (case-insensitive in `.php`, lowercase in `.sphp`).
+/// PHP builtin type keywords (case-insensitive).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PhpBuiltin {
     Int,
@@ -61,8 +26,6 @@ pub enum PhpBuiltin {
     SelfType,
     Static,
     Parent,
-    /// `.sphp`'s name for PHP's `mixed`: any value, unusable until narrowed.
-    Unknown,
 }
 
 impl PhpBuiltin {
@@ -99,7 +62,6 @@ pub enum Literal {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeRefKind {
-    Stir(StirBuiltin, Vec<TypeRef>),
     Php(PhpBuiltin),
     /// A type parameter in scope.
     Param(SmolStr),
@@ -205,7 +167,6 @@ impl TypeRef {
 /// Context needed to lower a type node.
 pub struct TypeCtx<'a> {
     pub scope: &'a Scope,
-    pub dialect: Dialect,
     /// Type parameter names in scope (innermost last).
     pub type_params: &'a [SmolStr],
 }
@@ -262,25 +223,11 @@ impl TypeCtx<'_> {
             .child(GENERIC_ARG_LIST)
             .map(|a| a.children().map(|c| self.lower(&c)).collect())
             .unwrap_or_default();
-        let stir = self.dialect == Dialect::Stir;
         if !text.contains('\\') {
             if self.type_params.iter().any(|p| p == text) {
                 return TypeRefKind::Param(SmolStr::new(text));
             }
-            if stir && let Some(k) = StirBuiltin::from_name(text) {
-                return TypeRefKind::Stir(k, args);
-            }
-            if stir && text == "unknown" {
-                return TypeRefKind::Php(PhpBuiltin::Unknown);
-            }
-            if stir && text == "resource" {
-                return TypeRefKind::DocKeyword(DocKeyword::Resource);
-            }
-            let php = if stir {
-                PhpBuiltin::from_name(text)
-            } else {
-                PhpBuiltin::from_name(&text.to_ascii_lowercase())
-            };
+            let php = PhpBuiltin::from_name(&text.to_ascii_lowercase());
             // `array<K, V>` / `array<V>`, as in PHPDoc
             if php == Some(PhpBuiltin::Array) && !args.is_empty() {
                 let mut args = args.into_iter();

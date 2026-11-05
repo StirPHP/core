@@ -4,61 +4,51 @@ use stir_syntax::Dialect;
 use super::*;
 
 fn file(db: &RootDatabase, path: &str, text: &str) -> SourceFile {
-    let dialect = stir_syntax::Dialect::from_path(path.as_ref()).unwrap();
-    SourceFile::new(db, path.into(), text.into(), dialect, FileOrigin::Source)
+    SourceFile::new(
+        db,
+        path.into(),
+        text.into(),
+        Dialect::Php,
+        FileOrigin::Source,
+    )
 }
 
 #[test]
-fn lowers_stir_declarations() {
+fn lowers_signatures_and_promoted_properties() {
     let db = RootDatabase::default();
     let f = file(
         &db,
-        "a.sphp",
-        "namespace App\nuse Lib\\Base\n\nfunction <T> List<T>.second(): T = this[1]\n\
-         function greet(name: String, mut times: Int = 1): String { return name }\n\
-         data class User<out T of Base>(val id: Int, var $name: String) : Base(id), Iface {\n\
-             val created: Int = 0\n    function rename(to: String): Unit {}\n}\n\
-         record Point { x: Int; y: Int }\n\
-         typealias Status = \"a\" | \"b\"\n",
+        "a.php",
+        "<?php\nnamespace App;\nuse Lib\\Base;\n\n\
+         function greet(string $name, int $times = 1): string { return $name; }\n\
+         /** @template-covariant T of Base */\n\
+         class User extends Base {\n\
+             public function __construct(public readonly int $id, protected string $name) {}\n\
+             public int $created = 0;\n    public function rename(string $to): void {}\n}\n",
     );
     let items = file_items(&db, f);
     let names: Vec<_> = items.functions.iter().map(|f| f.name.to_string()).collect();
-    assert_eq!(names, ["App\\second", "App\\greet"]);
-    let ext = &items.functions[0];
-    assert!(ext.expr_body);
-    assert_eq!(ext.sig.type_params[0].name, "T");
-    let greet = &items.functions[1];
-    assert_eq!(greet.sig.params[0].binding, Binding::Val);
-    assert_eq!(greet.sig.params[1].binding, Binding::Mut);
+    assert_eq!(names, ["App\\greet"]);
+    let greet = &items.functions[0];
+    assert!(!greet.sig.params[0].has_default);
     assert!(greet.sig.params[1].has_default);
 
     let user = &items.classes[0];
     assert_eq!(user.name.as_str(), "App\\User");
-    assert!(user.mods.is_data);
     assert_eq!(user.type_params[0].variance, Variance::Out);
     let bound = user.type_params[0].bound.as_ref().unwrap();
     assert!(matches!(&bound.kind, type_ref::TypeRefKind::Named(n, _) if n.as_str() == "Lib\\Base"));
-    let ctor = user.primary_ctor.as_ref().unwrap();
-    assert!(ctor[0].promoted.as_ref().unwrap().immutable);
-    assert!(!ctor[1].promoted.as_ref().unwrap().immutable);
-    assert_eq!(ctor[1].name, "name");
-    assert_eq!(user.supertypes.len(), 2);
-    assert!(user.supertypes[0].ctor_call && !user.supertypes[1].ctor_call);
+    let ctor = user
+        .methods
+        .iter()
+        .find(|m| m.name == "__construct")
+        .unwrap();
+    assert!(ctor.sig.params[0].promoted.as_ref().unwrap().immutable);
+    assert!(!ctor.sig.params[1].promoted.as_ref().unwrap().immutable);
+    assert_eq!(ctor.sig.params[1].name, "name");
     assert_eq!(user.properties[0].name, "created");
-    assert!(user.properties[0].immutable);
-    assert_eq!(user.methods[0].name, "rename");
-
-    let point = &items.classes[1];
-    assert_eq!(point.kind, ClassKind::Record);
-    assert_eq!(
-        point
-            .fields
-            .iter()
-            .map(|f| f.name.as_str())
-            .collect::<Vec<_>>(),
-        ["x", "y"]
-    );
-    assert_eq!(items.type_aliases[0].name.as_str(), "App\\Status");
+    assert!(!user.properties[0].immutable);
+    assert!(user.methods.iter().any(|m| m.name == "rename"));
 }
 
 #[test]
@@ -123,7 +113,6 @@ fn lowers_php_declarations_and_index() {
     let index = def_index(&db, ws);
     assert!(index.classes.contains_key("foo\\b"));
     assert!(!index.functions.contains_key("foo\\shout"));
-    let _ = Dialect::Php;
 }
 
 #[test]

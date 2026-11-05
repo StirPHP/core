@@ -22,7 +22,6 @@ pub fn file_items(db: &dyn Db, file: SourceFile) -> Arc<FileItems> {
     let parse = stir_db::parse(db, file);
     Arc::new(items::lower_file(
         &parse.syntax(),
-        file.dialect(db),
         stir_db::DEFAULT_PHP_VERSION,
     ))
 }
