@@ -4458,8 +4458,8 @@ impl<'a, 'db> Checker<'a, 'db> {
                     }
                 }
             }
-            TyKind::Union(_) | TyKind::Intersection(_) => {
-                for m in ty.members() {
+            TyKind::Union(ms) | TyKind::Intersection(ms) => {
+                for m in ms.iter() {
                     self.variance_walk(m, input, invariant, params, range, out);
                 }
             }
