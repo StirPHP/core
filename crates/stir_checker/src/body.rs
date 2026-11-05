@@ -310,12 +310,13 @@ impl<'a, 'db> Checker<'a, 'db> {
     }
 
     /// Reports what lowering a type found. A class the stubs have on other versions than these
-    /// isn't unknown.
+    /// isn't unknown, and is fine as a type: PHP doesn't load it for that, and code can name
+    /// what only some versions have in a union.
     fn lowered_error(&mut self, e: LowerError) {
         if let Some(symbol) = &e.symbol {
             let key = symbol.trim_start_matches('\\').to_ascii_lowercase();
-            if let Some(&available) = self.index().limited_classes.get(key.as_str()) {
-                return self.report_limited(e.range, &format!("`{symbol}`"), available);
+            if self.index().limited_classes.contains_key(key.as_str()) {
+                return;
             }
             self.diags.push(
                 Diagnostic::error(self.path.clone(), e.range, e.code, e.message)
@@ -324,6 +325,18 @@ impl<'a, 'db> Checker<'a, 'db> {
             return;
         }
         self.error(e.range, e.code, e.message);
+    }
+
+    /// Reports what lowering a class's `extends` and `implements` found: declaring the class
+    /// does need these, on every version it runs on.
+    fn supertype_error(&mut self, e: LowerError) {
+        if let Some(symbol) = &e.symbol {
+            let key = symbol.trim_start_matches('\\').to_ascii_lowercase();
+            if let Some(&available) = self.index().limited_classes.get(key.as_str()) {
+                return self.report_limited(e.range, &format!("`{symbol}`"), available);
+            }
+        }
+        self.lowered_error(e);
     }
 
     fn index(&self) -> &'db stir_hir::DefIndex {
@@ -396,6 +409,39 @@ impl<'a, 'db> Checker<'a, 'db> {
         };
         self.report_limited(range, &format!("`{owner}::{name}`"), available);
         true
+    }
+
+    /// On the last diagnostic, about a property that doesn't exist: assigning one creates it,
+    /// which PHP has deprecated since 8.2.
+    fn note_dynamic_property(&mut self, range: TextRange) {
+        let root = stir_db::parse(self.ctx.db, self.file).syntax();
+        if !root.text_range().contains_range(range) {
+            return;
+        }
+        let node = match root.covering_element(range) {
+            stir_syntax::SyntaxElement::Node(n) => Some(n),
+            stir_syntax::SyntaxElement::Token(t) => t.parent(),
+        };
+        let fetch = node
+            .into_iter()
+            .flat_map(|n| n.ancestors())
+            .find(|n| n.kind() == PROPERTY_FETCH_EXPR);
+        let is_target = fetch.as_ref().is_some_and(|f| {
+            f.parent()
+                .is_some_and(|p| p.kind() == ASSIGN_EXPR && p.children().next().as_ref() == Some(f))
+        });
+        if !is_target {
+            return;
+        }
+        let versions = self.ctx.ws.settings(self.ctx.db).php_version;
+        let note = if versions.max >= stir_db::PhpVersion::new(8, 2) {
+            "this creates a dynamic property, which PHP 8.2 deprecated"
+        } else {
+            "this creates a dynamic property, which PHP 8.2 will deprecate"
+        };
+        if let Some(d) = self.diags.last_mut() {
+            d.notes.push(note.to_owned());
+        }
     }
 
     /// An override's types are mostly PHPDoc, which PHP doesn't enforce: PHPStan's
@@ -1723,7 +1769,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             self.ctx.lower(t, &cx, &mut sink);
         }
         for e in sink {
-            self.lowered_error(e);
+            self.supertype_error(e);
         }
     }
 
@@ -1756,10 +1802,13 @@ impl<'a, 'db> Checker<'a, 'db> {
                 .iter()
                 .map(|p| (p.name.clone(), p.ty.clone())),
         );
-        // where a readonly property may be given its value
-        self.in_ctor = ["__construct", "__unserialize", "__clone"]
+        // where a readonly property may be given its value: from PHP 8.3, in `__clone` too
+        let clones_readonly = self.ctx.ws.settings(self.ctx.db).php_version.target()
+            >= stir_db::PhpVersion::new(8, 3);
+        self.in_ctor = ["__construct", "__unserialize"]
             .iter()
-            .any(|n| m.name.eq_ignore_ascii_case(n));
+            .any(|n| m.name.eq_ignore_ascii_case(n))
+            || (clones_readonly && m.name.eq_ignore_ascii_case("__clone"));
         let this = if m.mods.is_static {
             None
         } else {
@@ -2960,7 +3009,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 if let Some(&available) = self.index().limited_consts.get(global.as_str()) {
                     let what = format!("`{}`", global.as_str());
                     self.report_limited(node.text_range(), &what, available);
-                    return Ty::untyped();
+                    return Ty::error();
                 }
                 self.diags.push(
                     Diagnostic::error(
@@ -4412,7 +4461,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     let what = format!("`{}()`", global.as_str());
                     self.report_limited(callee.text_range(), &what, available);
                     self.check_args_untyped(node);
-                    return Ty::untyped();
+                    return Ty::error();
                 }
                 self.diags.push(
                     Diagnostic::error(
@@ -4818,7 +4867,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                             stir_hir::LimitedMemberKind::Property,
                             name,
                         ) {
-                            return Ty::untyped();
+                            return Ty::error();
                         }
                         if self.class_known(&cls) {
                             self.error(
@@ -4826,6 +4875,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                                 codes::UNDEFINED_MEMBER,
                                 format!("`{recv}` has no property `{name}`"),
                             );
+                            self.note_dynamic_property(range);
                         }
                         Ty::error()
                     }
@@ -5108,7 +5158,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         let cls = class_of(recv);
         if self.limited_member(range, &cls, stir_hir::LimitedMemberKind::Method, name) {
             self.check_args_untyped(node);
-            return Ty::untyped();
+            return Ty::error();
         }
         if self.class_known(&cls) || !matches!(cls.kind(), TyKind::Class { .. }) {
             self.error(
@@ -5403,7 +5453,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     &name,
                 ) {
                     self.check_args_untyped(node);
-                    return Ty::untyped();
+                    return Ty::error();
                 }
                 if self.has_magic(&cls, "__callStatic") {
                     self.error(
@@ -5468,7 +5518,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     stir_hir::LimitedMemberKind::Property,
                     &name,
                 ) {
-                    return Ty::untyped();
+                    return Ty::error();
                 }
                 if self.class_known(&cls) {
                     self.error(
@@ -5527,7 +5577,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     stir_hir::LimitedMemberKind::Const,
                     &name,
                 ) {
-                    return Ty::untyped();
+                    return Ty::error();
                 }
                 if self.class_known(&cls) {
                     self.error(

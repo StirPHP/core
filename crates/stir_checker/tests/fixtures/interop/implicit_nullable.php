@@ -1,4 +1,5 @@
 <?php
+// @php 8.3
 function native(int $n = null, string $s = NULL): ?int
 {
     return $n;

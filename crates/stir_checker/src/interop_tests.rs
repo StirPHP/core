@@ -67,3 +67,19 @@ fn stub_signatures_follow_attributes_and_phpdoc() {
         ["K", "V"]
     );
 }
+
+#[test]
+fn a_new_property_is_a_dynamic_one_on_any_version() {
+    let db = RootDatabase::default();
+    let file = SourceFile::new(
+        &db,
+        "/a.php".into(),
+        "<?php\nclass A {}\n$a = new A();\n$a->x = 1;\necho $a->y;\n".to_owned(),
+        FileOrigin::Source,
+    );
+    let ws = Workspace::new(&db, vec![file], Settings::default());
+    let diags = crate::check_file(&db, ws, file);
+    let notes: Vec<usize> = diags.iter().map(|d| d.notes.len()).collect();
+    assert_eq!(notes, [1, 0], "{diags:?}");
+    assert!(diags[0].notes[0].contains("PHP 8.2"));
+}

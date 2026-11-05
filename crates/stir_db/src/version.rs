@@ -19,8 +19,8 @@ impl PhpVersion {
         PhpVersion { major, minor }
     }
 
-    /// `8`, `8.1` or `8.1.2`, the last part ignored, as a version must start at digits.
-    /// Trailing text in a part (`8.1-dev`, `0.4.1(-1)`) is ignored too.
+    /// `8`, `8.1`, `8.1.2`, `8.*` or `8.1-dev`: the major version has to be a number, and what
+    /// follows a number is ignored.
     pub fn parse(text: &str) -> Option<Self> {
         let mut parts = text.trim().split('.');
         let number = |part: &str| {
@@ -30,10 +30,7 @@ impl PhpVersion {
             part[..end].parse::<u8>().ok()
         };
         let major = number(parts.next()?)?;
-        let minor = match parts.next() {
-            Some(part) => number(part)?,
-            None => 0,
-        };
+        let minor = parts.next().and_then(number).unwrap_or(0);
         Some(PhpVersion { major, minor })
     }
 
@@ -82,6 +79,15 @@ impl PhpVersions {
     pub fn is_single(self) -> bool {
         self.min == self.max
     }
+
+    /// `targets PHP 8.1` or `supports PHP 8.1 to 8.3`, for messages.
+    pub fn described(self) -> String {
+        if self.is_single() {
+            format!("targets PHP {}", self.min)
+        } else {
+            format!("supports PHP {self}")
+        }
+    }
 }
 
 impl Default for PhpVersions {
@@ -129,18 +135,6 @@ impl Availability {
 
     pub fn is_always(self) -> bool {
         self.since.is_none() && self.removed.is_none()
-    }
-}
-
-/// The newer-than-target wording shared by the version diagnostics.
-impl PhpVersions {
-    /// `targets PHP 8.1` or `supports PHP 8.1 to 8.3`, for messages.
-    pub fn described(self) -> String {
-        if self.is_single() {
-            format!("targets PHP {}", self.min)
-        } else {
-            format!("supports PHP {}", self)
-        }
     }
 }
 

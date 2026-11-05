@@ -156,6 +156,8 @@ fn older_syntax_stays_quiet_on_its_own_versions() {
         "$a = new B();",
         "$a = 0777;",
         "$a = $b::C;",
+        "$a = B::{$c}();",
+        "$a = $b::class();",
         "$a = B::class;",
         "try { } catch (E $e) { }",
         "function f(int $a, ?B $b, $c = 1) {}",

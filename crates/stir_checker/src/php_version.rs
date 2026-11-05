@@ -374,9 +374,6 @@ pub const ATTRIBUTES_ON_CONSTANTS: Feature = feature("attributes on constants", 
 pub const ASYMMETRIC_STATIC: Feature = feature("asymmetric visibility on static properties", 8, 5);
 pub const CLOSURES_IN_CONSTANTS: Feature = feature("closures in constant expressions", 8, 5);
 
-/// The release with the newest syntax above: projects on it need no walk of their files.
-const NEWEST_SYNTAX: PhpVersion = PhpVersion::new(8, 5);
-
 /// Syntax in `file` newer than the versions it's for.
 #[salsa::tracked(returns(ref))]
 pub fn syntax_version_diagnostics(
@@ -385,9 +382,6 @@ pub fn syntax_version_diagnostics(
     file: SourceFile,
 ) -> std::sync::Arc<Vec<Diagnostic>> {
     let versions = file_versions(file.text(db), ws.settings(db).php_version);
-    if versions.min >= NEWEST_SYNTAX {
-        return Default::default();
-    }
     let root = stir_db::parse(db, file).syntax();
     let mut pass = SyntaxPass {
         db,
@@ -510,6 +504,7 @@ impl SyntaxPass<'_> {
             PARAM => {
                 self.modifiers(node, Modified::Param);
                 self.constant_expressions(node);
+                self.implicit_nullable(node);
             }
             UNION_TYPE => {
                 if !only_null_and_false(node) {
@@ -547,7 +542,11 @@ impl SyntaxPass<'_> {
                 }
             }
             CLASS_CONST_FETCH_EXPR => {
-                if let Some(t) = node.token(L_CURLY) {
+                // `A::{$b}()` and `$a::class()` are calls, which any version has
+                let is_callee = node.parent().is_some_and(|p| p.kind() == STATIC_CALL_EXPR);
+                if is_callee {
+                    // not one of these
+                } else if let Some(t) = node.token(L_CURLY) {
                     self.report(t.text_range(), DYNAMIC_CONSTANT_FETCH);
                 } else if node
                     .name_text()
@@ -738,6 +737,39 @@ impl SyntaxPass<'_> {
         }
     }
 
+    /// `int $x = null` makes the type nullable, which PHP 8.4 deprecated.
+    fn implicit_nullable(&mut self, param: &SyntaxNode) {
+        if self.versions.max < PhpVersion::new(8, 4) {
+            return;
+        }
+        let Some(ty) = stir_hir::first_type(param) else {
+            return;
+        };
+        let defaults_to_null = param.children().any(|c| {
+            c.kind() == NAME_EXPR && c.text().to_string().trim().eq_ignore_ascii_case("null")
+        });
+        if !defaults_to_null || accepts_null(&ty) {
+            return;
+        }
+        let text = ty.text().to_string();
+        let message = format!(
+            "`{0} ${1} = null` is implicitly nullable, which PHP 8.4 deprecated: write `?{0}`",
+            text.trim(),
+            param
+                .token(VARIABLE)
+                .map_or_else(String::new, |v| v.text()[1..].to_owned()),
+        );
+        self.out.push(
+            Diagnostic::error(
+                self.file.path(self.db).clone(),
+                trimmed(&ty),
+                codes::PHP_DEPRECATED,
+                message,
+            )
+            .with_severity(Severity::Warning),
+        );
+    }
+
     /// `new Foo()->bar`: PHP used to need `(new Foo())->bar`.
     fn new_without_parens(&mut self, node: &SyntaxNode) {
         if let Some(base) = node.children().next()
@@ -777,6 +809,22 @@ enum Modified {
     Property,
     Param,
     Const,
+}
+
+/// Does the type itself allow `null`?
+fn accepts_null(ty: &SyntaxNode) -> bool {
+    let is_null_or_mixed = |t: &SyntaxNode| {
+        t.kind() == NAMED_TYPE
+            && matches!(
+                t.text().to_string().trim().to_ascii_lowercase().as_str(),
+                "null" | "mixed"
+            )
+    };
+    match ty.kind() {
+        NULLABLE_TYPE => true,
+        UNION_TYPE => ty.children().any(|t| is_null_or_mixed(&t)),
+        _ => is_null_or_mixed(ty),
+    }
 }
 
 /// `null|false`: a union in name only.

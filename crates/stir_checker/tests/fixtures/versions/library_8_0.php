@@ -23,7 +23,16 @@ class Named implements Stringable {
     public function __toString(): string { return ''; }
 }
 
-// a type or a method of a class that only later versions have
-function waits(Fiber $f): void {} // error: SPHP0061
+// a type doesn't load its class: code can name what only later versions have
+function waits(Fiber|string $f): void {}
+/** @param Fiber $f */
+function documented($f): void {}
+
+// declaring a class does, and so does using a member only later versions have
+interface Like {}
+class Later implements Like, Countable {
+    public function count(): int { return 0; }
+}
+class Scheduled extends Fiber {} // error: SPHP0061
 echo (new ReflectionClass(stdClass::class))->isEnum(); // error: SPHP0061
 echo ReflectionProperty::IS_READONLY; // error: SPHP0061
