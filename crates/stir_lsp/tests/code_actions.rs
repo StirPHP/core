@@ -138,7 +138,10 @@ async fn settled(c: &mut Client, doc: &str, code: &str, count: usize) -> Vec<Val
 async fn a_quick_fix_is_resolved_applied_and_gone() {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = std::fs::canonicalize(tmp.path()).unwrap();
-    write(&root.join("src/User.php"), "<?php\nnamespace App\\Models;\nclass User {}\n");
+    write(
+        &root.join("src/User.php"),
+        "<?php\nnamespace App\\Models;\nclass User {}\n",
+    );
     let main = root.join("src/main.php");
     let text = "<?php\nnamespace App;\n\nnew User();\n";
     write(&main, text);
@@ -158,7 +161,10 @@ async fn a_quick_fix_is_resolved_applied_and_gone() {
     let (edits, version) = edits_for(&resolved["edit"], &doc);
     assert_eq!(version, 3);
     let new = apply_edits(text, &edits);
-    assert_eq!(new, "<?php\nnamespace App;\n\nuse App\\Models\\User;\n\nnew User();\n");
+    assert_eq!(
+        new,
+        "<?php\nnamespace App;\n\nuse App\\Models\\User;\n\nnew User();\n"
+    );
     assert!(stir_syntax::parse(&new).errors().is_empty());
 
     c.notify(
@@ -220,7 +226,9 @@ async fn a_client_without_resolve_gets_edits_and_not_what_takes_the_workspace() 
 
     let at_param = actions_at(&mut c, &doc, range_at(1, 24, 24), json!([])).await;
     assert!(
-        !at_param.iter().any(|a| a["title"] == "Remove unused parameter `$b`"),
+        !at_param
+            .iter()
+            .any(|a| a["title"] == "Remove unused parameter `$b`"),
         "{at_param:?}"
     );
 }
@@ -250,13 +258,19 @@ async fn a_change_across_files_has_each_files_version() {
     let edit = &resolved["edit"];
     let (edits, version) = edits_for(edit, &doc);
     assert_eq!(version, 7);
-    assert_eq!(apply_edits(text, &edits), "<?php\nfunction ff(int $a): int { return $a; }\n");
+    assert_eq!(
+        apply_edits(text, &edits),
+        "<?php\nfunction ff(int $a): int { return $a; }\n"
+    );
     let (edits, version) = edits_for(edit, &other_doc);
     assert_eq!(version, 11);
     assert_eq!(apply_edits(other_text, &edits), "<?php\necho ff(1);\n");
     let (edits, version) = edits_for(edit, &closed_doc);
     assert_eq!(version, Value::Null);
-    assert_eq!(apply_edits("<?php\necho ff(3, 4);\n", &edits), "<?php\necho ff(3);\n");
+    assert_eq!(
+        apply_edits("<?php\necho ff(3, 4);\n", &edits),
+        "<?php\necho ff(3);\n"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -282,7 +296,10 @@ async fn what_cant_be_done_is_shown_greyed_or_told() {
     let actions = actions_at(&mut c, &doc, range_at(2, 24, 24), json!([])).await;
     let remove = titled(&actions, "Remove unused parameter `$b`");
     let resolved = c.request("codeAction/resolve", remove.clone()).await;
-    assert!(resolved.get("edit").is_none_or(Value::is_null), "{resolved}");
+    assert!(
+        resolved.get("edit").is_none_or(Value::is_null),
+        "{resolved}"
+    );
     let told = c.message("window/showMessage").await;
     let said = told["params"]["message"].as_str().unwrap();
     assert!(said.contains("no longer happen"), "{said}");
@@ -346,7 +363,10 @@ async fn only_what_was_asked_for_comes_back() {
     );
     // not without being asked: an editor that runs them on save asks
     let plain = actions_at(&mut c, &doc, range_at(0, 0, 0), json!([])).await;
-    assert!(!plain.iter().any(|a| a["kind"] == "source.fixAll"), "{plain:?}");
+    assert!(
+        !plain.iter().any(|a| a["kind"] == "source.fixAll"),
+        "{plain:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -390,7 +410,10 @@ async fn what_phpstan_reports_gets_fixes_where_its_line_says_enough() {
                           "code": "missingType.return", "message": "whatever"});
     let actions = actions_at(&mut c, &doc, range_at(1, 0, 0), json!([reported])).await;
     assert!(
-        !actions.iter().any(|a| a["kind"] == "quickfix" && a["title"].as_str().unwrap().starts_with("Add return")),
+        !actions
+            .iter()
+            .any(|a| a["kind"] == "quickfix"
+                && a["title"].as_str().unwrap().starts_with("Add return")),
         "{actions:?}"
     );
 }
@@ -415,10 +438,7 @@ async fn a_new_name_is_renamed_and_a_parameter_is_asked_for_by_an_editor_that_ca
     let args = resolved["command"]["arguments"].as_array().unwrap();
     let (edits, _) = edits_for(&resolved["edit"], &doc);
     let new = apply_edits(text, &edits);
-    let at = offset_of(
-        &new,
-        &json!({"line": args[1], "character": args[2]}),
-    );
+    let at = offset_of(&new, &json!({"line": args[1], "character": args[2]}));
     assert!(new[at..].starts_with("extracted($a);"), "{new} at {at}");
 
     let actions = actions_at(&mut c, &doc, range_at(1, 9, 9), json!([])).await;

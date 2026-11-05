@@ -18,7 +18,6 @@ use super::style::indent_at;
 use super::types::{Namer, doc_type, has, native, written_ref};
 use super::{Change, Cx, FileEdit, Found, Kind, Offer};
 use crate::hierarchy::class_def;
-use crate::nav;
 
 pub fn offers<'c>(cx: &'c Cx<'c>, out: &mut Vec<Offer<'c>>) {
     for d in cx.found() {
@@ -142,10 +141,12 @@ fn implicit_nullable<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
 fn nullable_edit_at(cx: &Cx<'_>, range: TextRange) -> Option<FileEdit> {
     let token = cx.token_at(range.start())?;
     let ty = token.parent_ancestors().find(|n| {
-        matches!(n.kind(), NAMED_TYPE | UNION_TYPE | INTERSECTION_TYPE | PAREN_TYPE)
-            && n.parent().is_some_and(|p| {
-                matches!(p.kind(), PARAM | PROPERTY_DECL | RETURN_TYPE)
-            })
+        matches!(
+            n.kind(),
+            NAMED_TYPE | UNION_TYPE | INTERSECTION_TYPE | PAREN_TYPE
+        ) && n
+            .parent()
+            .is_some_and(|p| matches!(p.kind(), PARAM | PROPERTY_DECL | RETURN_TYPE))
     })?;
     nullable_edit(cx, &ty)
 }
@@ -160,8 +161,9 @@ fn nullable_edit(cx: &Cx<'_>, ty: &SyntaxNode) -> Option<FileEdit> {
             }
             Some(cx.insert(range.start(), "?"))
         }
-        UNION_TYPE => has(cx, stir_checker::php_version::UNION_TYPES)
-            .then(|| cx.insert(range.end(), "|null")),
+        UNION_TYPE => {
+            has(cx, stir_checker::php_version::UNION_TYPES).then(|| cx.insert(range.end(), "|null"))
+        }
         INTERSECTION_TYPE if has(cx, stir_checker::php_version::DNF_TYPES) => {
             Some(cx.edit(range, format!("({})|null", cx.slice(range))))
         }
@@ -219,13 +221,11 @@ fn return_null<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
 /// The statement starting at `at`, and the list it's in.
 fn statement_at(cx: &Cx<'_>, at: TextSize) -> Option<SyntaxNode> {
     let token = cx.token_at(at)?;
-    token
-        .parent_ancestors()
-        .find(|n| {
-            n.parent().is_some_and(|p| is_statement_list(p.kind()))
-                && super::docs::first_token_start(n) == at
-                && !matches!(n.kind(), CASE_KW | L_CURLY)
-        })
+    token.parent_ancestors().find(|n| {
+        n.parent().is_some_and(|p| is_statement_list(p.kind()))
+            && super::docs::first_token_start(n) == at
+            && !matches!(n.kind(), CASE_KW | L_CURLY)
+    })
 }
 
 /// A node whose children are statements run one after another.
@@ -247,14 +247,25 @@ fn remove_unreachable<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
     let alive = |n: &SyntaxNode| {
         matches!(
             n.kind(),
-            FUNCTION_DECL | CLASS_DECL | INTERFACE_DECL | TRAIT_DECL | ENUM_DECL | LABEL_STMT
-                | NAMESPACE_DECL | USE_DECL | CONST_DECL | INLINE_HTML_STMT | HALT_COMPILER_STMT
+            FUNCTION_DECL
+                | CLASS_DECL
+                | INTERFACE_DECL
+                | TRAIT_DECL
+                | ENUM_DECL
+                | LABEL_STMT
+                | NAMESPACE_DECL
+                | USE_DECL
+                | CONST_DECL
+                | INLINE_HTML_STMT
+                | HALT_COMPILER_STMT
         ) || n.descendants().any(|c| c.kind() == LABEL_STMT)
     };
     if statements.iter().any(alive) {
         return;
     }
-    let Some(last) = statements.last() else { return };
+    let Some(last) = statements.last() else {
+        return;
+    };
     let start = super::docs::first_token_start(&first);
     let end = last.text_range().end();
     let range = TextRange::new(
@@ -329,17 +340,41 @@ pub fn always_leaves(stmt: &SyntaxNode) -> bool {
 fn is_stmt(kind: stir_syntax::SyntaxKind) -> bool {
     matches!(
         kind,
-        BLOCK | EXPR_STMT | ECHO_STMT | RETURN_STMT | IF_STMT | WHILE_STMT | DO_WHILE_STMT
-            | FOR_STMT | FOREACH_STMT | SWITCH_STMT | BREAK_STMT | CONTINUE_STMT | TRY_STMT
-            | GLOBAL_STMT | STATIC_VAR_STMT | UNSET_STMT | GOTO_STMT | LABEL_STMT | EMPTY_STMT
-            | INLINE_HTML_STMT | ECHO_TAG_STMT | FUNCTION_DECL | CLASS_DECL | INTERFACE_DECL
-            | TRAIT_DECL | ENUM_DECL | DECLARE_STMT | CONST_DECL
+        BLOCK
+            | EXPR_STMT
+            | ECHO_STMT
+            | RETURN_STMT
+            | IF_STMT
+            | WHILE_STMT
+            | DO_WHILE_STMT
+            | FOR_STMT
+            | FOREACH_STMT
+            | SWITCH_STMT
+            | BREAK_STMT
+            | CONTINUE_STMT
+            | TRY_STMT
+            | GLOBAL_STMT
+            | STATIC_VAR_STMT
+            | UNSET_STMT
+            | GOTO_STMT
+            | LABEL_STMT
+            | EMPTY_STMT
+            | INLINE_HTML_STMT
+            | ECHO_TAG_STMT
+            | FUNCTION_DECL
+            | CLASS_DECL
+            | INTERFACE_DECL
+            | TRAIT_DECL
+            | ENUM_DECL
+            | DECLARE_STMT
+            | CONST_DECL
     )
 }
 
 /// Does a list of statements never get past its end?
 pub fn list_leaves(list: &SyntaxNode) -> bool {
-    list.children().any(|c| is_stmt(c.kind()) && always_leaves(&c))
+    list.children()
+        .any(|c| is_stmt(c.kind()) && always_leaves(&c))
 }
 
 /// The `return`s and `yield`s of a body, leaving out what's in functions and classes within it.
@@ -348,8 +383,14 @@ pub fn own_nodes(body: &SyntaxNode) -> Vec<SyntaxNode> {
         for child in node.children() {
             if matches!(
                 child.kind(),
-                FUNCTION_DECL | CLOSURE_EXPR | ARROW_FN_EXPR | CLASS_DECL | ANON_CLASS
-                    | INTERFACE_DECL | TRAIT_DECL | ENUM_DECL
+                FUNCTION_DECL
+                    | CLOSURE_EXPR
+                    | ARROW_FN_EXPR
+                    | CLASS_DECL
+                    | ANON_CLASS
+                    | INTERFACE_DECL
+                    | TRAIT_DECL
+                    | ENUM_DECL
             ) {
                 continue;
             }
@@ -481,8 +522,12 @@ fn return_type_offers<'c>(
     let mut namer = Namer::new(cx, start);
     let (native_text, doc) = if let Some((member, ret)) = inherited_return(cx, function) {
         let parent = parent_of(member.class);
-        let Some(text) = written_ref(cx, &mut namer, &ret, Some(member.class.name.as_str()), parent.as_deref())
-        else {
+        let Some(text) = written_ref(
+            &mut namer,
+            &ret,
+            Some(member.class.name.as_str()),
+            parent.as_deref(),
+        ) else {
             return;
         };
         (Some(text), None)
@@ -649,10 +694,7 @@ fn param_type_offer<'c>(
             let w = native(cx, &mut namer, &ty)?;
             // `int $x = null` is what's deprecated
             let w = if def.default_is_null && !takes_null(&w.native) {
-                let Some(with_null) = native(cx, &mut namer, &ty.nullable()) else {
-                    return None;
-                };
-                with_null.native
+                native(cx, &mut namer, &ty.nullable())?.native
             } else {
                 w.native
             };
@@ -664,17 +706,20 @@ fn param_type_offer<'c>(
         return;
     }
     // a default that isn't of this type would be an error
-    if let Some(default) = param
-        .children()
-        .find(|c| !matches!(c.kind(), MODIFIERS | ATTRIBUTE_LIST) && !stir_hir::is_type_node(c.kind()))
-        && !default_fits(cx, &default, &text)
+    if let Some(default) = param.children().find(|c| {
+        !matches!(c.kind(), MODIFIERS | ATTRIBUTE_LIST) && !stir_hir::is_type_node(c.kind())
+    }) && !default_fits(cx, &default, &text)
     {
         return;
     }
     let edits_imports = namer.finish();
     let name = variable.text().to_owned();
     let mut edits = vec![cx.insert(at, format!("{text} "))];
-    edits.extend(edits_imports.iter().map(|e| cx.insert(e.at, e.text.clone())));
+    edits.extend(
+        edits_imports
+            .iter()
+            .map(|e| cx.insert(e.at, e.text.clone())),
+    );
     let mut offer = Offer::new(
         format!("type.param:{}", u32::from(at)),
         format!("Add type `{text}` to `{name}`"),
@@ -714,7 +759,13 @@ fn inherited_param(
         let above = cx.ctx().is_subclass(&key, &member.key());
         if !above {
             // what's below has to accept all of it: fine if it's left out, not otherwise
-            if member.method.sig.params.get(index).is_some_and(|p| p.ty.is_some()) {
+            if member
+                .method
+                .sig
+                .params
+                .get(index)
+                .is_some_and(|p| p.ty.is_some())
+            {
                 return ParentParam::Refuses;
             }
             continue;
@@ -727,7 +778,12 @@ fn inherited_param(
             return ParentParam::Refuses;
         };
         let parent = parent_of(member.class);
-        match written_ref(cx, namer, ty, Some(member.class.name.as_str()), parent.as_deref()) {
+        match written_ref(
+            namer,
+            ty,
+            Some(member.class.name.as_str()),
+            parent.as_deref(),
+        ) {
             Some(text) => result = ParentParam::Written(text),
             None => return ParentParam::Refuses,
         }
@@ -758,7 +814,10 @@ fn default_fits(cx: &Cx<'_>, default: &SyntaxNode, text: &str) -> bool {
     };
     let lower = text.to_ascii_lowercase();
     let lower = lower.trim_start_matches('?');
-    lower == "mixed" || lower.split('|').any(|p| p == word || (word == "array" && p == "iterable"))
+    lower == "mixed"
+        || lower
+            .split('|')
+            .any(|p| p == word || (word == "array" && p == "iterable"))
         || (word == "int" && lower.split('|').any(|p| p == "float"))
 }
 
@@ -780,9 +839,13 @@ fn property_type_offer<'c>(
     {
         return;
     }
-    let Some(var) = elem.token(VARIABLE) else { return };
+    let Some(var) = elem.token(VARIABLE) else {
+        return;
+    };
     let name = var.text().trim_start_matches('$').to_owned();
-    let Some(class) = class_of(cx, elem) else { return };
+    let Some(class) = class_of(cx, elem) else {
+        return;
+    };
     if class.kind == stir_hir::ClassKind::Trait {
         return;
     }
@@ -866,7 +929,9 @@ fn redeclared(cx: &Cx<'_>, class: &ClassDef, name: &str) -> bool {
                 })
         })
     };
-    hierarchy::ancestors_of(cx, &key).iter().any(|a| declares(a))
+    hierarchy::ancestors_of(cx, &key)
+        .iter()
+        .any(|a| declares(a))
         || crate::hierarchy::all_subtypes(cx.db, cx.ws, &key)
             .iter()
             .any(|s| declares(s))
@@ -893,10 +958,7 @@ fn set_in_constructor(cx: &Cx<'_>, class: &ClassDef, name: &str) -> bool {
     };
     block.children_of(EXPR_STMT).iter().any(|s| {
         s.children().next().is_some_and(|e| {
-            e.kind() == ASSIGN_EXPR
-                && e.children()
-                    .next()
-                    .is_some_and(|l| is_this_fetch(&l, name))
+            e.kind() == ASSIGN_EXPR && e.children().next().is_some_and(|l| is_this_fetch(&l, name))
         })
     })
 }
@@ -940,9 +1002,7 @@ fn assigned_types(cx: &Cx<'_>, elem: &SyntaxNode, name: &str, has_default: bool)
     for node in body.descendants() {
         match node.kind() {
             // a name that's worked out while running could be this one
-            PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR
-                if node.child(NAME).is_none() =>
-            {
+            PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR if node.child(NAME).is_none() => {
                 return None;
             }
             PROPERTY_FETCH_EXPR if is_this_fetch(&node, name) => {
@@ -997,9 +1057,7 @@ fn nullable_return<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
         return;
     };
     // what it overrides said it wouldn't be null
-    if function.kind() == METHOD_DECL
-        && inherited_return(cx, &function).is_some()
-    {
+    if function.kind() == METHOD_DECL && inherited_return(cx, &function).is_some() {
         return;
     }
     let Some(edit) = nullable_edit(cx, &ty) else {
@@ -1007,7 +1065,10 @@ fn nullable_return<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
     };
     out.push(
         Offer::new(
-            format!("nullable.return:{}", u32::from(function.text_range().start())),
+            format!(
+                "nullable.return:{}",
+                u32::from(function.text_range().start())
+            ),
             "Make the return type nullable",
             Kind::QuickFix,
             move || Ok(Change::new(vec![edit])),
@@ -1031,10 +1092,16 @@ fn nullable_property<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
     let Some(decl) = elem.parent().filter(|_| is_null) else {
         return;
     };
-    let Some(ty) = written_type(&decl) else { return };
-    let Some(var) = elem.token(VARIABLE) else { return };
+    let Some(ty) = written_type(&decl) else {
+        return;
+    };
+    let Some(var) = elem.token(VARIABLE) else {
+        return;
+    };
     let name = var.text().trim_start_matches('$');
-    let Some(class) = class_of(cx, &elem) else { return };
+    let Some(class) = class_of(cx, &elem) else {
+        return;
+    };
     if redeclared(cx, class, name) {
         return;
     }
@@ -1060,18 +1127,6 @@ pub fn nullable_everywhere(cx: &Cx<'_>) -> Vec<FileEdit> {
         .filter(|d| d.code == codes::PARAMETER_IMPLICITLY_NULLABLE)
         .filter_map(|d| nullable_edit_at(cx, d.range))
         .collect()
-}
-
-/// The statement a place in a function's body is in, if it's directly in a list of them.
-pub fn enclosing_statement(node: &SyntaxNode) -> Option<SyntaxNode> {
-    node.ancestors()
-        .find(|n| n.parent().is_some_and(|p| is_statement_list(p.kind())))
-        .filter(|n| !matches!(n.kind(), SWITCH_CASE))
-}
-
-/// The function a place is in: its name or `{main}`, for messages.
-pub fn function_of(node: &SyntaxNode) -> Option<SyntaxNode> {
-    nav::enclosing_function(node)
 }
 
 /// The indentation of what's in `block`.

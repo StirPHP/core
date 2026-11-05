@@ -76,7 +76,11 @@ fn ignore_list_end(comment: &str) -> Option<usize> {
 fn end_of_line(text: &str, at: TextSize) -> TextSize {
     let rest = &text[usize::from(at)..];
     let len = rest.find('\n').unwrap_or(rest.len());
-    let len = if rest[..len].ends_with('\r') { len - 1 } else { len };
+    let len = if rest[..len].ends_with('\r') {
+        len - 1
+    } else {
+        len
+    };
     at + TextSize::from(len as u32)
 }
 
@@ -128,8 +132,8 @@ fn place_of(cx: &Cx<'_>, offset: TextSize) -> Option<Place> {
             .parent_ancestors()
             .all(|n| !matches!(n.kind(), HEREDOC | INTERP_STRING | SHELL_EXEC));
     let first = cx.root.token_at_offset(line_start).right_biased()?;
-    let starts_in_php = first.text_range().start() >= line_start
-        || matches!(first.kind(), WHITESPACE);
+    let starts_in_php =
+        first.text_range().start() >= line_start || matches!(first.kind(), WHITESPACE);
     (in_php && starts_in_php && first.kind() != INLINE_HTML).then_some(Place::Above(line_start))
 }
 

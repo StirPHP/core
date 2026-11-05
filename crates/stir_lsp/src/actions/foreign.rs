@@ -21,7 +21,11 @@ fn only<T>(mut found: Vec<T>) -> Option<T> {
 }
 
 /// The nodes of `kinds` under `root` starting on `line`.
-fn starting_on(root: &SyntaxNode, line: TextRange, kinds: &[stir_syntax::SyntaxKind]) -> Vec<SyntaxNode> {
+fn starting_on(
+    root: &SyntaxNode,
+    line: TextRange,
+    kinds: &[stir_syntax::SyntaxKind],
+) -> Vec<SyntaxNode> {
     let cover = match root.covering_element(line) {
         stir_syntax::SyntaxElement::Node(n) => n,
         stir_syntax::SyntaxElement::Token(t) => match t.parent() {
@@ -55,7 +59,15 @@ fn place(cx: &Cx<'_>, code: &str, line: TextRange) -> Option<TextRange> {
             let statements: Vec<_> = starting_on(
                 &cx.root,
                 line,
-                &[EXPR_STMT, ECHO_STMT, RETURN_STMT, IF_STMT, FOREACH_STMT, WHILE_STMT, FOR_STMT],
+                &[
+                    EXPR_STMT,
+                    ECHO_STMT,
+                    RETURN_STMT,
+                    IF_STMT,
+                    FOREACH_STMT,
+                    WHILE_STMT,
+                    FOR_STMT,
+                ],
             );
             only(statements).map(|n| n.text_range())
         }
@@ -69,17 +81,26 @@ fn place(cx: &Cx<'_>, code: &str, line: TextRange) -> Option<TextRange> {
                     let text = n.text().to_string();
                     let text = text.trim();
                     !keyword
-                        && !stir_hir::type_ref::PhpBuiltin::from_name(&text.to_ascii_lowercase())
-                            .is_some()
+                        && stir_hir::type_ref::PhpBuiltin::from_name(&text.to_ascii_lowercase())
+                            .is_none()
                         && !index.classes.contains_key(
-                            &items.scope_at(n.text_range().start()).resolve_class(text).key(),
+                            &items
+                                .scope_at(n.text_range().start())
+                                .resolve_class(text)
+                                .key(),
                         )
                 })
                 .filter(|n| {
                     n.parent().is_some_and(|p| {
                         matches!(
                             p.kind(),
-                            NAMED_TYPE | NAME_EXPR | EXTENDS_CLAUSE | IMPLEMENTS_CLAUSE | CATCH_CLAUSE | TRAIT_USE | ATTRIBUTE
+                            NAMED_TYPE
+                                | NAME_EXPR
+                                | EXTENDS_CLAUSE
+                                | IMPLEMENTS_CLAUSE
+                                | CATCH_CLAUSE
+                                | TRAIT_USE
+                                | ATTRIBUTE
                         )
                     })
                 })
@@ -88,7 +109,11 @@ fn place(cx: &Cx<'_>, code: &str, line: TextRange) -> Option<TextRange> {
             only(unknown)
         }
         codes::METHOD_NOT_FOUND => {
-            let calls = starting_on(&cx.root, line, &[METHOD_CALL_EXPR, NULLSAFE_METHOD_CALL_EXPR]);
+            let calls = starting_on(
+                &cx.root,
+                line,
+                &[METHOD_CALL_EXPR, NULLSAFE_METHOD_CALL_EXPR],
+            );
             only(calls).and_then(|c| c.children().next()?.child(NAME).map(|n| n.text_range()))
         }
         codes::STATIC_METHOD_NOT_FOUND => {
@@ -103,7 +128,11 @@ fn place(cx: &Cx<'_>, code: &str, line: TextRange) -> Option<TextRange> {
             );
             let fetches: Vec<_> = fetches
                 .into_iter()
-                .filter(|f| !f.parent().is_some_and(|p| matches!(p.kind(), METHOD_CALL_EXPR | NULLSAFE_METHOD_CALL_EXPR)))
+                .filter(|f| {
+                    !f.parent().is_some_and(|p| {
+                        matches!(p.kind(), METHOD_CALL_EXPR | NULLSAFE_METHOD_CALL_EXPR)
+                    })
+                })
                 .collect();
             only(fetches).and_then(|f| f.child(NAME).map(|n| n.text_range()))
         }

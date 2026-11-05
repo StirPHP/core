@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use ls_types::{
-    AnnotatedTextEdit, CodeAction, CodeActionKind, CodeActionDisabled, DocumentChangeOperation,
+    AnnotatedTextEdit, CodeAction, CodeActionDisabled, CodeActionKind, DocumentChangeOperation,
     DocumentChanges, OneOf, OptionalVersionedTextDocumentIdentifier, Position, TextDocumentEdit,
     TextEdit, Uri, WorkspaceEdit,
 };
@@ -89,7 +89,11 @@ pub fn workspace_edit(
 }
 
 /// Where the first file of `change` has the rename it wants, once it's been edited.
-pub fn rename_position(db: &dyn Db, change: &Change, enc: Encoding) -> Option<(SourceFile, Position)> {
+pub fn rename_position(
+    db: &dyn Db,
+    change: &Change,
+    enc: Encoding,
+) -> Option<(SourceFile, Position)> {
     let at = change.rename_at?;
     let file = change.edits.first()?.file;
     let text = super::apply(file.text(db), change, file).ok()?;

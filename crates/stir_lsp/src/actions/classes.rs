@@ -16,15 +16,14 @@ use super::{Change, Cx, FileEdit, Kind, Offer};
 pub fn offers<'c>(cx: &'c Cx<'c>, out: &mut Vec<Offer<'c>>) {
     let Some(token) = cx.here() else { return };
     let Some(parent) = token.parent() else { return };
-    let on_class_name = parent.kind() == NAME
-        && parent.parent().is_some_and(|p| p.kind() == CLASS_DECL);
+    let on_class_name =
+        parent.kind() == NAME && parent.parent().is_some_and(|p| p.kind() == CLASS_DECL);
     let on_property = token.kind() == VARIABLE && parent.kind() == PROPERTY_ELEM;
     let on_ctor = parent.kind() == NAME
         && parent.parent().is_some_and(|p| p.kind() == METHOD_DECL)
         && token.text().eq_ignore_ascii_case("__construct");
-    let on_promoted = token.kind() == VARIABLE
-        && parent.kind() == PARAM
-        && parent.child(MODIFIERS).is_some();
+    let on_promoted =
+        token.kind() == VARIABLE && parent.kind() == PARAM && parent.child(MODIFIERS).is_some();
     if on_class_name || on_property {
         let body = parent
             .ancestors()
@@ -63,9 +62,14 @@ fn modifiers_text(decl: &SyntaxNode) -> Option<String> {
     Some(
         mods.text()
             .to_string()
-            .trim()
             .split_whitespace()
-            .map(|w| if w.eq_ignore_ascii_case("var") { "public" } else { w })
+            .map(|w| {
+                if w.eq_ignore_ascii_case("var") {
+                    "public"
+                } else {
+                    w
+                }
+            })
             .collect::<Vec<_>>()
             .join(" "),
     )
@@ -115,7 +119,9 @@ fn constructor_offer<'c>(cx: &'c Cx<'c>, body: &SyntaxNode, out: &mut Vec<Offer<
             if elem.has_token(EQ) || elem.child(PROPERTY_HOOKS).is_some() {
                 continue;
             }
-            let Some(var) = elem.token(VARIABLE) else { continue };
+            let Some(var) = elem.token(VARIABLE) else {
+                continue;
+            };
             let name = var.text().to_owned();
             params.push(match &ty {
                 Some(t) => format!("{t} {name}"),
@@ -158,7 +164,10 @@ fn lone_property<'c>(
     class: &'c ClassDef,
     name: &str,
 ) -> Option<(&'c PropertyDef, SyntaxNode)> {
-    let def = class.properties.iter().find(|p| p.name == name && !p.magic)?;
+    let def = class
+        .properties
+        .iter()
+        .find(|p| p.name == name && !p.magic)?;
     let decl = body.children_of(PROPERTY_DECL).into_iter().find(|d| {
         d.children_of(PROPERTY_ELEM).iter().any(|e| {
             e.token(VARIABLE)
@@ -177,11 +186,15 @@ fn promote_offer<'c>(cx: &'c Cx<'c>, ctor: &SyntaxNode, out: &mut Vec<Offer<'c>>
     if !has(cx, v::PROMOTION) {
         return;
     }
-    let Some(block) = ctor.child(BLOCK) else { return };
+    let Some(block) = ctor.child(BLOCK) else {
+        return;
+    };
     let Some(body) = ctor.parent().filter(|p| p.kind() == CLASS_BODY) else {
         return;
     };
-    let Some(class) = class_of(cx, ctor) else { return };
+    let Some(class) = class_of(cx, ctor) else {
+        return;
+    };
     let params = ctor
         .child(PARAM_LIST)
         .map(|l| l.children_of(PARAM))
@@ -197,7 +210,9 @@ fn promote_offer<'c>(cx: &'c Cx<'c>, ctor: &SyntaxNode, out: &mut Vec<Offer<'c>>
             break;
         };
         let parts: Vec<SyntaxNode> = assign.children().collect();
-        let [left, right] = parts.as_slice() else { break };
+        let [left, right] = parts.as_slice() else {
+            break;
+        };
         if !assign.has_token(EQ) || assign.has_token(AMP) || right.kind() != VARIABLE_EXPR {
             break;
         }
@@ -206,15 +221,13 @@ fn promote_offer<'c>(cx: &'c Cx<'c>, ctor: &SyntaxNode, out: &mut Vec<Offer<'c>>
         if !is_this_fetch(left, &name) {
             break;
         }
-        let Some(param) = params.iter().find(|p| {
-            p.token(VARIABLE).is_some_and(|t| t.text() == param_name)
-        }) else {
+        let Some(param) = params
+            .iter()
+            .find(|p| p.token(VARIABLE).is_some_and(|t| t.text() == param_name))
+        else {
             break;
         };
-        if param.child(MODIFIERS).is_some()
-            || param.has_token(AMP)
-            || param.has_token(ELLIPSIS)
-        {
+        if param.child(MODIFIERS).is_some() || param.has_token(AMP) || param.has_token(ELLIPSIS) {
             break;
         }
         let Some((def, decl)) = lone_property(&body, class, &name) else {
@@ -303,14 +316,19 @@ fn removal(cx: &Cx<'_>, range: TextRange, node: &SyntaxNode, at_top: bool) -> Te
         usize::from(after.starts_with('\n'))
     };
     if blank_after > 0 && (blank_before || at_top || before.trim_end().ends_with('{')) {
-        return TextRange::new(lines.start(), lines.end() + TextSize::from(blank_after as u32));
+        return TextRange::new(
+            lines.start(),
+            lines.end() + TextSize::from(blank_after as u32),
+        );
     }
     lines
 }
 
 /// Promoted parameters back to properties and assignments.
 fn demote_offer<'c>(cx: &'c Cx<'c>, ctor: &SyntaxNode, out: &mut Vec<Offer<'c>>) {
-    let Some(block) = ctor.child(BLOCK) else { return };
+    let Some(block) = ctor.child(BLOCK) else {
+        return;
+    };
     let Some(body) = ctor.parent().filter(|p| p.kind() == CLASS_BODY) else {
         return;
     };
@@ -336,7 +354,9 @@ fn demote_offer<'c>(cx: &'c Cx<'c>, ctor: &SyntaxNode, out: &mut Vec<Offer<'c>>)
         {
             return;
         }
-        let Some(mods) = modifiers_text(p) else { return };
+        let Some(mods) = modifiers_text(p) else {
+            return;
+        };
         let Some(var) = p.token(VARIABLE) else { return };
         let Some(mods_node) = p.child(MODIFIERS) else {
             return;
@@ -368,13 +388,20 @@ fn demote_offer<'c>(cx: &'c Cx<'c>, ctor: &SyntaxNode, out: &mut Vec<Offer<'c>>)
         Some(after) => insert_property(cx, &body, Some(&after), &properties.join("\n")),
         None => insert_member(cx, &body, None, &properties.join("\n")),
     });
-    let Some(open) = block.token(L_CURLY) else { return };
-    let Some(close) = block.token(R_CURLY) else { return };
+    let Some(open) = block.token(L_CURLY) else {
+        return;
+    };
+    let Some(close) = block.token(R_CURLY) else {
+        return;
+    };
     let nl = cx.style.nl;
     let indent = body_indent(cx, &block);
     let lines: Vec<String> = assigns.iter().map(|a| format!("{indent}{a}")).collect();
     let empty = cx
-        .slice(TextRange::new(open.text_range().end(), close.text_range().start()))
+        .slice(TextRange::new(
+            open.text_range().end(),
+            close.text_range().start(),
+        ))
         .trim()
         .is_empty();
     if empty {
@@ -384,10 +411,7 @@ fn demote_offer<'c>(cx: &'c Cx<'c>, ctor: &SyntaxNode, out: &mut Vec<Offer<'c>>)
             format!("{nl}{}{nl}{closing}", lines.join(nl)),
         ));
     } else {
-        edits.push(cx.insert(
-            open.text_range().end(),
-            format!("{nl}{}", lines.join(nl)),
-        ));
+        edits.push(cx.insert(open.text_range().end(), format!("{nl}{}", lines.join(nl))));
     }
     out.push(Offer::new(
         "constructor.demote",
@@ -420,7 +444,9 @@ fn accessor_offers<'c>(
     let Some(body) = node.ancestors().find(|n| n.kind() == CLASS_BODY) else {
         return;
     };
-    let Some(class) = class_of(cx, node) else { return };
+    let Some(class) = class_of(cx, node) else {
+        return;
+    };
     if !matches!(class.kind, ClassKind::Class | ClassKind::Trait) {
         return;
     }
@@ -437,7 +463,8 @@ fn accessor_offers<'c>(
     let name = var.text().trim_start_matches('$').to_owned();
     let mods = decl.child(MODIFIERS);
     let is_static = mods.as_ref().is_some_and(|m| m.has_token(STATIC_KW));
-    let readonly = mods.as_ref().is_some_and(|m| m.has_token(READONLY_KW)) || class.mods.is_readonly;
+    let readonly =
+        mods.as_ref().is_some_and(|m| m.has_token(READONLY_KW)) || class.mods.is_readonly;
     let native_ty = written_type(&decl).map(|t| t.text().to_string().trim().to_owned());
     let doc_ty = class
         .properties
@@ -473,7 +500,11 @@ fn accessor_offers<'c>(
         let doc = doc_ty
             .as_ref()
             .and_then(|t| doc_type(&mut namer, t))
-            .filter(|d| native_ty.as_deref().is_none_or(|n| !n.eq_ignore_ascii_case(d)));
+            .filter(|d| {
+                native_ty
+                    .as_deref()
+                    .is_none_or(|n| !n.eq_ignore_ascii_case(d))
+            });
         let this = if is_static {
             format!("self::${name}")
         } else {

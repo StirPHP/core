@@ -28,7 +28,6 @@ pub(super) const KINDS: [&str; 6] = [
 /// What a client can do with code actions.
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct ActionSupport {
-    pub literals: bool,
     pub resolve: bool,
     pub disabled: bool,
     pub edits: EditSupport,
@@ -64,7 +63,6 @@ impl ActionSupport {
             .map(|c| c.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
         ActionSupport {
-            literals: code_action.is_some_and(|c| c.code_action_literal_support.is_some()),
             resolve,
             disabled: code_action.and_then(|c| c.disabled_support) == Some(true),
             edits: EditSupport {
@@ -140,12 +138,19 @@ fn rename_command(
     Some(Command {
         title: "Rename".into(),
         command: RENAME_COMMAND.into(),
-        arguments: Some(vec![json!(uri.to_string()), json!(at.line), json!(at.character)]),
+        arguments: Some(vec![
+            json!(uri.to_string()),
+            json!(at.line),
+            json!(at.character),
+        ]),
     })
 }
 
 impl Server {
-    pub(super) async fn actions(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+    pub(super) async fn actions(
+        &self,
+        params: CodeActionParams,
+    ) -> Result<Option<CodeActionResponse>> {
         let support = *self.action_support.lock().unwrap();
         let versions = self.state.lock().unwrap().open.clone();
         let enc = self.encoding();

@@ -15,10 +15,7 @@ pub fn add_tag(cx: &Cx<'_>, decl: &SyntaxNode, tag: &str) -> FileEdit {
         let indent = indent_at(cx.text, range.start());
         let text = doc.text();
         if !text.contains('\n') {
-            let inner = text
-                .trim_start_matches("/**")
-                .trim_end_matches("*/")
-                .trim();
+            let inner = text.trim_start_matches("/**").trim_end_matches("*/").trim();
             let body = if inner.is_empty() {
                 format!("/**{nl}{indent} * {tag}{nl}{indent} */")
             } else {
@@ -41,7 +38,10 @@ pub fn add_tag(cx: &Cx<'_>, decl: &SyntaxNode, tag: &str) -> FileEdit {
     let at = first_token_start(decl);
     if starts_line(cx.text, at) {
         let indent = indent_at(cx.text, at);
-        cx.insert(at, format!("/**{nl}{indent} * {tag}{nl}{indent} */{nl}{indent}"))
+        cx.insert(
+            at,
+            format!("/**{nl}{indent} * {tag}{nl}{indent} */{nl}{indent}"),
+        )
     } else {
         cx.insert(at, format!("/** {tag} */ "))
     }

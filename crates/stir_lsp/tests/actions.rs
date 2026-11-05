@@ -118,10 +118,7 @@ fn take_markers(text: &str) -> (String, TextRange) {
     let end = end.expect("a selection has an end");
     (
         out,
-        TextRange::new(
-            TextSize::from(start as u32),
-            TextSize::from(end as u32),
-        ),
+        TextRange::new(TextSize::from(start as u32), TextSize::from(end as u32)),
     )
 }
 
@@ -188,7 +185,12 @@ fn run(bench: &mut Bench, f: &Fixture) -> Result<(), String> {
         TextRange::new(shift(selection.start()), shift(selection.end()))
     };
     let db = &mut bench.db;
-    let file = SourceFile::new(db, "/src/main.php".into(), input.clone(), FileOrigin::Source);
+    let file = SourceFile::new(
+        db,
+        "/src/main.php".into(),
+        input.clone(),
+        FileOrigin::Source,
+    );
     let mut others = Vec::new();
     for (path, text) in &f.others {
         others.push(SourceFile::new(
@@ -211,11 +213,19 @@ fn run(bench: &mut Bench, f: &Fixture) -> Result<(), String> {
         .collect();
 
     let change = {
-        let cx = Cx::new(db, ws, file, selection, &[], None::<Vec<String>>.or(Some(vec![
-            "quickfix".into(),
-            "refactor".into(),
-            "source".into(),
-        ])), ClientAbilities::default());
+        let cx = Cx::new(
+            db,
+            ws,
+            file,
+            selection,
+            &[],
+            None::<Vec<String>>.or(Some(vec![
+                "quickfix".into(),
+                "refactor".into(),
+                "source".into(),
+            ])),
+            ClientAbilities::default(),
+        );
         let offers = actions::offers(&cx);
         let titles: Vec<String> = offers.iter().map(|o| o.title.clone()).collect();
         let found = offers.into_iter().find(|o| o.title == f.action);
@@ -292,7 +302,9 @@ fn run(bench: &mut Bench, f: &Fixture) -> Result<(), String> {
     if let Some(want) = &f.output {
         let want = crlf(want, f.crlf);
         if got != want {
-            return Err(format!("not as expected:\n--- got\n{got}\n--- wanted\n{want}"));
+            return Err(format!(
+                "not as expected:\n--- got\n{got}\n--- wanted\n{want}"
+            ));
         }
     }
     for (s, new) in &touched {
@@ -315,7 +327,7 @@ fn run(bench: &mut Bench, f: &Fixture) -> Result<(), String> {
             if *n > was.get(code).copied().unwrap_or(0) && !f.new.contains(code) {
                 let found: Vec<_> = stir_checker::check_file(db, ws, *s)
                     .iter()
-                    .filter(|d| &d.code == code)
+                    .filter(|d| d.code == *code)
                     .map(|d| d.message.clone())
                     .collect();
                 return Err(format!(
@@ -374,9 +386,8 @@ fn fixtures() {
         ran += 1;
         let text = std::fs::read_to_string(&path).unwrap();
         let fixture = parse_fixture(&text);
-        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run(&mut bench, &fixture)
-        }));
+        let run =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&mut bench, &fixture)));
         match run {
             Ok(Ok(())) => {}
             Ok(Err(e)) => failures.push(format!("{name}: {e}")),

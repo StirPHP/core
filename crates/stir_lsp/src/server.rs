@@ -1146,7 +1146,10 @@ impl LanguageServer for Server {
                 code_action_provider: Some(CodeActionProviderCapability::Options(
                     CodeActionOptions {
                         code_action_kinds: Some(
-                            actions::KINDS.iter().map(|k| CodeActionKind::new(k)).collect(),
+                            actions::KINDS
+                                .iter()
+                                .map(|k| CodeActionKind::new(k))
+                                .collect(),
                         ),
                         resolve_provider: Some(true),
                         ..Default::default()

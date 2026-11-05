@@ -139,7 +139,10 @@ fn class_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
     let Some(imports) = Imports::new(db, cx.file, d.range.start()) else {
         return;
     };
-    let namespace = file_items(db, cx.file).scope_at(d.range.start()).namespace.clone();
+    let namespace = file_items(db, cx.file)
+        .scope_at(d.range.start())
+        .namespace
+        .clone();
     let node = cx
         .root
         .covering_element(d.range)
@@ -160,7 +163,11 @@ fn class_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
         } else {
             last.eq_ignore_ascii_case(short)
         };
-        let typo = if same { None } else { typo_distance(short, last) };
+        let typo = if same {
+            None
+        } else {
+            typo_distance(short, last)
+        };
         if !same && typo.is_none() {
             continue;
         }
@@ -208,7 +215,11 @@ fn class_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
             ),
         };
         // the same name twice in one file: the name itself may need no change at all
-        let text = if import.is_some() { name.text.clone() } else { text };
+        let text = if import.is_some() {
+            name.text.clone()
+        } else {
+            text
+        };
         let range = d.range;
         let mut offer = Offer::new(
             format!("import.class:{}", fqn.key()),
@@ -257,7 +268,10 @@ fn function_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
     let Some(imports) = Imports::new(db, cx.file, d.range.start()) else {
         return;
     };
-    let namespace = file_items(db, cx.file).scope_at(d.range.start()).namespace.clone();
+    let namespace = file_items(db, cx.file)
+        .scope_at(d.range.start())
+        .namespace
+        .clone();
     let bare = written.trim_start_matches('\\');
     let short = bare.rsplit('\\').next().unwrap_or(bare);
     let mut exact = Vec::new();
@@ -266,7 +280,11 @@ fn function_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
         let Some(loc) = locs.first() else { continue };
         let last = key.rsplit('\\').next().unwrap_or(key);
         let same = last.eq_ignore_ascii_case(short);
-        let typo = if same { None } else { typo_distance(short, last) };
+        let typo = if same {
+            None
+        } else {
+            typo_distance(short, last)
+        };
         if !same && typo.is_none() {
             continue;
         }
@@ -345,7 +363,11 @@ fn constant_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
         let Some(loc) = locs.first() else { continue };
         let last = key.rsplit('\\').next().unwrap_or(key);
         let same = last == short;
-        let typo = if same { None } else { typo_distance(short, last) };
+        let typo = if same {
+            None
+        } else {
+            typo_distance(short, last)
+        };
         if !same && typo.is_none() {
             continue;
         }
@@ -479,7 +501,9 @@ fn member_typo<'c>(cx: &'c Cx<'c>, d: &Found, method: bool, out: &mut Vec<Offer<
                 .children()
                 .filter(|c| matches!(c.kind(), ARG | NAMED_ARG))
                 .collect();
-            let spread = all.iter().any(|a| a.children_with_tokens().any(|e| e.kind() == ELLIPSIS));
+            let spread = all
+                .iter()
+                .any(|a| a.children_with_tokens().any(|e| e.kind() == ELLIPSIS));
             (all.len(), spread)
         });
     let mut found = Vec::new();
@@ -503,7 +527,11 @@ fn member_typo<'c>(cx: &'c Cx<'c>, d: &Found, method: bool, out: &mut Vec<Offer<
             continue;
         }
         if let (MemberTy::Method(sig), Some((count, false))) = (&m.ty, passed) {
-            let required = sig.params.iter().filter(|p| !p.optional && !p.variadic).count();
+            let required = sig
+                .params
+                .iter()
+                .filter(|p| !p.optional && !p.variadic)
+                .count();
             let variadic = sig.params.iter().any(|p| p.variadic);
             if count < required || (!variadic && count > sig.params.len()) {
                 continue;

@@ -49,10 +49,7 @@ pub fn offers<'c>(cx: &'c Cx<'c>, out: &mut Vec<Offer<'c>>) {
     let Some(selection) = read_selection(cx) else {
         return;
     };
-    let in_class = selection
-        .anchor
-        .ancestors()
-        .any(|n| n.kind() == CLASS_BODY);
+    let in_class = selection.anchor.ancestors().any(|n| n.kind() == CLASS_BODY);
     let title = if in_class {
         "Extract method"
     } else {
@@ -86,18 +83,25 @@ fn only_trivia_between(cx: &Cx<'_>, from: TextSize, to: TextSize) -> bool {
         return true;
     }
     let range = TextRange::new(from, to);
-    let tokens = cx.root.descendants_with_tokens().filter_map(|e| e.into_token());
+    let tokens = cx
+        .root
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token());
     tokens
-        .filter(|t| t.text_range().intersect(range).is_some_and(|r| !r.is_empty()))
+        .filter(|t| {
+            t.text_range()
+                .intersect(range)
+                .is_some_and(|r| !r.is_empty())
+        })
         .all(|t| t.kind().is_trivia())
 }
 
 fn read_selection(cx: &Cx<'_>) -> Option<Selection> {
     if let Some(expr) = expression_at(cx, cx.range) {
         // a statement is what's meant if it's all there's to it
-        let whole_statement = expr.parent().is_some_and(|p| {
-            p.kind() == EXPR_STMT && trimmed_node(&p).end() == cx.range.end()
-        });
+        let whole_statement = expr
+            .parent()
+            .is_some_and(|p| p.kind() == EXPR_STMT && trimmed_node(&p).end() == cx.range.end());
         if !whole_statement {
             return Some(Selection {
                 anchor: expr.clone(),
@@ -143,12 +147,37 @@ fn read_selection(cx: &Cx<'_>) -> Option<Selection> {
 fn is_statement_node(kind: stir_syntax::SyntaxKind) -> bool {
     matches!(
         kind,
-        EXPR_STMT | ECHO_STMT | RETURN_STMT | IF_STMT | WHILE_STMT | DO_WHILE_STMT | FOR_STMT
-            | FOREACH_STMT | SWITCH_STMT | BREAK_STMT | CONTINUE_STMT | TRY_STMT | GLOBAL_STMT
-            | STATIC_VAR_STMT | UNSET_STMT | GOTO_STMT | LABEL_STMT | EMPTY_STMT
-            | INLINE_HTML_STMT | ECHO_TAG_STMT | FUNCTION_DECL | CLASS_DECL | INTERFACE_DECL
-            | TRAIT_DECL | ENUM_DECL | DECLARE_STMT | CONST_DECL | BLOCK | USE_DECL
-            | NAMESPACE_DECL | HALT_COMPILER_STMT
+        EXPR_STMT
+            | ECHO_STMT
+            | RETURN_STMT
+            | IF_STMT
+            | WHILE_STMT
+            | DO_WHILE_STMT
+            | FOR_STMT
+            | FOREACH_STMT
+            | SWITCH_STMT
+            | BREAK_STMT
+            | CONTINUE_STMT
+            | TRY_STMT
+            | GLOBAL_STMT
+            | STATIC_VAR_STMT
+            | UNSET_STMT
+            | GOTO_STMT
+            | LABEL_STMT
+            | EMPTY_STMT
+            | INLINE_HTML_STMT
+            | ECHO_TAG_STMT
+            | FUNCTION_DECL
+            | CLASS_DECL
+            | INTERFACE_DECL
+            | TRAIT_DECL
+            | ENUM_DECL
+            | DECLARE_STMT
+            | CONST_DECL
+            | BLOCK
+            | USE_DECL
+            | NAMESPACE_DECL
+            | HALT_COMPILER_STMT
     )
 }
 
@@ -160,7 +189,6 @@ struct Event {
     writes: bool,
     /// It might not run.
     conditional: bool,
-    range: TextRange,
 }
 
 /// What it needs known of the selection, in a walk over it in the order it runs.
@@ -175,8 +203,15 @@ struct Walk<'a, 'c> {
 fn is_superglobal(name: &str) -> bool {
     matches!(
         name,
-        "$GLOBALS" | "$_SERVER" | "$_GET" | "$_POST" | "$_FILES" | "$_COOKIE" | "$_SESSION"
-            | "$_REQUEST" | "$_ENV"
+        "$GLOBALS"
+            | "$_SERVER"
+            | "$_GET"
+            | "$_POST"
+            | "$_FILES"
+            | "$_COOKIE"
+            | "$_SESSION"
+            | "$_REQUEST"
+            | "$_ENV"
     )
 }
 
@@ -201,7 +236,6 @@ impl Walk<'_, '_> {
             reads,
             writes,
             conditional,
-            range: token.text_range(),
         });
     }
 
@@ -266,13 +300,18 @@ impl Walk<'_, '_> {
             }
             GOTO_STMT | LABEL_STMT => self.refuse("It has a `goto` or a label."),
             GLOBAL_STMT => self.refuse("It has a `global`, whose variables go with this function."),
-            STATIC_VAR_STMT => self.refuse("It has a `static` variable, which goes with this function."),
+            STATIC_VAR_STMT => {
+                self.refuse("It has a `static` variable, which goes with this function.")
+            }
             INLINE_HTML_STMT | ECHO_TAG_STMT => self.refuse("It has HTML in it."),
             EVAL_EXPR | INCLUDE_EXPR => {
                 self.refuse("It has an `eval` or an `include`, which see all the variables.");
             }
             MAGIC_CONST => {
-                if node.has_token(FUNCTION_C_KW) || node.has_token(METHOD_C_KW) || node.has_token(LINE_KW) {
+                if node.has_token(FUNCTION_C_KW)
+                    || node.has_token(METHOD_C_KW)
+                    || node.has_token(LINE_KW)
+                {
                     self.refuse("It has `__FUNCTION__`, `__METHOD__` or `__LINE__`, whose values would change.");
                 }
             }
@@ -283,10 +322,19 @@ impl Walk<'_, '_> {
                     let lower = name.trim().trim_start_matches('\\').to_ascii_lowercase();
                     if matches!(
                         lower.as_str(),
-                        "compact" | "extract" | "get_defined_vars" | "parse_str" | "mb_parse_str"
-                            | "func_get_args" | "func_get_arg" | "func_num_args"
+                        "compact"
+                            | "extract"
+                            | "get_defined_vars"
+                            | "parse_str"
+                            | "mb_parse_str"
+                            | "func_get_args"
+                            | "func_get_arg"
+                            | "func_num_args"
                     ) {
-                        self.refuse(format!("It calls `{}`, which reaches this function's variables or arguments.", name.trim()));
+                        self.refuse(format!(
+                            "It calls `{}`, which reaches this function's variables or arguments.",
+                            name.trim()
+                        ));
                         return;
                     }
                 }
@@ -322,9 +370,7 @@ impl Walk<'_, '_> {
                 // `$x` for a parameter that may be by reference may be written
                 let value = node.children().filter(|c| c.kind() != NAME).last();
                 let Some(value) = value else { return };
-                if matches!(value.kind(), VARIABLE_EXPR | INDEX_EXPR)
-                    && !by_value(self.cx, node)
-                {
+                if matches!(value.kind(), VARIABLE_EXPR | INDEX_EXPR) && !by_value(self.cx, node) {
                     self.target(&value, conditional, true);
                 } else {
                     self.walk(&value, conditional);
@@ -380,9 +426,9 @@ impl Walk<'_, '_> {
                 }
             }
             BIN_EXPR => {
-                let lazy = node.children_with_tokens().any(|e| {
-                    matches!(e.kind(), AMP2 | PIPE2 | AND_KW | OR_KW | QUESTION2)
-                });
+                let lazy = node
+                    .children_with_tokens()
+                    .any(|e| matches!(e.kind(), AMP2 | PIPE2 | AND_KW | OR_KW | QUESTION2));
                 let mut first = true;
                 for c in node.children() {
                     self.walk(&c, conditional || (lazy && !first));
@@ -406,7 +452,8 @@ impl Walk<'_, '_> {
                 let is_static = node.has_token(STATIC_KW);
                 if !is_static
                     && node.descendants_with_tokens().any(|e| {
-                        e.as_token().is_some_and(|t| t.kind() == VARIABLE && t.text() == "$this")
+                        e.as_token()
+                            .is_some_and(|t| t.kind() == VARIABLE && t.text() == "$this")
                     })
                 {
                     self.uses_this = true;
@@ -432,7 +479,14 @@ impl Walk<'_, '_> {
                             .collect()
                     })
                     .unwrap_or_default();
-                let body = node.children().filter(|c| c.kind() != PARAM_LIST && !stir_hir::is_type_node(c.kind()) && c.kind() != RETURN_TYPE).last();
+                let body = node
+                    .children()
+                    .filter(|c| {
+                        c.kind() != PARAM_LIST
+                            && !stir_hir::is_type_node(c.kind())
+                            && c.kind() != RETURN_TYPE
+                    })
+                    .last();
                 let Some(body) = body else { return };
                 for t in body
                     .descendants_with_tokens()
@@ -506,16 +560,23 @@ struct Output {
 }
 
 /// Every occurrence of variables in `function` outside `range`, by name.
-fn outside_occurrences(function: &SyntaxNode, range: TextRange) -> FxHashMap<String, Vec<TextRange>> {
+fn outside_occurrences(
+    function: &SyntaxNode,
+    range: TextRange,
+) -> FxHashMap<String, Vec<TextRange>> {
     let mut out: FxHashMap<String, Vec<TextRange>> = FxHashMap::default();
     let mut stack = vec![function.clone()];
     while let Some(node) = stack.pop() {
         for element in node.children_with_tokens() {
             match element {
                 stir_syntax::SyntaxElement::Token(t) => {
-                    let property = t.parent().is_some_and(|p| p.kind() == STATIC_PROPERTY_FETCH_EXPR);
+                    let property = t
+                        .parent()
+                        .is_some_and(|p| p.kind() == STATIC_PROPERTY_FETCH_EXPR);
                     if t.kind() == VARIABLE && !property && !range.contains_range(t.text_range()) {
-                        out.entry(t.text().to_owned()).or_default().push(t.text_range());
+                        out.entry(t.text().to_owned())
+                            .or_default()
+                            .push(t.text_range());
                     }
                 }
                 stir_syntax::SyntaxElement::Node(n) => {
@@ -546,21 +607,16 @@ fn tied_up(function: &SyntaxNode, name: &str) -> bool {
             .descendants_with_tokens()
             .filter_map(|e| e.into_token())
             .any(|t| t.kind() == VARIABLE && t.text() == name),
-        CLOSURE_USE_VAR if n.has_token(AMP) => {
-            n.token(VARIABLE).is_some_and(|t| t.text() == name)
-        }
+        CLOSURE_USE_VAR if n.has_token(AMP) => n.token(VARIABLE).is_some_and(|t| t.text() == name),
         GLOBAL_STMT | STATIC_VAR_STMT => n
             .descendants_with_tokens()
             .filter_map(|e| e.into_token())
             .any(|t| t.kind() == VARIABLE && t.text() == name),
-        FOREACH_STMT if n.has_token(AMP) => n
-            .children()
-            .filter(|c| c.kind() != BLOCK)
-            .any(|c| {
-                c.descendants_with_tokens()
-                    .filter_map(|e| e.into_token())
-                    .any(|t| t.kind() == VARIABLE && t.text() == name)
-            }),
+        FOREACH_STMT if n.has_token(AMP) => n.children().filter(|c| c.kind() != BLOCK).any(|c| {
+            c.descendants_with_tokens()
+                .filter_map(|e| e.into_token())
+                .any(|t| t.kind() == VARIABLE && t.text() == name)
+        }),
         ARRAY_ELEM if n.has_token(AMP) => n
             .descendants_with_tokens()
             .filter_map(|e| e.into_token())
@@ -574,7 +630,12 @@ fn outer_loop(node: &SyntaxNode, function: &SyntaxNode) -> Option<SyntaxNode> {
     node.ancestors()
         .skip(1)
         .take_while(|a| a != function)
-        .filter(|a| matches!(a.kind(), WHILE_STMT | DO_WHILE_STMT | FOR_STMT | FOREACH_STMT))
+        .filter(|a| {
+            matches!(
+                a.kind(),
+                WHILE_STMT | DO_WHILE_STMT | FOR_STMT | FOREACH_STMT
+            )
+        })
         .last()
 }
 
@@ -606,8 +667,14 @@ fn defined_on_every_path(
 ) -> bool {
     let start = selection.range.start();
     if let Some(f) = function {
-        let params = f.child(PARAM_LIST).map(|l| l.children_of(PARAM)).unwrap_or_default();
-        if params.iter().any(|p| p.token(VARIABLE).is_some_and(|t| t.text() == name)) {
+        let params = f
+            .child(PARAM_LIST)
+            .map(|l| l.children_of(PARAM))
+            .unwrap_or_default();
+        if params
+            .iter()
+            .any(|p| p.token(VARIABLE).is_some_and(|t| t.text() == name))
+        {
             return true;
         }
         if f.child(CLOSURE_USE).is_some_and(|u| {
@@ -647,9 +714,10 @@ fn defined_on_every_path(
                         break;
                     }
                     let sets = earlier.kind() == EXPR_STMT
-                        && earlier.children().next().is_some_and(|e| {
-                            writes_directly(&e, name) && e.kind() == ASSIGN_EXPR
-                        });
+                        && earlier
+                            .children()
+                            .next()
+                            .is_some_and(|e| writes_directly(&e, name) && e.kind() == ASSIGN_EXPR);
                     if sets {
                         return true;
                     }
@@ -692,10 +760,7 @@ fn input_type(
         .into_iter()
         .find(|p| p.token(VARIABLE).is_some_and(|t| t.text() == name));
     if let Some(param) = param {
-        if !writes_before.is_empty()
-            || param.has_token(ELLIPSIS)
-            || param.has_token(AMP)
-        {
+        if !writes_before.is_empty() || param.has_token(ELLIPSIS) || param.has_token(AMP) {
             // what's in a variadic is an array of those
             return None;
         }
@@ -711,21 +776,12 @@ fn input_type(
     // `$x = ...;` as a statement of a list that the selection is further on in
     let statement = only.parent().filter(|s| s.kind() == EXPR_STMT)?;
     let list = statement.parent()?;
-    if !is_statement_list(list.kind())
-        || !selection
-            .anchor
-            .ancestors()
-            .any(|a| a == list)
-    {
+    if !is_statement_list(list.kind()) || !selection.anchor.ancestors().any(|a| a == list) {
         return None;
     }
     let value = only.children().nth(1)?;
     let ty = cx.typed().types.get(&value.text_range())?;
     written_of(cx, namer, ty)
-}
-
-fn native_of(cx: &Cx<'_>, namer: &mut Namer<'_>, ty: &Ty) -> Option<String> {
-    written_of(cx, namer, ty).map(|w| w.0)
 }
 
 /// The native type of a value of `ty`, and what PHPDoc can say better of it.
@@ -764,7 +820,9 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
     let function = nav::enclosing_function(anchor);
     if let Some(f) = &function {
         if matches!(f.kind(), CLOSURE_EXPR | ARROW_FN_EXPR) {
-            return Err("It's in a closure, whose `$this` and variables aren't the method's.".into());
+            return Err(
+                "It's in a closure, whose `$this` and variables aren't the method's.".into(),
+            );
         }
         // in a nested function in a method, there's no class to speak of
         if f.kind() == FUNCTION_DECL && anchor.ancestors().any(|n| n.kind() == CLASS_BODY) {
@@ -773,7 +831,11 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
         if f.has_token(AMP) {
             return Err("The function around it returns by reference.".into());
         }
-        if anchor.ancestors().take_while(|a| a != f).any(|a| a.kind() == PARAM) {
+        if anchor
+            .ancestors()
+            .take_while(|a| a != f)
+            .any(|a| a.kind() == PARAM)
+        {
             return Err("It's a parameter's default, which has to be constant.".into());
         }
     }
@@ -803,8 +865,14 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
         if expr.ancestors().skip(1).any(|a| {
             matches!(
                 a.kind(),
-                ISSET_EXPR | EMPTY_EXPR | UNSET_STMT | LIST_EXPR | INTERP_STRING | HEREDOC
-                    | INTERP_EXPR | SHELL_EXEC
+                ISSET_EXPR
+                    | EMPTY_EXPR
+                    | UNSET_STMT
+                    | LIST_EXPR
+                    | INTERP_STRING
+                    | HEREDOC
+                    | INTERP_EXPR
+                    | SHELL_EXEC
             )
         }) {
             return Err("What's around it treats it differently from a value.".into());
@@ -834,7 +902,10 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
         if jumps_out(node, 0) {
             return Err("It has a `break` or `continue` of a loop outside it.".into());
         }
-        if node.descendants().any(|n| n.kind() == LABEL_STMT || n.kind() == GOTO_STMT) {
+        if node
+            .descendants()
+            .any(|n| n.kind() == LABEL_STMT || n.kind() == GOTO_STMT)
+        {
             return Err("It has a `goto` or a label.".into());
         }
     }
@@ -867,7 +938,9 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
     let mut outputs = Vec::new();
     for name in &order {
         if tied_up(&scope, name) {
-            return Err(format!("`{name}` has a reference to it, or is `global` or `static`, so it can't be followed."));
+            return Err(format!(
+                "`{name}` has a reference to it, or is `global` or `static`, so it can't be followed."
+            ));
         }
         let occurs = outside.get(name.as_str());
         let before = occurs.is_some_and(|o| o.iter().any(|r| r.start() < start));
@@ -884,19 +957,25 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
         let needs = needs_value.get(name.as_str()).copied().unwrap_or(false);
         let is_definite = definite.get(name.as_str()).copied().unwrap_or(false);
         if needs && !before && around_loop.is_some() && writes {
-            return Err(format!("`{name}` carries over from one time around the loop to the next."));
+            return Err(format!(
+                "`{name}` carries over from one time around the loop to the next."
+            ));
         }
         let output = writes && after;
         if selection.expression && output {
             return Err(format!("It assigns `{name}`, which is used elsewhere."));
         }
         if output && !is_definite && !before {
-            return Err(format!("`{name}` is only set on some paths, and is used afterwards."));
+            return Err(format!(
+                "`{name}` is only set on some paths, and is used afterwards."
+            ));
         }
         if (needs && before) || (output && !is_definite && before) {
             // passing what might not be set is a warning where reading it wasn't
             if !defined_on_every_path(&scope, function.as_ref(), name, selection) {
-                return Err(format!("`{name}` might not be set by the time it gets here."));
+                return Err(format!(
+                    "`{name}` might not be set by the time it gets here."
+                ));
             }
             let (ty, doc) = input_type(cx, &mut namer, function.as_ref(), name, selection)
                 .map_or((None, None), |(t, d)| (Some(t), d));
@@ -921,13 +1000,10 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
     let returns: Vec<SyntaxNode> = selection
         .nodes
         .iter()
-        .flat_map(|n| {
-            std::iter::once(n.clone()).chain(super::fix_types::own_nodes(n))
-        })
+        .flat_map(|n| std::iter::once(n.clone()).chain(super::fix_types::own_nodes(n)))
         .filter(|n| n.kind() == RETURN_STMT)
         .collect();
-    let leaves = !selection.expression
-        && selection.nodes.iter().any(always_leaves);
+    let leaves = !selection.expression && selection.nodes.iter().any(always_leaves);
     let mut returning = Returning::No;
     if !returns.is_empty() {
         if !leaves {
@@ -936,7 +1012,10 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
         if !outputs.is_empty() {
             return Err("It has a `return`, and sets variables used afterwards.".into());
         }
-        let valued = returns.iter().filter(|r| r.children().next().is_some()).count();
+        let valued = returns
+            .iter()
+            .filter(|r| r.children().next().is_some())
+            .count();
         returning = if valued == returns.len() {
             Returning::Value
         } else if valued == 0 {
@@ -960,7 +1039,11 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
                 let typed = cx.typed();
                 let mut types = Vec::new();
                 for r in &returns {
-                    match r.children().next().and_then(|v| typed.types.get(&v.text_range())) {
+                    match r
+                        .children()
+                        .next()
+                        .and_then(|v| typed.types.get(&v.text_range()))
+                    {
                         Some(t) if !t.is_untyped() && !t.contains_error() => types.push(t.clone()),
                         _ => {
                             types.clear();
@@ -968,7 +1051,8 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
                         }
                     }
                 }
-                let ty = (!types.is_empty()).then(|| Ty::union(types.iter().map(stir_checker::widen_literals)));
+                let ty = (!types.is_empty())
+                    .then(|| Ty::union(types.iter().map(stir_checker::widen_literals)));
                 match ty.and_then(|t| written_of(cx, &mut namer, &t)) {
                     Some((t, doc)) => (Some(t), doc),
                     None => (None, None),
@@ -1028,10 +1112,11 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
                     && a.children().next().is_some_and(|t| {
                         t.kind() == PROPERTY_FETCH_EXPR
                             && t.name_text().is_some_and(|name| {
-                                class.mods.is_readonly || class
-                                    .properties
-                                    .iter()
-                                    .any(|p| p.name == name && p.mods.is_readonly)
+                                class.mods.is_readonly
+                                    || class
+                                        .properties
+                                        .iter()
+                                        .any(|p| p.name == name && p.mods.is_readonly)
                                     || class.methods.iter().any(|m| {
                                         m.sig.params.iter().any(|p| {
                                             p.name == name
@@ -1048,7 +1133,10 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
     }
     let in_class = anchor.ancestors().any(|n| n.kind() == CLASS_BODY);
     let name = if in_class {
-        unique_method_name(cx, class_of(cx, anchor).ok_or("It isn't in a class this knows.")?)
+        unique_method_name(
+            cx,
+            class_of(cx, anchor).ok_or("It isn't in a class this knows.")?,
+        )
     } else {
         unique_function_name(cx, start)
     };
@@ -1080,16 +1168,30 @@ fn return_tag(function: &SyntaxNode) -> Option<String> {
     let tags: Vec<String> = doc
         .text()
         .lines()
-        .map(|l| l.trim().trim_start_matches("/**").trim_start_matches('*').trim().trim_end_matches("*/").trim().to_owned())
+        .map(|l| {
+            l.trim()
+                .trim_start_matches("/**")
+                .trim_start_matches('*')
+                .trim()
+                .trim_end_matches("*/")
+                .trim()
+                .to_owned()
+        })
         .filter(|l| {
-            l.starts_with("@return ") || l.starts_with("@phpstan-return ") || l.starts_with("@psalm-return ")
+            l.starts_with("@return ")
+                || l.starts_with("@phpstan-return ")
+                || l.starts_with("@psalm-return ")
         })
         .collect();
     match tags.as_slice() {
         [] => None,
         // the more particular wins, as PHPStan has it
         [one] => Some(one.clone()),
-        many => many.iter().find(|t| t.starts_with("@phpstan-")).or(many.first()).cloned(),
+        many => many
+            .iter()
+            .find(|t| t.starts_with("@phpstan-"))
+            .or(many.first())
+            .cloned(),
     }
 }
 
@@ -1111,7 +1213,10 @@ fn output_type(
     };
     if only.kind() != ASSIGN_EXPR
         || !only.has_token(EQ)
-        || only.children().next().is_none_or(|t| t.kind() != VARIABLE_EXPR)
+        || only
+            .children()
+            .next()
+            .is_none_or(|t| t.kind() != VARIABLE_EXPR)
     {
         return None;
     }
@@ -1132,9 +1237,8 @@ fn unique_method_name(cx: &Cx<'_>, class: &ClassDef) -> String {
             return true;
         }
         all_subtypes(cx.db, cx.ws, &key).iter().any(|sub| {
-            crate::hierarchy::class_def(cx.db, cx.ws, sub).is_some_and(|(_, c)| {
-                c.methods.iter().any(|m| m.name.eq_ignore_ascii_case(name))
-            })
+            crate::hierarchy::class_def(cx.db, cx.ws, sub)
+                .is_some_and(|(_, c)| c.methods.iter().any(|m| m.name.eq_ignore_ascii_case(name)))
         })
     };
     let mut name = BASE_NAME.to_owned();
@@ -1189,9 +1293,7 @@ fn build(cx: &Cx<'_>, selection: &Selection, plan: Plan) -> Result<Change, Refus
         (call.clone(), receiver.len())
     } else {
         match plan.returning {
-            Returning::Value => {
-                (format!("return {call};"), "return ".len() + receiver.len())
-            }
+            Returning::Value => (format!("return {call};"), "return ".len() + receiver.len()),
             Returning::Bare => (
                 format!("{call};{nl}{statement_indent}return;"),
                 receiver.len(),
@@ -1231,7 +1333,7 @@ fn build(cx: &Cx<'_>, selection: &Selection, plan: Plan) -> Result<Change, Refus
             format!("@return {d}")
         });
     }
-    let (decl_indent, insert): (String, Box<dyn Fn(&str) -> FileEdit>) = if in_class {
+    let (decl_indent, insert): (String, Inserter<'_>) = if in_class {
         let body = anchor
             .ancestors()
             .find(|n| n.kind() == CLASS_BODY)
@@ -1257,12 +1359,10 @@ fn build(cx: &Cx<'_>, selection: &Selection, plan: Plan) -> Result<Change, Refus
         };
         (
             indent,
-            Box::new(move |text: &str| {
-                FileEdit {
-                    file: cx.file,
-                    range: TextRange::empty(at),
-                    text: format!("{nl}{nl}{text}"),
-                }
+            Box::new(move |text: &str| FileEdit {
+                file: cx.file,
+                range: TextRange::empty(at),
+                text: format!("{nl}{nl}{text}"),
             }),
         )
     };
@@ -1331,6 +1431,9 @@ fn build(cx: &Cx<'_>, selection: &Selection, plan: Plan) -> Result<Change, Refus
     change.rename_at = u32::try_from(name_offset).ok().map(TextSize::from);
     Ok(change)
 }
+
+/// What puts the new declaration in its place.
+type Inserter<'a> = Box<dyn Fn(&str) -> FileEdit + 'a>;
 
 /// Where a new function goes for code outside functions: at the end of its namespace.
 fn end_of_region(cx: &Cx<'_>, at: TextSize) -> (TextSize, String) {

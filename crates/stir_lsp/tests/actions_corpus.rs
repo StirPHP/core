@@ -86,10 +86,15 @@ fn explained(tag: &str, code: &str) -> bool {
         "import.class" | "typo.class" | "import.function" | "typo.function" | "import.const"
         | "typo.const" => true,
         "signature.add" => code == "constant.notFound" || code.starts_with("missingType."),
-        "create.method" | "create.property" | "accessor.get" | "accessor.set" | "accessor.both"
-        | "extract.function" | "override" | "implement" | "constructor.generate" => {
-            code.starts_with("missingType.")
-        }
+        "create.method"
+        | "create.property"
+        | "accessor.get"
+        | "accessor.set"
+        | "accessor.both"
+        | "extract.function"
+        | "override"
+        | "implement"
+        | "constructor.generate" => code.starts_with("missingType."),
         _ => false,
     }
 }
@@ -127,7 +132,15 @@ fn try_at(
     run.warm_time.add(warm.elapsed());
     let start = Instant::now();
     let chosen: Vec<(String, String, Kind)> = {
-        let cx = Cx::new(db, ws, file, range, &[], only.clone(), ClientAbilities::default());
+        let cx = Cx::new(
+            db,
+            ws,
+            file,
+            range,
+            &[],
+            only.clone(),
+            ClientAbilities::default(),
+        );
         let offers = actions::offers(&cx);
         run.offers_time.add(start.elapsed());
         let mut chosen = Vec::new();
@@ -147,14 +160,22 @@ fn try_at(
         if t.starts_with("ignore") && run.tally[&t].applied > 300 {
             continue;
         }
-        let cap = if t.starts_with("signature") { run.cap.min(25) } else { run.cap };
+        let cap = if t.starts_with("signature") {
+            run.cap.min(25)
+        } else {
+            run.cap
+        };
         if run.tally[&t].applied + run.tally[&t].build_failed >= cap || run.tried >= run.max_tried {
             continue;
         }
         run.tried += 1;
         // what takes the workspace waits for it to be checked, which an editor has done meanwhile
         if t.starts_with("signature") {
-            for f in ws.files(db).iter().filter(|f| f.origin(db) == FileOrigin::Source) {
+            for f in ws
+                .files(db)
+                .iter()
+                .filter(|f| f.origin(db) == FileOrigin::Source)
+            {
                 let _ = stir_lsp::nav::file_refs(db, ws, *f);
             }
         }
@@ -172,13 +193,20 @@ fn try_at(
             actions::resolve(&cx, &id)
         };
         run.build_time.add(start.elapsed());
-        run.by_tag_time.entry(t.clone()).or_default().add(start.elapsed());
+        run.by_tag_time
+            .entry(t.clone())
+            .or_default()
+            .add(start.elapsed());
         let change = match change {
             Ok(c) => c,
             Err(reason) => {
                 let tally = run.tally.get_mut(&t).unwrap();
                 if t.starts_with("signature") && tally.build_failed < 15 {
-                    let _ = writeln!(run.report, "REFUSED {} [{title}]: {reason}", file.path(db).display());
+                    let _ = writeln!(
+                        run.report,
+                        "REFUSED {} [{title}]: {reason}",
+                        file.path(db).display()
+                    );
                 }
                 if reason.contains("syntax errors") || reason.contains("overlap") {
                     tally.no_parse += 1;
@@ -220,7 +248,7 @@ fn try_at(
                 if *n > had && !explained(&t, code) {
                     let messages: Vec<String> = stir_checker::check_file(db, ws, *f)
                         .iter()
-                        .filter(|d| &d.code == code)
+                        .filter(|d| d.code == *code)
                         .take(2)
                         .map(|d| d.message.clone())
                         .collect();
@@ -277,8 +305,17 @@ fn sample_places(root: &SyntaxNode, rng: &mut Rng, per_file: usize) -> Vec<TextR
 fn is_statement(n: &SyntaxNode) -> bool {
     matches!(
         n.kind(),
-        EXPR_STMT | ECHO_STMT | RETURN_STMT | IF_STMT | WHILE_STMT | DO_WHILE_STMT | FOR_STMT
-            | FOREACH_STMT | SWITCH_STMT | TRY_STMT | UNSET_STMT
+        EXPR_STMT
+            | ECHO_STMT
+            | RETURN_STMT
+            | IF_STMT
+            | WHILE_STMT
+            | DO_WHILE_STMT
+            | FOR_STMT
+            | FOREACH_STMT
+            | SWITCH_STMT
+            | TRY_STMT
+            | UNSET_STMT
     )
 }
 
@@ -300,9 +337,9 @@ fn sample_selections(root: &SyntaxNode, rng: &mut Rng, per_file: usize) -> Vec<T
         .descendants()
         .filter(|n| {
             n.kind() == BLOCK
-                && n.ancestors().skip(1).any(|a| {
-                    matches!(a.kind(), METHOD_DECL | FUNCTION_DECL)
-                })
+                && n.ancestors()
+                    .skip(1)
+                    .any(|a| matches!(a.kind(), METHOD_DECL | FUNCTION_DECL))
         })
         .collect();
     let exprs: Vec<SyntaxNode> = root
@@ -310,8 +347,15 @@ fn sample_selections(root: &SyntaxNode, rng: &mut Rng, per_file: usize) -> Vec<T
         .filter(|n| {
             matches!(
                 n.kind(),
-                METHOD_CALL_EXPR | CALL_EXPR | BIN_EXPR | STATIC_CALL_EXPR | PROPERTY_FETCH_EXPR
-                    | NEW_EXPR | ARRAY_EXPR | CLOSURE_EXPR | MATCH_EXPR
+                METHOD_CALL_EXPR
+                    | CALL_EXPR
+                    | BIN_EXPR
+                    | STATIC_CALL_EXPR
+                    | PROPERTY_FETCH_EXPR
+                    | NEW_EXPR
+                    | ARRAY_EXPR
+                    | CLOSURE_EXPR
+                    | MATCH_EXPR
             )
         })
         .collect();
@@ -391,7 +435,11 @@ async fn run_project(dir: &Path, report_path: Option<&Path>) {
         tried: 0,
         max_tried: env_number("ACTIONS_MAX", 20000),
     };
-    let all_kinds = Some(vec!["quickfix".to_owned(), "refactor".to_owned(), "source".to_owned()]);
+    let all_kinds = Some(vec![
+        "quickfix".to_owned(),
+        "refactor".to_owned(),
+        "source".to_owned(),
+    ]);
     let began = Instant::now();
     if let Ok(at) = std::env::var("ACTIONS_RANGE") {
         let (a, b) = at.split_once("..").expect("start..end");
@@ -413,7 +461,14 @@ async fn run_project(dir: &Path, report_path: Option<&Path>) {
             .take(12)
             .collect();
         for range in diags {
-            try_at(&mut db, ws, file, range, Some(vec!["quickfix".to_owned()]), &mut run);
+            try_at(
+                &mut db,
+                ws,
+                file,
+                range,
+                Some(vec!["quickfix".to_owned()]),
+                &mut run,
+            );
         }
         let root = stir_db::parse(&db, file).syntax();
         for range in sample_places(&root, &mut rng, per_file) {
@@ -432,10 +487,18 @@ async fn run_project(dir: &Path, report_path: Option<&Path>) {
             &mut run,
         );
         if i % 50 == 49 {
-            println!("  {} files, {:?}, {} applied", i + 1, began.elapsed(), run.tried);
+            println!(
+                "  {} files, {:?}, {} applied",
+                i + 1,
+                began.elapsed(),
+                run.tried
+            );
         }
     }
-    println!("{:<28} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}", "action", "offered", "refused", "applied", "failed", "noparse", "newerr");
+    println!(
+        "{:<28} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}",
+        "action", "offered", "refused", "applied", "failed", "noparse", "newerr"
+    );
     let (mut applied, mut no_parse, mut new_errors) = (0, 0, 0);
     for (tag, t) in &run.tally {
         println!(
@@ -448,10 +511,14 @@ async fn run_project(dir: &Path, report_path: Option<&Path>) {
     }
     println!("total: {applied} applied, {no_parse} didn't parse, {new_errors} with new errors");
     println!("offers, on a checked file: {}", run.offers_time.summary());
-    println!("checking the file first, after the last action was undone: {}", run.warm_time.summary());
+    println!(
+        "checking the file first, after the last action was undone: {}",
+        run.warm_time.summary()
+    );
     println!("resolve: {}", run.build_time.summary());
     for (tag, times) in &mut run.by_tag_time {
-        if tag.starts_with("signature") || tag.starts_with("extract") || tag.starts_with("imports") {
+        if tag.starts_with("signature") || tag.starts_with("extract") || tag.starts_with("imports")
+        {
             println!("  resolve {tag}: {}", times.summary());
         }
     }

@@ -148,7 +148,9 @@ fn override_attribute_offer<'c>(cx: &'c Cx<'c>, out: &mut Vec<Offer<'c>>) {
         return;
     }
     let reported = cx.found().into_iter().find(|f| f.code == MISSING_OVERRIDE);
-    let at = reported.as_ref().map_or(cx.range.start(), |f| f.range.start());
+    let at = reported
+        .as_ref()
+        .map_or(cx.range.start(), |f| f.range.start());
     let Some(token) = cx.token_at(at) else { return };
     let Some(name) = token.parent().filter(|p| p.kind() == NAME) else {
         return;
@@ -199,7 +201,5 @@ fn has_override(cx: &Cx<'_>, method: &SyntaxNode) -> bool {
     list.descendants()
         .filter(|n| n.kind() == ATTRIBUTE)
         .filter_map(|a| a.child(NAME_REF))
-        .any(|n| {
-            scope.resolve_class(n.text().to_string().trim()).key() == "override"
-        })
+        .any(|n| scope.resolve_class(n.text().to_string().trim()).key() == "override")
 }

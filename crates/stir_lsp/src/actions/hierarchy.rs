@@ -82,9 +82,7 @@ pub fn family<'c>(cx: &Cx<'c>, class: &str, name: &str) -> Vec<Member<'c>> {
             let member = declared(cx, &other, &lower);
             let counts = member.as_ref().is_some_and(|m| {
                 m.method.mods.visibility != Visibility::Private
-                    && (lower != "__construct"
-                        || m.method.mods.is_abstract
-                        || !m.method.has_body)
+                    && (lower != "__construct" || m.method.mods.is_abstract || !m.method.has_body)
             });
             if counts {
                 out.extend(member);
@@ -107,7 +105,10 @@ pub fn class_of<'c>(cx: &Cx<'c>, node: &SyntaxNode) -> Option<&'c stir_hir::Clas
 }
 
 /// The declared method a `METHOD_DECL` is.
-pub fn method_of<'c>(cx: &Cx<'c>, node: &SyntaxNode) -> Option<(&'c stir_hir::ClassDef, &'c MethodDef)> {
+pub fn method_of<'c>(
+    cx: &Cx<'c>,
+    node: &SyntaxNode,
+) -> Option<(&'c stir_hir::ClassDef, &'c MethodDef)> {
     let class = class_of(cx, node)?;
     let range = node.text_range();
     let method = class.methods.iter().find(|m| m.ptr.text_range() == range)?;

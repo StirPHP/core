@@ -102,7 +102,12 @@ pub struct Written {
 }
 
 /// One part of a native type, without what can't stand alone.
-fn native_member(cx: &Cx<'_>, namer: &mut Namer<'_>, ty: &Ty, parts: &mut Vec<String>) -> Option<bool> {
+fn native_member(
+    cx: &Cx<'_>,
+    namer: &mut Namer<'_>,
+    ty: &Ty,
+    parts: &mut Vec<String>,
+) -> Option<bool> {
     let mut push = |s: String| {
         if !parts.contains(&s) {
             parts.push(s);
@@ -154,8 +159,10 @@ fn native_member(cx: &Cx<'_>, namer: &mut Namer<'_>, ty: &Ty, parts: &mut Vec<St
         }
         TyKind::Array { key, value, .. } => {
             push("array".into());
-            lossy = !(matches!(value.kind(), TyKind::Mixed | TyKind::Untyped | TyKind::Error)
-                && matches!(key.kind(), TyKind::ArrayKey));
+            lossy = !(matches!(
+                value.kind(),
+                TyKind::Mixed | TyKind::Untyped | TyKind::Error
+            ) && matches!(key.kind(), TyKind::ArrayKey));
         }
         TyKind::List { .. } | TyKind::Shape(_) => {
             push("array".into());
@@ -197,13 +204,14 @@ fn native_member(cx: &Cx<'_>, namer: &mut Namer<'_>, ty: &Ty, parts: &mut Vec<St
 /// Is `name` one a class can be written by?
 fn is_class_name(name: &str) -> bool {
     !name.is_empty()
-        && name
-            .trim_start_matches('\\')
-            .split('\\')
-            .all(|part| {
-                part.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_' || !c.is_ascii())
-                    && part.chars().all(|c| c.is_alphanumeric() || c == '_' || !c.is_ascii())
-            })
+        && name.trim_start_matches('\\').split('\\').all(|part| {
+            part.chars()
+                .next()
+                .is_some_and(|c| c.is_alphabetic() || c == '_' || !c.is_ascii())
+                && part
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || !c.is_ascii())
+        })
 }
 
 /// `ty` as a native type on the file's versions, if there's one, for a value of that type.
@@ -305,7 +313,11 @@ pub fn doc_type(namer: &mut Namer<'_>, ty: &Ty) -> Option<String> {
             value,
             non_empty,
         } => {
-            let word = if *non_empty { "non-empty-array" } else { "array" };
+            let word = if *non_empty {
+                "non-empty-array"
+            } else {
+                "array"
+            };
             let value = doc_type(namer, value)?;
             if matches!(key.kind(), TyKind::ArrayKey) {
                 Some(format!("{word}<{value}>"))
@@ -319,9 +331,10 @@ pub fn doc_type(namer: &mut Namer<'_>, ty: &Ty) -> Option<String> {
         }
         TyKind::Shape(shape) => {
             let mut fields = Vec::new();
-            let positional = shape.fields.iter().enumerate().all(|(i, f)| {
-                !f.optional && matches!(&f.key, ShapeKey::Int(k) if *k == i as i64)
-            });
+            let positional =
+                shape.fields.iter().enumerate().all(|(i, f)| {
+                    !f.optional && matches!(&f.key, ShapeKey::Int(k) if *k == i as i64)
+                });
             for f in &shape.fields {
                 if positional {
                     fields.push(doc_type(namer, &f.ty)?);
@@ -366,7 +379,11 @@ pub fn doc_type(namer: &mut Namer<'_>, ty: &Ty) -> Option<String> {
                 });
             }
             let ret = doc_type(namer, &sig.ret)?;
-            let ret = if ret.contains('|') { format!("({ret})") } else { ret };
+            let ret = if ret.contains('|') {
+                format!("({ret})")
+            } else {
+                ret
+            };
             Some(format!("{word}({}): {ret}", params.join(", ")))
         }
         TyKind::Class { name, args } => {
@@ -411,14 +428,12 @@ pub fn doc_type(namer: &mut Namer<'_>, ty: &Ty) -> Option<String> {
 /// A native type as a declaration has it, to be written elsewhere: names are complete in it.
 /// `owner` is the class it's declared in, for `self`; `parent` the class's parent.
 pub fn written_ref(
-    cx: &Cx<'_>,
     namer: &mut Namer<'_>,
     ty: &TypeRef,
     owner: Option<&str>,
     parent: Option<&str>,
 ) -> Option<String> {
     fn go(
-        cx: &Cx<'_>,
         namer: &mut Namer<'_>,
         ty: &TypeRef,
         owner: Option<&str>,
@@ -446,13 +461,13 @@ pub fn written_ref(
             },
             TypeRefKind::Named(fqn, args) if args.is_empty() => namer.class(fqn.as_str()),
             TypeRefKind::Nullable(inner) => {
-                let inner = go(cx, namer, inner, owner, parent)?;
+                let inner = go(namer, inner, owner, parent)?;
                 format!("?{inner}")
             }
             TypeRefKind::Union(parts) => {
                 let mut out = Vec::new();
                 for p in parts {
-                    let text = go(cx, namer, p, owner, parent)?;
+                    let text = go(namer, p, owner, parent)?;
                     out.push(if matches!(p.kind, TypeRefKind::Intersection(_)) {
                         format!("({text})")
                     } else {
@@ -464,12 +479,12 @@ pub fn written_ref(
             TypeRefKind::Intersection(parts) => {
                 let mut out = Vec::new();
                 for p in parts {
-                    out.push(go(cx, namer, p, owner, parent)?);
+                    out.push(go(namer, p, owner, parent)?);
                 }
                 out.join("&")
             }
             _ => return None,
         })
     }
-    go(cx, namer, ty, owner, parent)
+    go(namer, ty, owner, parent)
 }

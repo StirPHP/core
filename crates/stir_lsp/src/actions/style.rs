@@ -80,7 +80,8 @@ mod tests {
 
     #[test]
     fn reads_the_style_of_a_file() {
-        let s = Style::of("<?php\r\nclass A {\r\n\tfunction f() {\r\n\t\treturn 1;\r\n\t}\r\n}\r\n");
+        let s =
+            Style::of("<?php\r\nclass A {\r\n\tfunction f() {\r\n\t\treturn 1;\r\n\t}\r\n}\r\n");
         assert_eq!(s.nl, "\r\n");
         assert_eq!(s.unit, "\t");
         let s = Style::of("<?php\nclass A {\n  /**\n   * doc\n   */\n  function f() {}\n}\n");

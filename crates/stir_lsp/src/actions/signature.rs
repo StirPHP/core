@@ -141,7 +141,9 @@ fn param_offers<'c>(
     out: &mut Vec<Offer<'c>>,
 ) {
     let params = params_of(function);
-    let Some(name) = param_name(param) else { return };
+    let Some(name) = param_name(param) else {
+        return;
+    };
     let at = function.text_range().start();
     // unused here is a start: the others are looked at when it's chosen
     let used_here = function.child(BLOCK).is_some_and(|b| {
@@ -156,9 +158,7 @@ fn param_offers<'c>(
                 format!("signature.remove:{index}"),
                 format!("Remove unused parameter `{name}`"),
                 Kind::RefactorRewrite,
-                move || {
-                    change_signature(cx.db, cx.ws, cx.file, at, Rewrite::Remove(index))
-                },
+                move || change_signature(cx.db, cx.ws, cx.file, at, Rewrite::Remove(index)),
             )
             .costly(),
         );
@@ -225,7 +225,12 @@ struct Decl {
     class_key: Option<smol_str::SmolStr>,
 }
 
-fn parsed_node(db: &dyn Db, file: SourceFile, range: TextRange, kinds: &[stir_syntax::SyntaxKind]) -> Option<SyntaxNode> {
+fn parsed_node(
+    db: &dyn Db,
+    file: SourceFile,
+    range: TextRange,
+    kinds: &[stir_syntax::SyntaxKind],
+) -> Option<SyntaxNode> {
     let root = stir_db::parse(db, file).syntax();
     if !root.text_range().contains_range(range) {
         return None;
@@ -240,9 +245,10 @@ fn location(db: &dyn Db, file: SourceFile, at: TextSize) -> String {
     let text = file.text(db);
     let line = text[..usize::from(at)].matches('\n').count() + 1;
     let path = file.path(db);
-    let shown = path
-        .file_name()
-        .map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+    let shown = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
     format!("{shown}:{line}")
 }
 
@@ -285,7 +291,15 @@ fn family(
         }]);
     }
     // through the checker's view of the class
-    let cx = Cx::new(db, ws, file, function.text_range(), &[], None, Default::default());
+    let cx = Cx::new(
+        db,
+        ws,
+        file,
+        function.text_range(),
+        &[],
+        None,
+        Default::default(),
+    );
     let (class, method) = method_of(&cx, function)?;
     let mut out = Vec::new();
     for member in hierarchy::family(&cx, &class.name.key(), &method.name) {
@@ -296,9 +310,16 @@ fn family(
             ));
             continue;
         }
-        let Some(node) = parsed_node(db, member.file, member.method.ptr.text_range(), &[METHOD_DECL])
-        else {
-            blockers.add(format!("`{}`'s declaration can't be found", member.class.name.as_str()));
+        let Some(node) = parsed_node(
+            db,
+            member.file,
+            member.method.ptr.text_range(),
+            &[METHOD_DECL],
+        ) else {
+            blockers.add(format!(
+                "`{}`'s declaration can't be found",
+                member.class.name.as_str()
+            ));
             continue;
         };
         out.push(Decl {
@@ -312,7 +333,10 @@ fn family(
 
 /// The argument list and call a resolved name at `range` of `file` is the name of, if it's a call.
 enum Site {
-    Call { node: SyntaxNode, args: SyntaxNode },
+    Call {
+        node: SyntaxNode,
+        args: SyntaxNode,
+    },
     /// Not a call: the declaration, say, or a type.
     Other,
     /// Something that calls it, that can't be changed: this says what.
@@ -320,17 +344,22 @@ enum Site {
 }
 
 fn site_at(root: &SyntaxNode, range: TextRange) -> Site {
-    let Some(node) = root
-        .covering_element(range)
-        .into_node()
-        .or_else(|| root.token_at_offset(range.start()).right_biased().and_then(|t| t.parent()))
-    else {
+    let Some(node) = root.covering_element(range).into_node().or_else(|| {
+        root.token_at_offset(range.start())
+            .right_biased()
+            .and_then(|t| t.parent())
+    }) else {
         return Site::Other;
     };
     let mut at = Some(node);
     while let Some(n) = at {
         match n.kind() {
-            CALL_EXPR | METHOD_CALL_EXPR | NULLSAFE_METHOD_CALL_EXPR | STATIC_CALL_EXPR | NEW_EXPR | ATTRIBUTE => {
+            CALL_EXPR
+            | METHOD_CALL_EXPR
+            | NULLSAFE_METHOD_CALL_EXPR
+            | STATIC_CALL_EXPR
+            | NEW_EXPR
+            | ATTRIBUTE => {
                 let Some(args) = n.child(ARG_LIST) else {
                     // `new Foo` with no parentheses, `#[Foo]`
                     return if matches!(n.kind(), NEW_EXPR | ATTRIBUTE) {
@@ -340,7 +369,10 @@ fn site_at(root: &SyntaxNode, range: TextRange) -> Site {
                     };
                 };
                 if args.children().any(|a| a.kind() == CALLABLE_PLACEHOLDER)
-                    || args.descendants().take(4).any(|a| a.kind() == CALLABLE_PLACEHOLDER)
+                    || args
+                        .descendants()
+                        .take(4)
+                        .any(|a| a.kind() == CALLABLE_PLACEHOLDER)
                 {
                     return Site::Unfollowable("it's taken as a callable (`foo(...)`)".to_owned());
                 }
@@ -349,7 +381,11 @@ fn site_at(root: &SyntaxNode, range: TextRange) -> Site {
                     args,
                 };
             }
-            NAME | NAME_REF | NAME_EXPR | PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR
+            NAME
+            | NAME_REF
+            | NAME_EXPR
+            | PROPERTY_FETCH_EXPR
+            | NULLSAFE_PROPERTY_FETCH_EXPR
             | CLASS_CONST_FETCH_EXPR => {
                 at = n.parent();
             }
@@ -387,9 +423,7 @@ fn list_item_removal(list: &SyntaxNode, item: &SyntaxNode) -> TextRange {
     }
     // the last: back over the comma before it
     let before = siblings[..at].iter().rev().find(|e| e.kind() == COMMA);
-    let trailing = siblings
-        .get(at + 1)
-        .is_some_and(|e| e.kind() == COMMA);
+    let trailing = siblings.get(at + 1).is_some_and(|e| e.kind() == COMMA);
     match (before, trailing) {
         (Some(_), true) => {
             // leave its comma, which ends what's before it now
@@ -408,13 +442,20 @@ fn add_edit(edits: &mut Vec<FileEdit>, file: SourceFile, range: TextRange, text:
 }
 
 /// The edit that drops the line of `$name` from a doc comment.
-fn doc_tag_removal(db: &dyn Db, file: SourceFile, function: &SyntaxNode, name: &str) -> Option<TextRange> {
+fn doc_tag_removal(
+    db: &dyn Db,
+    file: SourceFile,
+    function: &SyntaxNode,
+    name: &str,
+) -> Option<TextRange> {
     let doc = function.doc_comment()?;
     let text = doc.text();
     let range = doc.text_range();
     let is_tag = |line: &str| {
         let line = line.trim_start_matches([' ', '\t', '*', '/']);
-        (line.starts_with("@param") || line.starts_with("@phpstan-param") || line.starts_with("@psalm-param"))
+        (line.starts_with("@param")
+            || line.starts_with("@phpstan-param")
+            || line.starts_with("@psalm-param"))
             && line
                 .split(|c: char| c.is_whitespace())
                 .any(|w| w == name || w == format!("...{name}") || w == format!("&{name}"))
@@ -429,7 +470,11 @@ fn doc_tag_removal(db: &dyn Db, file: SourceFile, function: &SyntaxNode, name: &
             let before = &source[usize::from(line)..usize::from(range.start())];
             if before.trim().is_empty() && rest.trim().is_empty() {
                 let after = &source[usize::from(end)..];
-                let ending = if after.starts_with("\r\n") { 2 } else { u32::from(after.starts_with('\n')) };
+                let ending = if after.starts_with("\r\n") {
+                    2
+                } else {
+                    u32::from(after.starts_with('\n'))
+                };
                 let indent = before.len() as u32;
                 return Some(TextRange::new(
                     range.start(),
@@ -468,7 +513,11 @@ fn calls(
     if function.kind() == FUNCTION_DECL {
         let items = file_items(db, file);
         let range = function.text_range();
-        if let Some(i) = items.functions.iter().position(|f| f.ptr.text_range() == range) {
+        if let Some(i) = items
+            .functions
+            .iter()
+            .position(|f| f.ptr.text_range() == range)
+        {
             defs.push(Def::Function(stir_hir::ItemLoc {
                 file,
                 index: i as u32,
@@ -483,7 +532,10 @@ fn calls(
                 name: smol_str::SmolStr::new(&name),
             });
             if let Some((_, c)) = class_def(db, ws, key)
-                && let Some(m) = c.methods.iter().find(|m| m.name.eq_ignore_ascii_case(&name))
+                && let Some(m) = c
+                    .methods
+                    .iter()
+                    .find(|m| m.name.eq_ignore_ascii_case(&name))
             {
                 defs.push(Def::Member {
                     class: key.clone(),
@@ -495,8 +547,11 @@ fn calls(
                 defs.push(Def::Class(key.clone()));
                 // what's made through a subclass with no constructor of its own
                 for sub in all_subtypes(db, ws, key) {
-                    let own = class_def(db, ws, &sub)
-                        .is_some_and(|(_, c)| c.methods.iter().any(|m| m.name.eq_ignore_ascii_case("__construct")));
+                    let own = class_def(db, ws, &sub).is_some_and(|(_, c)| {
+                        c.methods
+                            .iter()
+                            .any(|m| m.name.eq_ignore_ascii_case("__construct"))
+                    });
                     if !own {
                         defs.push(Def::Class(sub));
                     }
@@ -540,7 +595,8 @@ fn calls(
             match site_at(&root, *range) {
                 Site::Call { node, args } => {
                     // a class named as what's created, or as an attribute: anything else isn't this
-                    if matches!(def, Def::Class(_)) && !matches!(node.kind(), NEW_EXPR | ATTRIBUTE) {
+                    if matches!(def, Def::Class(_)) && !matches!(node.kind(), NEW_EXPR | ATTRIBUTE)
+                    {
                         continue;
                     }
                     if !out.iter().any(|(g, n, _)| *g == f && *n == node) {
@@ -554,7 +610,16 @@ fn calls(
             }
         }
         // what names it another way
-        look_for_unresolved(db, f, &root, &refs.iter().map(|(r, _)| *r).collect::<Vec<_>>(), &name, lower_short, function.kind() == METHOD_DECL && !is_ctor, blockers);
+        look_for_unresolved(
+            db,
+            f,
+            &root,
+            &refs.iter().map(|(r, _)| *r).collect::<Vec<_>>(),
+            &name,
+            lower_short,
+            function.kind() == METHOD_DECL && !is_ctor,
+            blockers,
+        );
         if is_ctor {
             constructor_extras(db, ws, f, &root, decls, &mut out, blockers);
         }
@@ -592,7 +657,8 @@ fn look_for_unresolved(
                     continue;
                 };
                 let written = n.text().to_string();
-                if written.trim().eq_ignore_ascii_case(lower) && !resolved.contains(&n.text_range()) {
+                if written.trim().eq_ignore_ascii_case(lower) && !resolved.contains(&n.text_range())
+                {
                     blockers.add(format!(
                         "`{}` at {} might be a call of it, and what it's called on isn't known",
                         written.trim(),
@@ -614,27 +680,47 @@ fn look_for_unresolved(
             }
             CALL_EXPR => {
                 let callee = node.children().next().map(|c| c.text().to_string());
-                let callee = callee.as_deref().map(|c| c.trim().trim_start_matches('\\').to_ascii_lowercase());
+                let callee = callee
+                    .as_deref()
+                    .map(|c| c.trim().trim_start_matches('\\').to_ascii_lowercase());
                 let takes_callable = callee.is_some_and(|c| {
                     matches!(
                         c.as_str(),
-                        "call_user_func" | "call_user_func_array" | "array_map" | "array_filter"
-                            | "array_walk" | "usort" | "uasort" | "uksort" | "array_reduce"
-                            | "is_callable" | "function_exists" | "method_exists"
-                            | "forward_static_call" | "forward_static_call_array"
-                            | "register_shutdown_function" | "spl_autoload_register"
+                        "call_user_func"
+                            | "call_user_func_array"
+                            | "array_map"
+                            | "array_filter"
+                            | "array_walk"
+                            | "usort"
+                            | "uasort"
+                            | "uksort"
+                            | "array_reduce"
+                            | "is_callable"
+                            | "function_exists"
+                            | "method_exists"
+                            | "forward_static_call"
+                            | "forward_static_call_array"
+                            | "register_shutdown_function"
+                            | "spl_autoload_register"
                     )
                 });
                 if !takes_callable {
                     continue;
                 }
-                let Some(args) = node.child(ARG_LIST) else { continue };
+                let Some(args) = node.child(ARG_LIST) else {
+                    continue;
+                };
                 for arg in args_of(&args) {
                     let Some(value) = string_value(&arg) else {
                         continue;
                     };
                     let last = value.rsplit("::").next().unwrap_or(&value);
-                    if last.rsplit('\\').next().unwrap_or(last).eq_ignore_ascii_case(name) {
+                    if last
+                        .rsplit('\\')
+                        .next()
+                        .unwrap_or(last)
+                        .eq_ignore_ascii_case(name)
+                    {
                         blockers.add(format!(
                             "a string at {} might be a callable of it",
                             location(db, file, arg.text_range().start())
@@ -677,10 +763,9 @@ fn constructor_extras(
     let items = file_items(db, file);
     let concerned = |key: &str| {
         decls.iter().any(|d| {
-            d.class_key.as_deref().is_some_and(|k| {
-                k == key
-                    || all_subtypes(db, ws, k).iter().any(|s| s == key)
-            })
+            d.class_key
+                .as_deref()
+                .is_some_and(|k| k == key || all_subtypes(db, ws, k).iter().any(|s| s == key))
         })
     };
     for node in root.descendants() {
@@ -691,7 +776,10 @@ fn constructor_extras(
                 };
                 let name = extends.text().to_string();
                 let word = name.split_whitespace().last().unwrap_or_default();
-                let key = items.scope_at(node.text_range().start()).resolve_class(word).key();
+                let key = items
+                    .scope_at(node.text_range().start())
+                    .resolve_class(word)
+                    .key();
                 if decls.iter().any(|d| d.class_key.as_deref() == Some(&key)) {
                     blockers.add(format!(
                         "an anonymous class at {} extends it",
@@ -708,7 +796,11 @@ fn constructor_extras(
                 if !matches!(lower.as_str(), "self" | "static" | "parent") {
                     continue;
                 }
-                let Some(owner) = node.ancestors().find(|a| a.kind() == CLASS_BODY).and_then(|b| b.parent()) else {
+                let Some(owner) = node
+                    .ancestors()
+                    .find(|a| a.kind() == CLASS_BODY)
+                    .and_then(|b| b.parent())
+                else {
                     continue;
                 };
                 let range = owner.text_range();
@@ -719,10 +811,10 @@ fn constructor_extras(
                 if !concerned(&class.name.key()) {
                     continue;
                 }
-                if let Some(args) = node.child(ARG_LIST) {
-                    if !out.iter().any(|(f, n, _)| *f == file && *n == node) {
-                        out.push((file, node.clone(), args));
-                    }
+                if let Some(args) = node.child(ARG_LIST)
+                    && !out.iter().any(|(f, n, _)| *f == file && *n == node)
+                {
+                    out.push((file, node.clone(), args));
                 }
             }
             _ => {}
@@ -762,17 +854,30 @@ fn add_parameter(
     let source = format!("<?php function f({}) {{}}", parameter.declared.trim());
     let parse = stir_syntax::parse(&source);
     if !parse.errors().is_empty() {
-        return Err(format!("`{}` isn't a parameter.", parameter.declared.trim()));
+        return Err(format!(
+            "`{}` isn't a parameter.",
+            parameter.declared.trim()
+        ));
     }
     let root = parse.syntax();
     let params: Vec<SyntaxNode> = root.descendants().filter(|n| n.kind() == PARAM).collect();
     let [param] = params.as_slice() else {
-        return Err(format!("`{}` isn't one parameter.", parameter.declared.trim()));
+        return Err(format!(
+            "`{}` isn't one parameter.",
+            parameter.declared.trim()
+        ));
     };
     if param.child(MODIFIERS).is_some() || param.has_token(ELLIPSIS) || param.has_token(AMP) {
-        return Err("A new parameter can't be promoted, variadic or by reference: add it, then change it.".into());
+        return Err(
+            "A new parameter can't be promoted, variadic or by reference: add it, then change it."
+                .into(),
+        );
     }
-    let name = param.token(VARIABLE).ok_or("It has no name.")?.text().to_owned();
+    let name = param
+        .token(VARIABLE)
+        .ok_or("It has no name.")?
+        .text()
+        .to_owned();
     if name == "$this" {
         return Err("A parameter can't be `$this`.".into());
     }
@@ -790,9 +895,7 @@ fn add_parameter(
     // at the end, ahead of a variadic and, without a default, of any that have one
     let index = params_now
         .iter()
-        .position(|p| {
-            p.has_token(ELLIPSIS) || (!has_default && is_optional(p))
-        })
+        .position(|p| p.has_token(ELLIPSIS) || (!has_default && is_optional(p)))
         .unwrap_or(params_now.len());
     let passed = (!has_default).then(|| {
         parameter
@@ -861,7 +964,8 @@ fn change_signature(
     let function = find_function(db, file, at)?;
     let mut blockers = Blockers(Vec::new());
     let name = function.name_text().unwrap_or_default();
-    let decls = family(db, ws, file, &function, &mut blockers).ok_or("It isn't a method this knows.")?;
+    let decls =
+        family(db, ws, file, &function, &mut blockers).ok_or("It isn't a method this knows.")?;
     let is_ctor = name.eq_ignore_ascii_case("__construct");
     if is_ctor
         && decls.iter().any(|d| {
@@ -885,7 +989,10 @@ fn change_signature(
                     continue;
                 };
                 if param.child(MODIFIERS).is_some() {
-                    blockers.add(format!("in `{}` it's a promoted property", display_decl(decl)));
+                    blockers.add(format!(
+                        "in `{}` it's a promoted property",
+                        display_decl(decl)
+                    ));
                     continue;
                 }
                 let pname = param_name(param).unwrap_or_default();
@@ -902,7 +1009,12 @@ fn change_signature(
                 let Some(list) = decl.node.child(PARAM_LIST) else {
                     continue;
                 };
-                add_edit(&mut edits, decl.file, list_item_removal(&list, param), String::new());
+                add_edit(
+                    &mut edits,
+                    decl.file,
+                    list_item_removal(&list, param),
+                    String::new(),
+                );
                 if let Some(tag) = doc_tag_removal(db, decl.file, &decl.node, &pname) {
                     add_edit(&mut edits, decl.file, tag, String::new());
                 }
@@ -912,8 +1024,14 @@ fn change_signature(
                     blockers.add(format!("`{}` has fewer parameters", display_decl(decl)));
                     continue;
                 };
-                if a.has_token(ELLIPSIS) || b.has_token(ELLIPSIS) || is_optional(a) != is_optional(b) {
-                    blockers.add(format!("in `{}` they can't change places", display_decl(decl)));
+                if a.has_token(ELLIPSIS)
+                    || b.has_token(ELLIPSIS)
+                    || is_optional(a) != is_optional(b)
+                {
+                    blockers.add(format!(
+                        "in `{}` they can't change places",
+                        display_decl(decl)
+                    ));
                     continue;
                 }
                 let (ra, rb) = (trimmed_node(a), trimmed_node(b));
@@ -931,7 +1049,10 @@ fn change_signature(
                     .iter()
                     .any(|p| param_name(p).as_deref() == Some(new_name.as_str()))
                 {
-                    blockers.add(format!("`{}` already has a `{new_name}`", display_decl(decl)));
+                    blockers.add(format!(
+                        "`{}` already has a `{new_name}`",
+                        display_decl(decl)
+                    ));
                     continue;
                 }
                 let body_uses = decl.node.child(BLOCK).is_some_and(|b| {
@@ -940,10 +1061,17 @@ fn change_signature(
                         .any(|t| t.kind() == VARIABLE && t.text() == new_name.as_str())
                 });
                 if body_uses {
-                    blockers.add(format!("`{}` already has a variable `{new_name}`", display_decl(decl)));
+                    blockers.add(format!(
+                        "`{}` already has a variable `{new_name}`",
+                        display_decl(decl)
+                    ));
                     continue;
                 }
-                let written = if decl.file == file { declared } else { complete };
+                let written = if decl.file == file {
+                    declared
+                } else {
+                    complete
+                };
                 let Some(list) = decl.node.child(PARAM_LIST) else {
                     continue;
                 };
@@ -954,7 +1082,12 @@ fn change_signature(
                 {
                     index_here = params.len() - 1;
                 }
-                add_edit(&mut edits, decl.file, insertion_point(&list, &params, index_here), insertion_text(text, &params, index_here, written));
+                add_edit(
+                    &mut edits,
+                    decl.file,
+                    insertion_point(&list, &params, index_here),
+                    insertion_text(text, &params, index_here, written),
+                );
             }
         }
     }
@@ -962,7 +1095,16 @@ fn change_signature(
     let found = calls(db, ws, file, &decls, &function, &mut blockers);
     for (f, call, args) in found {
         // the declaration's own recursion is a call like any other
-        rewrite_call(db, f, &call, &args, &rewrite, &decls, &mut edits, &mut blockers);
+        rewrite_call(
+            db,
+            f,
+            &call,
+            &args,
+            &rewrite,
+            &decls,
+            &mut edits,
+            &mut blockers,
+        );
     }
     blockers.check()?;
     // the edits of removing an argument and of a call inside it would overlap
@@ -993,10 +1135,9 @@ fn insertion_point(list: &SyntaxNode, params: &[SyntaxNode], index: usize) -> Te
         let end = trimmed_node(last).end();
         return TextRange::empty(end);
     }
-    let open = list.token(L_PAREN).map_or_else(
-        || list.text_range().start(),
-        |t| t.text_range().end(),
-    );
+    let open = list
+        .token(L_PAREN)
+        .map_or_else(|| list.text_range().start(), |t| t.text_range().end());
     TextRange::empty(open)
 }
 
@@ -1060,8 +1201,7 @@ fn rewrite_call(
             let target = args
                 .iter()
                 .find(|a| {
-                    a.kind() == NAMED_ARG
-                        && a.name_text().is_some_and(|n| names.contains(&n))
+                    a.kind() == NAMED_ARG && a.name_text().is_some_and(|n| names.contains(&n))
                 })
                 .or_else(|| {
                     args.get(*i)

@@ -110,7 +110,10 @@ fn regions(root: &SyntaxNode) -> Vec<Region> {
         out.push(Region { range, uses });
     };
     let namespaces = root.children_of(NAMESPACE_DECL);
-    let unbraced: Vec<&SyntaxNode> = namespaces.iter().filter(|n| n.child(BLOCK).is_none()).collect();
+    let unbraced: Vec<&SyntaxNode> = namespaces
+        .iter()
+        .filter(|n| n.child(BLOCK).is_none())
+        .collect();
     for ns in &namespaces {
         if let Some(block) = ns.child(BLOCK) {
             read(&block, block.text_range(), &mut out);
@@ -141,7 +144,10 @@ fn has_word(text: &str, word: &str) -> bool {
     while let Some(at) = rest.find(word) {
         let start = offset + at;
         let end = start + word.len();
-        let before_ok = text[..start].chars().next_back().is_none_or(|c| !is_part(c));
+        let before_ok = text[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !is_part(c));
         let after_ok = text[end..].chars().next().is_none_or(|c| !is_part(c));
         if before_ok && after_ok {
             return true;
@@ -264,8 +270,16 @@ fn trimmed(db: &dyn Db, file: SourceFile, range: TextRange) -> TextRange {
 }
 
 /// The edits that leave `stmt` without the clauses in `gone`.
-fn without_clauses(cx: &Cx<'_>, stmt: &UseStmt, gone: &FxHashSet<TextRange>, out: &mut Vec<FileEdit>) {
-    let all = stmt.clauses.iter().all(|c| gone.contains(&c.node.text_range()));
+fn without_clauses(
+    cx: &Cx<'_>,
+    stmt: &UseStmt,
+    gone: &FxHashSet<TextRange>,
+    out: &mut Vec<FileEdit>,
+) {
+    let all = stmt
+        .clauses
+        .iter()
+        .all(|c| gone.contains(&c.node.text_range()));
     if all {
         out.push(cx.edit(whole_lines(cx, stmt.core), ""));
         return;
@@ -299,9 +313,9 @@ fn with_a_comma(
         .position(|e| e.as_node() == Some(clause))
         .unwrap_or(0);
     let next = siblings.get(at + 1);
-    let later_stays = siblings[at + 1..].iter().any(|e| {
-        e.kind() == USE_CLAUSE && !gone.contains(&e.text_range())
-    });
+    let later_stays = siblings[at + 1..]
+        .iter()
+        .any(|e| e.kind() == USE_CLAUSE && !gone.contains(&e.text_range()));
     if let Some(comma) = next.filter(|e| e.kind() == COMMA)
         && later_stays
     {
@@ -387,7 +401,11 @@ fn removal_edits(cx: &Cx<'_>, gone: &FxHashSet<TextRange>) -> Vec<FileEdit> {
     let mut edits = Vec::new();
     for region in regions(&cx.root) {
         for stmt in &region.uses {
-            if stmt.clauses.iter().any(|c| gone.contains(&c.node.text_range())) {
+            if stmt
+                .clauses
+                .iter()
+                .any(|c| gone.contains(&c.node.text_range()))
+            {
                 without_clauses(cx, stmt, gone, &mut edits);
             }
         }
@@ -403,10 +421,13 @@ struct Run<'r> {
 fn runs<'r>(cx: &Cx<'_>, region: &'r Region) -> Vec<Run<'r>> {
     let mut out: Vec<Run<'r>> = Vec::new();
     for stmt in &region.uses {
-        let joins = out.last().and_then(|run| run.stmts.last()).is_some_and(|last| {
-            let gap = TextRange::new(last.core.end(), stmt.core.start());
-            only_trivia(cx, gap)
-        });
+        let joins = out
+            .last()
+            .and_then(|run| run.stmts.last())
+            .is_some_and(|last| {
+                let gap = TextRange::new(last.core.end(), stmt.core.start());
+                only_trivia(cx, gap)
+            });
         if joins {
             if let Some(run) = out.last_mut() {
                 run.stmts.push(stmt);
@@ -477,7 +498,10 @@ fn organize_run(cx: &Cx<'_>, run: &Run<'_>, gone: &FxHashSet<TextRange>) -> Opti
                 let line_end = imports::line_end(cx.text, after);
                 let rest = cx.slice(TextRange::new(after, line_end));
                 let comment = rest.trim_start();
-                if comment.starts_with("//") || comment.starts_with('#') || comment.starts_with("/*") {
+                if comment.starts_with("//")
+                    || comment.starts_with('#')
+                    || comment.starts_with("/*")
+                {
                     end_of_run = line_end;
                     rest.trim_end().len()
                 } else {

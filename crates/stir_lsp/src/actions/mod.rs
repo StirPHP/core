@@ -18,16 +18,16 @@ use stir_syntax::{SyntaxKind, SyntaxNode, SyntaxToken, TextRange, TextSize};
 mod classes;
 mod docs;
 mod extract;
-mod flow;
 mod fix_members;
-mod foreign;
-mod hierarchy;
 mod fix_names;
 mod fix_types;
+mod flow;
+mod foreign;
+mod hierarchy;
 mod members;
 mod organize;
-mod reindent;
 pub mod protocol;
+mod reindent;
 mod signature;
 mod style;
 mod suppress;
@@ -259,7 +259,8 @@ impl<'c> Cx<'c> {
         };
         let name = kind.as_str();
         only.iter().any(|o| {
-            name == o || (name.starts_with(o.as_str()) && name.as_bytes().get(o.len()) == Some(&b'.'))
+            name == o
+                || (name.starts_with(o.as_str()) && name.as_bytes().get(o.len()) == Some(&b'.'))
         })
     }
 
@@ -268,9 +269,7 @@ impl<'c> Cx<'c> {
         let at = self.raw_range;
         stir_checker::check_file(self.db, self.ws, self.file)
             .iter()
-            .filter(|d| {
-                d.range.start() <= at.end() && at.start() <= d.range.end()
-            })
+            .filter(|d| d.range.start() <= at.end() && at.start() <= d.range.end())
             .collect()
     }
 
@@ -431,7 +430,9 @@ pub fn apply(text: &str, change: &Change, file: SourceFile) -> Result<String, Re
     for e in edits {
         let (start, end) = (usize::from(e.range.start()), usize::from(e.range.end()));
         if start < at || end > text.len() {
-            return Err("The edits of this overlap, so it wasn't done. That's a bug in StirPHP.".into());
+            return Err(
+                "The edits of this overlap, so it wasn't done. That's a bug in StirPHP.".into(),
+            );
         }
         out.push_str(&text[at..start]);
         out.push_str(&e.text);

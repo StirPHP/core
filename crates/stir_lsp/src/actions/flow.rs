@@ -80,9 +80,20 @@ fn negated(cx: &Cx<'_>, cond: &SyntaxNode) -> String {
                 _ => format!("!({text})"),
             }
         }
-        VARIABLE_EXPR | CALL_EXPR | METHOD_CALL_EXPR | NULLSAFE_METHOD_CALL_EXPR | STATIC_CALL_EXPR
-        | PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR | STATIC_PROPERTY_FETCH_EXPR
-        | INDEX_EXPR | ISSET_EXPR | EMPTY_EXPR | CLASS_CONST_FETCH_EXPR | NAME_EXPR | LITERAL => {
+        VARIABLE_EXPR
+        | CALL_EXPR
+        | METHOD_CALL_EXPR
+        | NULLSAFE_METHOD_CALL_EXPR
+        | STATIC_CALL_EXPR
+        | PROPERTY_FETCH_EXPR
+        | NULLSAFE_PROPERTY_FETCH_EXPR
+        | STATIC_PROPERTY_FETCH_EXPR
+        | INDEX_EXPR
+        | ISSET_EXPR
+        | EMPTY_EXPR
+        | CLASS_CONST_FETCH_EXPR
+        | NAME_EXPR
+        | LITERAL => {
             format!("!{text}")
         }
         INSTANCEOF_EXPR | PAREN_EXPR => {
@@ -128,16 +139,27 @@ fn flip_offer<'c>(cx: &'c Cx<'c>, stmt: &SyntaxNode, out: &mut Vec<Offer<'c>>) {
     let Some(else_block) = else_clause.child(BLOCK).filter(|b| b.has_token(L_CURLY)) else {
         return;
     };
-    let Some(cond) = condition_of(stmt) else { return };
+    let Some(cond) = condition_of(stmt) else {
+        return;
+    };
     // a comment between the parts is about one of them, but which
-    let gap = TextRange::new(trimmed_node(&then_block).end(), trimmed_node(&else_block).start());
+    let gap = TextRange::new(
+        trimmed_node(&then_block).end(),
+        trimmed_node(&else_block).start(),
+    );
     if has_comment_between(cx, gap) {
         return;
     }
     let edits = vec![
         cx.edit(trimmed_node(&cond), negated(cx, &cond)),
-        cx.edit(trimmed_node(&then_block), cx.slice(trimmed_node(&else_block))),
-        cx.edit(trimmed_node(&else_block), cx.slice(trimmed_node(&then_block))),
+        cx.edit(
+            trimmed_node(&then_block),
+            cx.slice(trimmed_node(&else_block)),
+        ),
+        cx.edit(
+            trimmed_node(&else_block),
+            cx.slice(trimmed_node(&then_block)),
+        ),
     ];
     out.push(Offer::new(
         format!("flow.flip:{}", u32::from(stmt.text_range().start())),
@@ -176,10 +198,14 @@ fn way_out(stmt: &SyntaxNode) -> Option<&'static str> {
                 Some(false) => return None,
                 // no type: fine as long as nothing returns a value, or falling off here is odd
                 None => {
-                    let values = own_nodes(&block).into_iter().any(|n| {
-                        n.kind() == RETURN_STMT && n.children().next().is_some()
-                    });
-                    if values || own_nodes(&block).iter().any(|n| matches!(n.kind(), YIELD_EXPR | YIELD_FROM_EXPR)) {
+                    let values = own_nodes(&block)
+                        .into_iter()
+                        .any(|n| n.kind() == RETURN_STMT && n.children().next().is_some());
+                    if values
+                        || own_nodes(&block)
+                            .iter()
+                            .any(|n| matches!(n.kind(), YIELD_EXPR | YIELD_FROM_EXPR))
+                    {
                         return None;
                     }
                 }
@@ -199,7 +225,9 @@ fn early_return_offer<'c>(cx: &'c Cx<'c>, stmt: &SyntaxNode, out: &mut Vec<Offer
     let Some(then_block) = stmt.child(BLOCK).filter(|b| b.has_token(L_CURLY)) else {
         return;
     };
-    let Some(cond) = condition_of(stmt) else { return };
+    let Some(cond) = condition_of(stmt) else {
+        return;
+    };
     let outer = indent_at(cx.text, trimmed_node(stmt).start());
     let nl = cx.style.nl;
     let unit = &cx.style.unit;
@@ -233,7 +261,10 @@ fn early_return_offer<'c>(cx: &'c Cx<'c>, stmt: &SyntaxNode, out: &mut Vec<Offer
         if !list_leaves(&then_block) {
             return;
         }
-        let gap = TextRange::new(trimmed_node(&then_block).end(), trimmed_node(&else_block).start());
+        let gap = TextRange::new(
+            trimmed_node(&then_block).end(),
+            trimmed_node(&else_block).start(),
+        );
         if has_comment_between(cx, gap) {
             return;
         }
@@ -241,7 +272,10 @@ fn early_return_offer<'c>(cx: &'c Cx<'c>, stmt: &SyntaxNode, out: &mut Vec<Offer
         let Some(body) = inner_text(&else_block) else {
             return;
         };
-        let range = TextRange::new(trimmed_node(&then_block).end(), trimmed_node(&else_block).end());
+        let range = TextRange::new(
+            trimmed_node(&then_block).end(),
+            trimmed_node(&else_block).end(),
+        );
         let text = if body.is_empty() {
             String::new()
         } else {
@@ -268,15 +302,18 @@ fn early_return_offer<'c>(cx: &'c Cx<'c>, stmt: &SyntaxNode, out: &mut Vec<Offer
     let negation = negated(cx, &cond);
     let close = trimmed_node(stmt).end();
     let start = trimmed_node(stmt).start();
-    let text = format!(
-        "if ({negation}) {{{nl}{outer}{unit}{exit}{nl}{outer}}}{nl}{nl}{outer}{body}"
-    );
+    let text =
+        format!("if ({negation}) {{{nl}{outer}{unit}{exit}{nl}{outer}}}{nl}{nl}{outer}{body}");
     let range = TextRange::new(start, close);
     out.push(Offer::new(
         format!("flow.early:{}", u32::from(start)),
         format!(
             "Convert to an early {}",
-            if exit == "return;" { "return" } else { "continue" }
+            if exit == "return;" {
+                "return"
+            } else {
+                "continue"
+            }
         ),
         Kind::RefactorRewrite,
         move || Ok(Change::new(vec![cx.edit(range, text)])),
@@ -414,12 +451,17 @@ fn switch_to_match_offer<'c>(cx: &'c Cx<'c>, stmt: &SyntaxNode, out: &mut Vec<Of
             }
             [assign, end] if end.kind() == BREAK_STMT && end.children().next().is_none() => {
                 let Some(e) = assign.children().next().filter(|e| {
-                    assign.kind() == EXPR_STMT && e.kind() == ASSIGN_EXPR && e.has_token(EQ) && !e.has_token(AMP)
+                    assign.kind() == EXPR_STMT
+                        && e.kind() == ASSIGN_EXPR
+                        && e.has_token(EQ)
+                        && !e.has_token(AMP)
                 }) else {
                     return;
                 };
                 let sides: Vec<SyntaxNode> = e.children().collect();
-                let [left, right] = sides.as_slice() else { return };
+                let [left, right] = sides.as_slice() else {
+                    return;
+                };
                 if left.kind() != VARIABLE_EXPR {
                     return;
                 }
@@ -431,16 +473,26 @@ fn switch_to_match_offer<'c>(cx: &'c Cx<'c>, stmt: &SyntaxNode, out: &mut Vec<Of
                 }
                 cx.slice(trimmed_node(right)).to_owned()
             }
-            [only] if only.kind() == EXPR_STMT
-                && only.children().next().is_some_and(|e| e.kind() == ASSIGN_EXPR)
-                && std::ptr::eq(case, cases.last().unwrap_or(case)) =>
+            [only]
+                if only.kind() == EXPR_STMT
+                    && only
+                        .children()
+                        .next()
+                        .is_some_and(|e| e.kind() == ASSIGN_EXPR)
+                    && std::ptr::eq(case, cases.last().unwrap_or(case)) =>
             {
                 // the last case has no need of a `break`
-                let Some(e) = only.children().next().filter(|e| e.has_token(EQ) && !e.has_token(AMP)) else {
+                let Some(e) = only
+                    .children()
+                    .next()
+                    .filter(|e| e.has_token(EQ) && !e.has_token(AMP))
+                else {
                     return;
                 };
                 let sides: Vec<SyntaxNode> = e.children().collect();
-                let [left, right] = sides.as_slice() else { return };
+                let [left, right] = sides.as_slice() else {
+                    return;
+                };
                 if left.kind() != VARIABLE_EXPR {
                     return;
                 }
@@ -572,7 +624,9 @@ fn import_name_offer<'c>(
     let scope = same_namespace_range(&cx.root, at);
     let mut edits = Vec::new();
     for element in cx.root.descendants_with_tokens() {
-        let Some(t) = element.into_token() else { continue };
+        let Some(t) = element.into_token() else {
+            continue;
+        };
         if t.kind() != NAME_FULLY_QUALIFIED
             || !scope.contains_range(t.text_range())
             || t.parent_ancestors().any(|n| n.kind() == USE_DECL)

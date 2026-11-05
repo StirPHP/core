@@ -46,9 +46,7 @@ pub fn is_pure(node: &SyntaxNode) -> bool {
                 | INTERP_EXPR
                 | CLOSURE_EXPR
                 | ARROW_FN_EXPR
-        ) || n.kind() == PREFIX_EXPR
-            && !n.has_token(INC)
-            && !n.has_token(DEC)
+        ) || n.kind() == PREFIX_EXPR && !n.has_token(INC) && !n.has_token(DEC)
     })
 }
 
@@ -57,8 +55,16 @@ fn is_constant(node: &SyntaxNode) -> bool {
     node.descendants().all(|n| {
         matches!(
             n.kind(),
-            LITERAL | STRING_LITERAL | ARRAY_EXPR | ARRAY_ELEM | PAREN_EXPR | NAME_EXPR | NAME_REF
-                | NAME | CLASS_CONST_FETCH_EXPR | MAGIC_CONST
+            LITERAL
+                | STRING_LITERAL
+                | ARRAY_EXPR
+                | ARRAY_ELEM
+                | PAREN_EXPR
+                | NAME_EXPR
+                | NAME_REF
+                | NAME
+                | CLASS_CONST_FETCH_EXPR
+                | MAGIC_CONST
         )
     })
 }
@@ -91,10 +97,7 @@ fn extractable_place(expr: &SyntaxNode) -> Result<SyntaxNode, &'static str> {
             }
             BIN_EXPR => {
                 let conditional = parent.children_with_tokens().any(|e| {
-                    matches!(
-                        e.kind(),
-                        AMP2 | PIPE2 | AND_KW | OR_KW | QUESTION2 | XOR_KW
-                    )
+                    matches!(e.kind(), AMP2 | PIPE2 | AND_KW | OR_KW | QUESTION2 | XOR_KW)
                 });
                 if conditional && !earlier().is_empty() {
                     return Err("It's only evaluated on some paths.");
@@ -106,7 +109,8 @@ fn extractable_place(expr: &SyntaxNode) -> Result<SyntaxNode, &'static str> {
             ARROW_FN_EXPR | CLOSURE_EXPR | ANON_CLASS => {
                 return Err("It's in a function that runs later.");
             }
-            ISSET_EXPR | EMPTY_EXPR | UNSET_STMT | LIST_EXPR | ERROR_SUPPRESS_EXPR | CLOSURE_USE => {
+            ISSET_EXPR | EMPTY_EXPR | UNSET_STMT | LIST_EXPR | ERROR_SUPPRESS_EXPR
+            | CLOSURE_USE => {
                 return Err("What's around it treats it differently from a value.");
             }
             YIELD_EXPR | YIELD_FROM_EXPR => {
@@ -154,25 +158,29 @@ pub fn takes_reference(expr: &SyntaxNode) -> bool {
     };
     let is_place = matches!(
         expr.kind(),
-        VARIABLE_EXPR | INDEX_EXPR | PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR
+        VARIABLE_EXPR
+            | INDEX_EXPR
+            | PROPERTY_FETCH_EXPR
+            | NULLSAFE_PROPERTY_FETCH_EXPR
             | STATIC_PROPERTY_FETCH_EXPR
     );
     match parent.kind() {
-        ASSIGN_EXPR => {
-            parent.children().next().as_ref() == Some(expr) || parent.has_token(AMP)
-        }
+        ASSIGN_EXPR => parent.children().next().as_ref() == Some(expr) || parent.has_token(AMP),
         PREFIX_EXPR | POSTFIX_EXPR => {
             parent.has_token(INC) || parent.has_token(DEC) || parent.has_token(AMP)
         }
         // what a function does to its arguments depends on it: it may take them by reference
         ARG | NAMED_ARG => is_place,
-        ARRAY_ELEM => parent.has_token(AMP) || is_place && {
-            // `[$a, $b] = ...`
-            parent
-                .ancestors()
-                .find(|a| a.kind() == ASSIGN_EXPR)
-                .is_some()
-        },
+        ARRAY_ELEM => {
+            parent.has_token(AMP)
+                || is_place && {
+                    // `[$a, $b] = ...`
+                    parent
+                        .ancestors()
+                        .find(|a| a.kind() == ASSIGN_EXPR)
+                        .is_some()
+                }
+        }
         FOREACH_STMT => is_place,
         // `new` and calls of a name can't have a variable where the name is
         NEW_EXPR | CLASS_CONST_FETCH_EXPR | STATIC_PROPERTY_FETCH_EXPR | INSTANCEOF_EXPR => {
@@ -183,12 +191,14 @@ pub fn takes_reference(expr: &SyntaxNode) -> bool {
             parent.children().next().as_ref() == Some(expr)
                 && !(parent.kind() == CALL_EXPR && expr.kind() != NAME_EXPR)
         }
-        RETURN_STMT => is_place && {
-            parent
-                .ancestors()
-                .find(|a| matches!(a.kind(), FUNCTION_DECL | METHOD_DECL))
-                .is_some_and(|f| f.has_token(AMP))
-        },
+        RETURN_STMT => {
+            is_place && {
+                parent
+                    .ancestors()
+                    .find(|a| matches!(a.kind(), FUNCTION_DECL | METHOD_DECL))
+                    .is_some_and(|f| f.has_token(AMP))
+            }
+        }
         _ => false,
     }
 }
@@ -212,15 +222,50 @@ pub fn expression_at(cx: &Cx<'_>, range: TextRange) -> Option<SyntaxNode> {
 pub fn is_expression(kind: SyntaxKind) -> bool {
     matches!(
         kind,
-        LITERAL | STRING_LITERAL | INTERP_STRING | HEREDOC | SHELL_EXEC | VARIABLE_EXPR
-            | VARIABLE_VARIABLE | NAME_EXPR | ARRAY_EXPR | PAREN_EXPR | BIN_EXPR | PREFIX_EXPR
-            | POSTFIX_EXPR | ASSIGN_EXPR | TERNARY_EXPR | SHORT_TERNARY_EXPR | CAST_EXPR
-            | INSTANCEOF_EXPR | CALL_EXPR | METHOD_CALL_EXPR | NULLSAFE_METHOD_CALL_EXPR
-            | PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR | STATIC_CALL_EXPR
-            | STATIC_PROPERTY_FETCH_EXPR | CLASS_CONST_FETCH_EXPR | INDEX_EXPR | NEW_EXPR
-            | CLONE_EXPR | CLOSURE_EXPR | ARROW_FN_EXPR | MATCH_EXPR | ISSET_EXPR | EMPTY_EXPR
-            | PRINT_EXPR | ERROR_SUPPRESS_EXPR | MAGIC_CONST | LIST_EXPR | INCLUDE_EXPR
-            | EVAL_EXPR | EXIT_EXPR | THROW_EXPR | YIELD_EXPR | YIELD_FROM_EXPR
+        LITERAL
+            | STRING_LITERAL
+            | INTERP_STRING
+            | HEREDOC
+            | SHELL_EXEC
+            | VARIABLE_EXPR
+            | VARIABLE_VARIABLE
+            | NAME_EXPR
+            | ARRAY_EXPR
+            | PAREN_EXPR
+            | BIN_EXPR
+            | PREFIX_EXPR
+            | POSTFIX_EXPR
+            | ASSIGN_EXPR
+            | TERNARY_EXPR
+            | SHORT_TERNARY_EXPR
+            | CAST_EXPR
+            | INSTANCEOF_EXPR
+            | CALL_EXPR
+            | METHOD_CALL_EXPR
+            | NULLSAFE_METHOD_CALL_EXPR
+            | PROPERTY_FETCH_EXPR
+            | NULLSAFE_PROPERTY_FETCH_EXPR
+            | STATIC_CALL_EXPR
+            | STATIC_PROPERTY_FETCH_EXPR
+            | CLASS_CONST_FETCH_EXPR
+            | INDEX_EXPR
+            | NEW_EXPR
+            | CLONE_EXPR
+            | CLOSURE_EXPR
+            | ARROW_FN_EXPR
+            | MATCH_EXPR
+            | ISSET_EXPR
+            | EMPTY_EXPR
+            | PRINT_EXPR
+            | ERROR_SUPPRESS_EXPR
+            | MAGIC_CONST
+            | LIST_EXPR
+            | INCLUDE_EXPR
+            | EVAL_EXPR
+            | EXIT_EXPR
+            | THROW_EXPR
+            | YIELD_EXPR
+            | YIELD_FROM_EXPR
     )
 }
 
@@ -254,14 +299,14 @@ fn name_for(cx: &Cx<'_>, expr: &SyntaxNode) -> String {
                 lower_first(rest)
             })
         }
-        PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR | CLASS_CONST_FETCH_EXPR => {
-            expr.name_text().map(|n| lower_first(&n.to_ascii_lowercase()))
-        }
+        PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR | CLASS_CONST_FETCH_EXPR => expr
+            .name_text()
+            .map(|n| lower_first(&n.to_ascii_lowercase())),
         CALL_EXPR => expr
             .children()
             .next()
             .map(|c| c.text().to_string())
-            .and_then(|t| t.trim().rsplit('\\').next().map(|n| lower_first(n))),
+            .and_then(|t| t.trim().rsplit('\\').next().map(lower_first)),
         NEW_EXPR => expr
             .children()
             .find(|c| c.kind() == NAME_EXPR)
@@ -271,8 +316,11 @@ fn name_for(cx: &Cx<'_>, expr: &SyntaxNode) -> String {
     };
     let base = base
         .filter(|b| {
-            b.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
-                && b.chars().all(|c| c.is_alphanumeric() || c == '_' || !c.is_ascii())
+            b.chars()
+                .next()
+                .is_some_and(|c| c.is_alphabetic() || c == '_')
+                && b.chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || !c.is_ascii())
         })
         .unwrap_or_else(|| "value".to_owned());
     let mut name = base.clone();
@@ -299,7 +347,10 @@ pub fn extract_offers<'c>(cx: &'c Cx<'c>, out: &mut Vec<Offer<'c>>) {
         out.push(refuse("Something needs this place, not only its value."));
         return;
     }
-    if matches!(expr.kind(), THROW_EXPR | YIELD_EXPR | YIELD_FROM_EXPR | EXIT_EXPR | LIST_EXPR | INCLUDE_EXPR) {
+    if matches!(
+        expr.kind(),
+        THROW_EXPR | YIELD_EXPR | YIELD_FROM_EXPR | EXIT_EXPR | LIST_EXPR | INCLUDE_EXPR
+    ) {
         out.push(refuse("It isn't an ordinary value."));
         return;
     }
@@ -312,8 +363,17 @@ pub fn extract_offers<'c>(cx: &'c Cx<'c>, out: &mut Vec<Offer<'c>>) {
     };
     if matches!(
         statement.kind(),
-        ECHO_TAG_STMT | INLINE_HTML_STMT | CONST_DECL | USE_DECL | NAMESPACE_DECL | FUNCTION_DECL
-            | CLASS_DECL | INTERFACE_DECL | TRAIT_DECL | ENUM_DECL | DECLARE_STMT
+        ECHO_TAG_STMT
+            | INLINE_HTML_STMT
+            | CONST_DECL
+            | USE_DECL
+            | NAMESPACE_DECL
+            | FUNCTION_DECL
+            | CLASS_DECL
+            | INTERFACE_DECL
+            | TRAIT_DECL
+            | ENUM_DECL
+            | DECLARE_STMT
     ) {
         out.push(refuse("A variable can't be put before it there."));
         return;
@@ -328,19 +388,23 @@ pub fn extract_offers<'c>(cx: &'c Cx<'c>, out: &mut Vec<Offer<'c>>) {
             if other.text_range().start() > expr_range.end()
                 && other.kind() == expr.kind()
                 && cx.slice(trimmed_node(&other)) == text
-                && !other.ancestors().any(|a| matches!(a.kind(), CLOSURE_EXPR | ARROW_FN_EXPR | ANON_CLASS))
+                && !other
+                    .ancestors()
+                    .any(|a| matches!(a.kind(), CLOSURE_EXPR | ARROW_FN_EXPR | ANON_CLASS))
                 && !takes_reference(&other)
-                && !other.ancestors().any(|a| matches!(a.kind(), ISSET_EXPR | EMPTY_EXPR | INTERP_STRING | HEREDOC))
-                && !also.iter().any(|r: &TextRange| r.contains_range(other.text_range()))
+                && !other
+                    .ancestors()
+                    .any(|a| matches!(a.kind(), ISSET_EXPR | EMPTY_EXPR | INTERP_STRING | HEREDOC))
+                && !also
+                    .iter()
+                    .any(|r: &TextRange| r.contains_range(other.text_range()))
             {
                 also.push(trimmed_node(&other));
             }
         }
     }
     // a doc comment about the statement stays with it, and an inline `@var` applies to the next one
-    let doc = statement
-        .doc_comment()
-        .map(|d| d.text_range().start());
+    let doc = statement.doc_comment().map(|d| d.text_range().start());
     let start = doc.unwrap_or_else(|| super::docs::first_token_start(&statement));
     let indent = indent_at(cx.text, start);
     let nl = cx.style.nl;
@@ -362,7 +426,8 @@ fn assigns_anything(node: &SyntaxNode) -> bool {
     node.descendants().any(|n| {
         n.kind() == ASSIGN_EXPR
             || matches!(n.kind(), PREFIX_EXPR | POSTFIX_EXPR)
-                && n.children_with_tokens().any(|e| matches!(e.kind(), INC | DEC))
+                && n.children_with_tokens()
+                    .any(|e| matches!(e.kind(), INC | DEC))
     })
 }
 
@@ -384,8 +449,13 @@ pub fn dynamic_scope(function: &SyntaxNode) -> bool {
             let lower = text.trim().trim_start_matches('\\').to_ascii_lowercase();
             matches!(
                 lower.as_str(),
-                "compact" | "extract" | "get_defined_vars" | "parse_str" | "func_get_args"
-                    | "func_get_arg" | "mb_parse_str"
+                "compact"
+                    | "extract"
+                    | "get_defined_vars"
+                    | "parse_str"
+                    | "func_get_args"
+                    | "func_get_arg"
+                    | "mb_parse_str"
             )
         }),
         _ => false,
@@ -398,10 +468,12 @@ fn occurrences(cx: &Cx<'_>, function: &SyntaxNode, name: &str) -> Option<Occurre
         return None;
     }
     // parameters of this function, and anything captured
-    if function
-        .child(PARAM_LIST)
-        .is_some_and(|p| p.descendants_with_tokens().any(|e| e.as_token().is_some_and(|t| t.kind() == VARIABLE && t.text() == name)))
-    {
+    if function.child(PARAM_LIST).is_some_and(|p| {
+        p.descendants_with_tokens().any(|e| {
+            e.as_token()
+                .is_some_and(|t| t.kind() == VARIABLE && t.text() == name)
+        })
+    }) {
         return None;
     }
     let mut assign = None;
@@ -440,8 +512,15 @@ fn occurrences(cx: &Cx<'_>, function: &SyntaxNode, name: &str) -> Option<Occurre
         // anything that might write it
         if matches!(
             up.kind(),
-            POSTFIX_EXPR | PREFIX_EXPR | ARRAY_ELEM | LIST_EXPR | FOREACH_STMT | UNSET_STMT
-                | CATCH_CLAUSE | ISSET_EXPR | EMPTY_EXPR
+            POSTFIX_EXPR
+                | PREFIX_EXPR
+                | ARRAY_ELEM
+                | LIST_EXPR
+                | FOREACH_STMT
+                | UNSET_STMT
+                | CATCH_CLAUSE
+                | ISSET_EXPR
+                | EMPTY_EXPR
         ) && !matches!(up.kind(), PREFIX_EXPR if !up.has_token(INC) && !up.has_token(DEC) && !up.has_token(AMP))
         {
             return None;
@@ -474,8 +553,12 @@ fn occurrences(cx: &Cx<'_>, function: &SyntaxNode, name: &str) -> Option<Occurre
 
 /// Does what's called take this argument by value, as far as the checker can tell which it is?
 pub fn by_value(cx: &Cx<'_>, arg: &SyntaxNode) -> bool {
-    let Some(list) = arg.parent() else { return false };
-    let Some(call) = list.parent() else { return false };
+    let Some(list) = arg.parent() else {
+        return false;
+    };
+    let Some(call) = list.parent() else {
+        return false;
+    };
     let callee = match call.kind() {
         CALL_EXPR => call.children().next().map(|c| c.text_range()),
         METHOD_CALL_EXPR | NULLSAFE_METHOD_CALL_EXPR | STATIC_CALL_EXPR => call
@@ -504,7 +587,11 @@ pub fn by_value(cx: &Cx<'_>, arg: &SyntaxNode) -> bool {
     };
     if arg.kind() == NAMED_ARG {
         let name = arg.name_text().unwrap_or_default();
-        return sig.params.iter().find(|p| p.name == name).is_some_and(|p| !p.by_ref);
+        return sig
+            .params
+            .iter()
+            .find(|p| p.name == name)
+            .is_some_and(|p| !p.by_ref);
     }
     let index = list
         .children()
@@ -524,11 +611,25 @@ fn value_for(cx: &Cx<'_>, value: &SyntaxNode, read: &SyntaxToken) -> Option<Stri
     let text = cx.slice(trimmed_node(value)).to_owned();
     let atom = matches!(
         value.kind(),
-        LITERAL | STRING_LITERAL | INTERP_STRING | VARIABLE_EXPR | NAME_EXPR | ARRAY_EXPR
-            | PAREN_EXPR | CALL_EXPR | METHOD_CALL_EXPR | NULLSAFE_METHOD_CALL_EXPR
-            | STATIC_CALL_EXPR | PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR
-            | STATIC_PROPERTY_FETCH_EXPR | CLASS_CONST_FETCH_EXPR | INDEX_EXPR | MAGIC_CONST
-            | ISSET_EXPR | EMPTY_EXPR
+        LITERAL
+            | STRING_LITERAL
+            | INTERP_STRING
+            | VARIABLE_EXPR
+            | NAME_EXPR
+            | ARRAY_EXPR
+            | PAREN_EXPR
+            | CALL_EXPR
+            | METHOD_CALL_EXPR
+            | NULLSAFE_METHOD_CALL_EXPR
+            | STATIC_CALL_EXPR
+            | PROPERTY_FETCH_EXPR
+            | NULLSAFE_PROPERTY_FETCH_EXPR
+            | STATIC_PROPERTY_FETCH_EXPR
+            | CLASS_CONST_FETCH_EXPR
+            | INDEX_EXPR
+            | MAGIC_CONST
+            | ISSET_EXPR
+            | EMPTY_EXPR
     );
     let up = read.parent()?.parent()?;
     let stands_alone = matches!(
@@ -593,11 +694,9 @@ pub fn inline_offers<'c>(cx: &'c Cx<'c>, out: &mut Vec<Offer<'c>>) {
     }
     // the assignment has to run for it to have this value, wherever it's read
     let list = assign.parent();
-    let in_same_list = reads.iter().all(|r| {
-        r.parent_ancestors()
-            .find(|n| n.parent() == list)
-            .is_some()
-    });
+    let in_same_list = reads
+        .iter()
+        .all(|r| r.parent_ancestors().find(|n| n.parent() == list).is_some());
     if !in_same_list {
         return;
     }
@@ -630,10 +729,25 @@ fn runs_first(read: &SyntaxToken, stmt: &SyntaxNode) -> bool {
         };
         let conditional = matches!(
             parent.kind(),
-            TERNARY_EXPR | SHORT_TERNARY_EXPR | MATCH_ARM | MATCH_EXPR | IF_STMT | ELSE_CLAUSE
-                | ELSEIF_CLAUSE | WHILE_STMT | DO_WHILE_STMT | FOR_STMT | FOREACH_STMT
-                | SWITCH_STMT | SWITCH_CASE | TRY_STMT | CATCH_CLAUSE | FINALLY_CLAUSE | BLOCK
-                | CLOSURE_EXPR | ARROW_FN_EXPR
+            TERNARY_EXPR
+                | SHORT_TERNARY_EXPR
+                | MATCH_ARM
+                | MATCH_EXPR
+                | IF_STMT
+                | ELSE_CLAUSE
+                | ELSEIF_CLAUSE
+                | WHILE_STMT
+                | DO_WHILE_STMT
+                | FOR_STMT
+                | FOREACH_STMT
+                | SWITCH_STMT
+                | SWITCH_CASE
+                | TRY_STMT
+                | CATCH_CLAUSE
+                | FINALLY_CLAUSE
+                | BLOCK
+                | CLOSURE_EXPR
+                | ARROW_FN_EXPR
         );
         let first_child = parent.children().next().as_ref() == Some(&child);
         if conditional && !first_child {
@@ -658,7 +772,10 @@ fn runs_first(read: &SyntaxToken, stmt: &SyntaxNode) -> bool {
 
 /// The lines `stmt` is on, if it has them to itself, without a comment before it.
 fn statement_lines(cx: &Cx<'_>, stmt: &SyntaxNode) -> TextRange {
-    let core = TextRange::new(super::docs::first_token_start(stmt), stmt.text_range().end());
+    let core = TextRange::new(
+        super::docs::first_token_start(stmt),
+        stmt.text_range().end(),
+    );
     super::organize::whole_lines(cx, core)
 }
 
@@ -683,7 +800,10 @@ pub fn remove_unused_offers<'c>(cx: &'c Cx<'c>, out: &mut Vec<Offer<'c>>) {
     if !found.reads.is_empty() || !is_pure_value(&found.value) {
         return;
     }
-    if own_nodes(&function).iter().any(|n| n.kind() == STATIC_VAR_STMT) {
+    if own_nodes(&function)
+        .iter()
+        .any(|n| n.kind() == STATIC_VAR_STMT)
+    {
         return;
     }
     let range = statement_lines(cx, &found.assign);

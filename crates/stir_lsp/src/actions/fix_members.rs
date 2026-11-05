@@ -58,7 +58,12 @@ pub fn member_indent(cx: &Cx<'_>, body: &SyntaxNode) -> String {
 
 /// Where a member goes, and what to put there: `code` is written with `\n` and tabs, at the
 /// member's level, and goes after `after`, or at the start of the body with nothing before it.
-pub fn insert_member(cx: &Cx<'_>, body: &SyntaxNode, after: Option<&SyntaxNode>, code: &str) -> FileEdit {
+pub fn insert_member(
+    cx: &Cx<'_>,
+    body: &SyntaxNode,
+    after: Option<&SyntaxNode>,
+    code: &str,
+) -> FileEdit {
     let indent = member_indent(cx, body);
     let code = cx.style.block(code, &indent);
     insert_written_member(cx, body, after, &code)
@@ -157,7 +162,10 @@ fn default_text(
             continue;
         }
         let is_class = name.parent().is_some_and(|p| {
-            matches!(p.kind(), CLASS_CONST_FETCH_EXPR | STATIC_PROPERTY_FETCH_EXPR | NEW_EXPR)
+            matches!(
+                p.kind(),
+                CLASS_CONST_FETCH_EXPR | STATIC_PROPERTY_FETCH_EXPR | NEW_EXPR
+            )
         });
         let replaced = if !is_class {
             // a constant of PHP's or the project's: its full name works from anywhere
@@ -196,9 +204,9 @@ fn expressible(cx: &Cx<'_>, ty: &stir_hir::type_ref::TypeRef) -> bool {
         K::Nullable(inner) => expressible(cx, inner),
         K::Union(parts) => {
             has(cx, v::UNION_TYPES)
-                && parts.iter().all(|p| {
-                    matches!(p.kind, K::Php(P::Null | P::False)) || expressible(cx, p)
-                })
+                && parts
+                    .iter()
+                    .all(|p| matches!(p.kind, K::Php(P::Null | P::False)) || expressible(cx, p))
         }
         K::Intersection(parts) => {
             has(cx, v::INTERSECTION_TYPES) && parts.iter().all(|p| expressible(cx, p))
@@ -223,7 +231,6 @@ pub fn params_text(
             && expressible(cx, ty)
         {
             part.push_str(&written_ref(
-                cx,
                 namer,
                 ty,
                 Some(owner.name.as_str()),
@@ -259,7 +266,7 @@ pub fn return_text(
     let Some(ret) = method.sig.ret.as_ref().filter(|r| expressible(cx, r)) else {
         return Some(String::new());
     };
-    let text = written_ref(cx, namer, ret, Some(owner.name.as_str()), parent.as_deref())?;
+    let text = written_ref(namer, ret, Some(owner.name.as_str()), parent.as_deref())?;
     Some(format!(": {text}"))
 }
 
@@ -297,7 +304,10 @@ fn implement_offer<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
     let Some(token) = cx.token_at(d.range.start()) else {
         return;
     };
-    let Some(owner) = token.parent_ancestors().find(|n| n.child(CLASS_BODY).is_some()) else {
+    let Some(owner) = token
+        .parent_ancestors()
+        .find(|n| n.child(CLASS_BODY).is_some())
+    else {
         return;
     };
     let Some(body) = owner.child(CLASS_BODY) else {
@@ -408,8 +418,7 @@ fn own_receiver<'c>(
 
 /// The member of `body` that `node` is in.
 fn member_around(node: &SyntaxNode, body: &SyntaxNode) -> Option<SyntaxNode> {
-    node.ancestors()
-        .find(|n| n.parent().as_ref() == Some(body))
+    node.ancestors().find(|n| n.parent().as_ref() == Some(body))
 }
 
 /// A variable name that says what `expr` is, if it does.
@@ -444,14 +453,19 @@ fn create_method_offer<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) 
     };
     let Some(fetch) = name.parent() else { return };
     let Some(call) = fetch.parent().filter(|c| {
-        matches!(c.kind(), METHOD_CALL_EXPR | NULLSAFE_METHOD_CALL_EXPR | STATIC_CALL_EXPR)
+        matches!(
+            c.kind(),
+            METHOD_CALL_EXPR | NULLSAFE_METHOD_CALL_EXPR | STATIC_CALL_EXPR
+        )
     }) else {
         return;
     };
     let Some((_, body)) = own_receiver(cx, &fetch, want_static) else {
         return;
     };
-    let Some(args) = call.child(ARG_LIST) else { return };
+    let Some(args) = call.child(ARG_LIST) else {
+        return;
+    };
     let mut params: Vec<String> = Vec::new();
     let mut used: Vec<String> = Vec::new();
     let start = body.text_range().start();
@@ -540,7 +554,9 @@ fn create_property_offer<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>
         return;
     };
     let fetch = if want_static {
-        token.parent().filter(|p| p.kind() == STATIC_PROPERTY_FETCH_EXPR)
+        token
+            .parent()
+            .filter(|p| p.kind() == STATIC_PROPERTY_FETCH_EXPR)
     } else {
         token
             .parent()
