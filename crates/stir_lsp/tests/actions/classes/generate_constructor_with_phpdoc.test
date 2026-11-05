@@ -1,0 +1,28 @@
+=== action: Generate a constructor from the properties
+=== level: 9
+=== input
+<?php
+class A‸ {
+    /** @var list<string> */
+    private array $names;
+    /** @var class-string */
+    private string $class;
+}
+=== output
+<?php
+class A {
+    /** @var list<string> */
+    private array $names;
+    /** @var class-string */
+    private string $class;
+
+    /**
+     * @param list<string> $names
+     * @param class-string $class
+     */
+    public function __construct(array $names, string $class)
+    {
+        $this->names = $names;
+        $this->class = $class;
+    }
+}

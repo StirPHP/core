@@ -107,6 +107,8 @@ fn constructor_offer<'c>(cx: &'c Cx<'c>, body: &SyntaxNode, out: &mut Vec<Offer<
     };
     let mut params = Vec::new();
     let mut assigns = Vec::new();
+    let mut tags = Vec::new();
+    let mut namer = Namer::new(cx, body.text_range().start());
     for decl in body.children_of(PROPERTY_DECL) {
         let is_static = decl
             .child(MODIFIERS)
@@ -123,6 +125,18 @@ fn constructor_offer<'c>(cx: &'c Cx<'c>, body: &SyntaxNode, out: &mut Vec<Offer<
                 continue;
             };
             let name = var.text().to_owned();
+            // what PHPDoc says of it, the parameter has to say too
+            let doc = class
+                .properties
+                .iter()
+                .find(|p| p.name == name[1..])
+                .and_then(|p| p.doc_ty.as_ref())
+                .map(|t| cx.ctx().lower_plain(t))
+                .and_then(|t| doc_type(&mut namer, &t))
+                .filter(|d| ty.as_deref().is_none_or(|n| !n.eq_ignore_ascii_case(d)));
+            if let Some(doc) = doc {
+                tags.push(format!("@param {doc} {name}"));
+            }
             params.push(match &ty {
                 Some(t) => format!("{t} {name}"),
                 None => name.clone(),
@@ -138,8 +152,19 @@ fn constructor_offer<'c>(cx: &'c Cx<'c>, body: &SyntaxNode, out: &mut Vec<Offer<
     } else {
         ""
     };
+    let doc = match tags.as_slice() {
+        [] => String::new(),
+        [one] => format!("/** {one} */\n"),
+        many => format!(
+            "/**\n{}\n */\n",
+            many.iter()
+                .map(|t| format!(" * {t}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    };
     let code = format!(
-        "public function __construct({})\n{{\n{call}{}\n}}",
+        "{doc}public function __construct({})\n{{\n{call}{}\n}}",
         params.join(", "),
         assigns.join("\n")
     );
@@ -149,12 +174,13 @@ fn constructor_offer<'c>(cx: &'c Cx<'c>, body: &SyntaxNode, out: &mut Vec<Offer<
         .take_while(|m| m.kind() != METHOD_DECL)
         .last()
         .cloned();
-    let edit = insert_member(cx, body, after.as_ref(), &code);
+    let mut edits = namer.edits();
+    edits.push(insert_member(cx, body, after.as_ref(), &code));
     out.push(Offer::new(
         "constructor.generate",
         "Generate a constructor from the properties",
         Kind::RefactorRewrite,
-        move || Ok(Change::new(vec![edit])),
+        move || Ok(Change::new(edits)),
     ));
 }
 
@@ -466,11 +492,21 @@ fn accessor_offers<'c>(
     let readonly =
         mods.as_ref().is_some_and(|m| m.has_token(READONLY_KW)) || class.mods.is_readonly;
     let native_ty = written_type(&decl).map(|t| t.text().to_string().trim().to_owned());
+    // a promoted one's PHPDoc is the constructor's `@param`
     let doc_ty = class
         .properties
         .iter()
         .find(|p| p.name == name)
         .and_then(|p| p.doc_ty.as_ref())
+        .or_else(|| {
+            class
+                .methods
+                .iter()
+                .filter(|m| m.name.eq_ignore_ascii_case("__construct"))
+                .flat_map(|m| m.sig.params.iter())
+                .find(|p| p.promoted.is_some() && p.name == name)
+                .and_then(|p| p.doc_ty.as_ref())
+        })
         .map(|t| cx.ctx().lower_plain(t));
     let is_bool = native_ty.as_deref().is_some_and(|t| {
         let t = t.to_ascii_lowercase();

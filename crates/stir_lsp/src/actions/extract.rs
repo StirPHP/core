@@ -1069,6 +1069,16 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
                 return Err("It always throws or exits, and `never` isn't on this version of PHP, so the code after a call of it would seem to run.".into());
             }
         }
+        // what's returned as it is: what the function says it returns says what this does
+        Returning::No
+            if selection.expression
+                && declared_return.is_some()
+                && selection.nodes[0]
+                    .parent()
+                    .is_some_and(|p| p.kind() == RETURN_STMT) =>
+        {
+            (declared_return, declared_doc)
+        }
         Returning::No if selection.expression => {
             let expr = &selection.nodes[0];
             let ty = cx.typed().types.get(&expr.text_range());

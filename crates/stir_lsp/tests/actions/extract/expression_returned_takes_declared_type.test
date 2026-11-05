@@ -1,0 +1,25 @@
+=== action: Extract method
+=== input
+<?php
+class A {
+    private string $name = 'a';
+    /** @return non-empty-string */
+    public function get(): string {
+        return ⟦$this->name . 'x'⟧;
+    }
+}
+=== output
+<?php
+class A {
+    private string $name = 'a';
+    /** @return non-empty-string */
+    public function get(): string {
+        return $this->extracted();
+    }
+
+    /** @return non-empty-string */
+    private function extracted(): string
+    {
+        return $this->name . 'x';
+    }
+}

@@ -1,0 +1,20 @@
+=== action: Generate setter `setType()`
+=== level: 9
+=== input
+<?php
+class A {
+    /** @param class-string $type */
+    public function __construct(public string $type‸) {}
+}
+=== output
+<?php
+class A {
+    /** @param class-string $type */
+    public function __construct(public string $type) {}
+
+    /** @param class-string $type */
+    public function setType(string $type): void
+    {
+        $this->type = $type;
+    }
+}
