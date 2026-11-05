@@ -30,3 +30,13 @@ function closure_parameters(): void {
     $variadic("a", "b");
     $variadic([]); // error: SPHP0005
 }
+
+// a callback may take fewer parameters, but a `void` one can't return a value
+/** @param callable(int, int): void $f */
+function takes_void_callback(callable $f): void {}
+/** @param \Closure(int): void $f */
+function passes_on(\Closure $f): void { takes_void_callback($f); }
+function void_callbacks(): void {
+    takes_void_callback(function (int $a): void {});
+    takes_void_callback(fn (int $a): int => 1); // error: SPHP0005
+}
