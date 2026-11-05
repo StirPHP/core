@@ -23,6 +23,7 @@ use stir_types::{
 };
 
 use crate::codes;
+use crate::script::magic::ScriptMagic;
 
 /// A generic parameter with its id and bound.
 #[derive(Debug, Clone)]
@@ -157,6 +158,10 @@ pub struct Ctx<'db> {
     pub db: &'db dyn Db,
     pub ws: Workspace,
     pub index: &'db DefIndex,
+    /// What the project's scripts subscribe to.
+    pub scripts: &'db crate::script::ScriptIndex,
+    /// What went wrong with them for this model.
+    script_failures: RefCell<Vec<crate::ScriptFailure>>,
     params: RefCell<ParamTable>,
     classes: RefCell<FxHashMap<SmolStr, Option<Rc<ClassModel<'db>>>>>,
     supers: RefCell<FxHashMap<SmolStr, Rc<Supers>>>,
@@ -180,6 +185,8 @@ impl<'db> Ctx<'db> {
             db,
             ws,
             index: stir_hir::def_index(db, ws),
+            scripts: crate::script::script_index(db, ws),
+            script_failures: RefCell::default(),
             params: RefCell::default(),
             classes: RefCell::default(),
             supers: RefCell::default(),
@@ -188,6 +195,11 @@ impl<'db> Ctx<'db> {
             ancestors: RefCell::default(),
             in_progress: RefCell::default(),
         }
+    }
+
+    /// What went wrong with the project's scripts for this model, leaving none.
+    pub(crate) fn take_script_failures(&self) -> Vec<crate::ScriptFailure> {
+        std::mem::take(&mut *self.script_failures.borrow_mut())
     }
 
     pub fn items(&self, file: SourceFile) -> &'db FileItems {
@@ -1176,6 +1188,33 @@ impl<'db> Ctx<'db> {
         }
     }
 
+    /// What the project's scripts declare on `c`, itself and not what it inherits.
+    pub fn script_magic(&self, c: &ClassModel<'db>) -> &'db ScriptMagic {
+        static NOTHING: std::sync::LazyLock<ScriptMagic> =
+            std::sync::LazyLock::new(Default::default);
+        if self.scripts.magic.is_empty() {
+            return &NOTHING;
+        }
+        let name = crate::script::magic::ClassName::new(self.db, c.name.clone());
+        let magic = crate::script::magic::script_magic(self.db, self.ws, name);
+        if !magic.failures.is_empty() {
+            let mut failures = self.script_failures.borrow_mut();
+            for failure in &magic.failures {
+                if !failures.contains(failure) {
+                    failures.push(failure.clone());
+                }
+            }
+        }
+        magic
+    }
+
+    /// The method named `name` that `c` itself declares, in any way.
+    pub fn own_method(&self, c: &ClassModel<'db>, name: &str) -> Option<&'db MethodDef> {
+        let found =
+            |methods: &'db [MethodDef]| methods.iter().find(|m| m.name.eq_ignore_ascii_case(name));
+        found(&c.def.methods).or_else(|| found(&self.script_magic(c).methods))
+    }
+
     /// Finds a method on `ty` (a class type), walking supertypes. Returns the
     /// declaring class, the method and the substitution from that class's params.
     pub fn find_method(
@@ -1206,6 +1245,20 @@ impl<'db> Ctx<'db> {
                 && !method.eq_ignore_ascii_case(name)
             {
                 return self.find_method(&anc.clone(), method);
+            }
+        }
+        // what scripts declare comes after everything PHP would run first, on any class
+        if !self.scripts.magic.is_empty() {
+            for anc in self.ancestors(ty).iter() {
+                let TyKind::Class { name: cname, args } = anc.kind() else {
+                    continue;
+                };
+                let Some(c) = self.class(cname) else { continue };
+                let methods = &self.script_magic(&c).methods;
+                if let Some(m) = methods.iter().find(|m| m.name.eq_ignore_ascii_case(name)) {
+                    let map = self.subst_map(&c, args);
+                    return Some((c, m, map));
+                }
             }
         }
         self.on_mixins(ty, |this, mixin| {
@@ -1308,6 +1361,24 @@ impl<'db> Ctx<'db> {
                     immutable: promo.immutable || c.def.mods.is_readonly,
                     magic: false,
                 });
+            }
+        }
+        if !self.scripts.magic.is_empty() {
+            for anc in self.ancestors(ty).iter() {
+                let TyKind::Class { name: cname, args } = anc.kind() else {
+                    continue;
+                };
+                let Some(c) = self.class(cname) else { continue };
+                let properties = &self.script_magic(&c).properties;
+                if let Some(p) = properties.iter().find(|p| p.name == name) {
+                    let map = self.subst_map(&c, args);
+                    let cx = self.class_cx(&c);
+                    let ty = p
+                        .doc_ty
+                        .as_ref()
+                        .map(|t| self.lower(t, &cx, &mut Vec::new()));
+                    return Some(PropertyInfo::from_def(&c, p, ty, map));
+                }
             }
         }
         self.on_mixins(ty, |this, mixin| {

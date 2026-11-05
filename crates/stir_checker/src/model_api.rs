@@ -94,11 +94,7 @@ pub fn function_info(ctx: &Ctx<'_>, loc: ItemLoc) -> SigInfo {
 /// The signature of method `name` declared by the class with key `class`.
 pub fn method_info(ctx: &Ctx<'_>, class: &str, name: &str) -> Option<SigInfo> {
     let c = ctx.class(class)?;
-    let m = c
-        .def
-        .methods
-        .iter()
-        .find(|m| m.name.eq_ignore_ascii_case(name))?;
+    let m = ctx.own_method(&c, name)?;
     Some(info(ctx, &ctx.method_sig(&c, m)))
 }
 
@@ -222,6 +218,46 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
                 visibility: stir_hir::Visibility::Public,
             };
             push(&mut out, member, 2);
+        }
+    }
+    // what scripts declare, with everything declared in PHP going first
+    if !ctx.scripts.magic.is_empty() {
+        for anc in ctx.ancestors(ty).iter() {
+            let TyKind::Class { name, args } = anc.kind() else {
+                continue;
+            };
+            let Some(c) = ctx.class(name) else { continue };
+            let map = ctx.subst_map(&c, args);
+            let magic = ctx.script_magic(&c);
+            for m in &magic.methods {
+                if seen.insert((0, m.name.to_ascii_lowercase())) {
+                    let mut sig = info(ctx, &ctx.method_sig(&c, m));
+                    sig.ret = stir_types::subst(&sig.ret, &map);
+                    out.push(MemberInfo {
+                        name: m.name.clone(),
+                        class: c.key.clone(),
+                        ty: MemberTy::Method(sig),
+                        is_static: m.mods.is_static,
+                        visibility: m.mods.visibility,
+                    });
+                }
+            }
+            for p in &magic.properties {
+                if seen.insert((1, p.name.to_ascii_lowercase()))
+                    && let Some(found) = ctx.find_property(anc, &p.name)
+                {
+                    out.push(MemberInfo {
+                        name: p.name.clone(),
+                        class: c.key.clone(),
+                        ty: MemberTy::Property {
+                            ty: found.ty,
+                            immutable: found.immutable,
+                        },
+                        is_static: false,
+                        visibility: p.mods.visibility,
+                    });
+                }
+            }
         }
     }
     out

@@ -165,11 +165,7 @@ pub fn describe(
             match kind {
                 MemberKind::Method => {
                     let sig = model_api::method_info(&ctx, class, name)?;
-                    let m = model
-                        .def
-                        .methods
-                        .iter()
-                        .find(|m| m.name.eq_ignore_ascii_case(name))?;
+                    let m = ctx.own_method(&model, name)?;
                     let kw = if m.mods.is_static {
                         "static function"
                     } else {

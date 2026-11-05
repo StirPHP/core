@@ -49,6 +49,17 @@ pub struct SourceFile {
     pub origin: FileOrigin,
 }
 
+/// A project's script (`parameters.stirphp.rules`). An input of its own, so that changing a script
+/// invalidates what ran it and nothing else.
+#[salsa::input(debug)]
+pub struct ScriptFile {
+    #[returns(ref)]
+    pub path: PathBuf,
+    /// Its text, or why it can't be read.
+    #[returns(ref)]
+    pub text: Result<String, String>,
+}
+
 /// Runs `f` with the database of the query this thread is in, if it's in one. For code called from
 /// a query that can't be handed the database, a script's native functions: what `f` reads is tracked
 /// as what the query depends on.
@@ -64,6 +75,10 @@ pub struct Workspace {
     pub files: Vec<SourceFile>,
     #[returns(ref)]
     pub settings: Settings,
+    /// The scripts that may run: none, unless whoever runs this chose them or trusts them.
+    #[returns(ref)]
+    #[default]
+    pub scripts: Vec<ScriptFile>,
 }
 
 /// The highest PHPStan rule level (`max`).

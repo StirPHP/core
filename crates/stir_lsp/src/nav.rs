@@ -238,14 +238,11 @@ pub fn target(db: &dyn Db, ws: Workspace, file: SourceFile, def: &Def) -> Option
             let named = |range: TextRange| at(loc.file, range, name_range(&root, range, name));
             match kind {
                 MemberKind::Method => {
-                    let m = c
-                        .methods
-                        .iter()
-                        .find(|m| m.name.eq_ignore_ascii_case(name))?;
-                    if m.magic {
-                        at(loc.file, c.name_range, c.name_range)
-                    } else {
-                        at(loc.file, ptr_range(&m.ptr), m.name_range)
+                    let m = c.methods.iter().find(|m| m.name.eq_ignore_ascii_case(name));
+                    match m {
+                        Some(m) if !m.magic => at(loc.file, ptr_range(&m.ptr), m.name_range),
+                        // a script's has nowhere else to be than its class
+                        _ => at(loc.file, c.name_range, c.name_range),
                     }
                 }
                 MemberKind::Property => {
@@ -256,12 +253,15 @@ pub fn target(db: &dyn Db, ws: Workspace, file: SourceFile, def: &Def) -> Option
                             named(p.range)
                         };
                     }
-                    let p = c
+                    let promoted = c
                         .methods
                         .iter()
                         .flat_map(|m| m.sig.params.iter())
-                        .find(|p| p.promoted.is_some() && &p.name == name)?;
-                    at(loc.file, p.range, p.name_range)
+                        .find(|p| p.promoted.is_some() && &p.name == name);
+                    match promoted {
+                        Some(p) => at(loc.file, p.range, p.name_range),
+                        None => at(loc.file, c.name_range, c.name_range),
+                    }
                 }
                 MemberKind::Const => named(c.consts.iter().find(|k| &k.name == name)?.range),
                 MemberKind::Case => named(c.cases.iter().find(|k| &k.name == name)?.range),

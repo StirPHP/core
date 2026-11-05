@@ -122,13 +122,9 @@ pub fn signature_help(
             kind: MemberKind::Method,
             name,
         } => {
-            let doc = ctx.class(class).and_then(|c| {
-                c.def
-                    .methods
-                    .iter()
-                    .find(|m| m.name.eq_ignore_ascii_case(name))
-                    .and_then(|m| m.doc.clone())
-            });
+            let doc = ctx
+                .class(class)
+                .and_then(|c| ctx.own_method(&c, name).and_then(|m| m.doc.clone()));
             (model_api::method_info(&ctx, class, name)?, "function", doc)
         }
         Def::Class(key) if call.kind() == NEW_EXPR => {

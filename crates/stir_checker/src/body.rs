@@ -129,6 +129,10 @@ pub struct Checker<'a, 'db> {
     pub defs: FxHashMap<TextRange, Def>,
     /// Local bindings by declaring-name range: declared type and kind.
     pub locals: FxHashMap<TextRange, (Ty, LocalKind)>,
+    /// What went wrong with the project's scripts on this file.
+    pub script_failures: Vec<crate::ScriptFailure>,
+    /// Hooks that failed on this file, which it doesn't call again.
+    pub(crate) scripts_off: rustc_hash::FxHashSet<(stir_db::ScriptFile, &'static str)>,
 }
 
 fn is_stmt_kind(k: SyntaxKind) -> bool {
@@ -258,6 +262,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             types: FxHashMap::default(),
             defs: FxHashMap::default(),
             locals: FxHashMap::default(),
+            script_failures: Vec::new(),
+            scripts_off: rustc_hash::FxHashSet::default(),
         }
     }
 
@@ -4600,7 +4606,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 }
                 if let Some((_, found, t)) = best {
                     self.diags.extend(found);
-                    return t;
+                    return self.function_hook(node, fqn.as_str(), t);
                 }
             }
             let sig = self.ctx.function_sig(loc);
@@ -4614,6 +4620,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 self.dynamic_vars_fn = Some(self.fns.len());
             }
             let ret = self.check_args(node, &sig, &FxHashMap::default(), expected, &[]);
+            let ret = self.function_hook(node, fqn.as_str(), ret);
             self.record_asserts(
                 node,
                 &self.ctx.function_def(loc).sig,
@@ -5253,6 +5260,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             let sig = sig_for_receiver(self.ctx.method_sig(&owner, m), recv);
             // `static` return types resolve to the receiver
             let ret = self.check_args(node, &sig, &map, expected, &[]);
+            let ret = self.method_hook(node, &cls, name, ret, false);
             let cx = self.ctx.class_cx(&owner);
             self.record_asserts(node, &m.sig, &sig, cx);
             return resolve_self(&ret, recv);
@@ -5566,6 +5574,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     map
                 };
                 let ret = self.check_args(node, &sig, &map, expected, &extra);
+                let ret = self.method_hook(node, &cls, &name, ret, true);
                 let cx = self.ctx.class_cx(&owner);
                 self.record_asserts(node, &m.sig, &sig, cx);
                 resolve_self(&ret, &recv)

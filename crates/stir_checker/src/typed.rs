@@ -49,19 +49,32 @@ pub struct TypedFile {
     pub locals: FxHashMap<TextRange, (Ty, crate::body::LocalKind)>,
     /// Semantic diagnostics (unfiltered).
     pub diags: Vec<Diagnostic>,
+    /// What went wrong with the project's scripts while checking.
+    pub script_failures: Vec<crate::ScriptFailure>,
 }
 
 /// Runs the checker on `file` and keeps its type information.
 #[salsa::tracked(returns(ref))]
 pub fn typed_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> Arc<TypedFile> {
     let ctx = Ctx::new(db, ws);
-    let mut checker = Checker::new(&ctx, file);
-    let root = stir_db::parse(db, file).syntax();
-    checker.check_root(&root);
-    Arc::new(TypedFile {
-        types: checker.types,
-        defs: checker.defs,
-        locals: checker.locals,
-        diags: checker.diags,
-    })
+    let check = || {
+        let mut checker = Checker::new(&ctx, file);
+        let root = stir_db::parse(db, file).syntax();
+        checker.check_root(&root);
+        let mut script_failures = checker.script_failures;
+        script_failures.extend(ctx.take_script_failures());
+        Arc::new(TypedFile {
+            types: checker.types,
+            defs: checker.defs,
+            locals: checker.locals,
+            diags: checker.diags,
+            script_failures,
+        })
+    };
+    // hooks will run far down in it: this way they all fit on one stack, made once
+    if ctx.scripts.has_return_hooks() || !ctx.scripts.magic.is_empty() {
+        stir_script::with_stack(check)
+    } else {
+        check()
+    }
 }

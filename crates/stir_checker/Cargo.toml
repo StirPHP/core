@@ -11,8 +11,11 @@ salsa = "0.28.5"
 smol_str = "0.3.7"
 stir_db.workspace = true
 stir_hir.workspace = true
+stir_phpdoc.workspace = true
+stir_script.workspace = true
 stir_syntax.workspace = true
 stir_types.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true

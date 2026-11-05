@@ -14,8 +14,8 @@ use anyhow::Context as _;
 use futures::{StreamExt as _, TryStreamExt as _};
 use stir_composer::{Exclusions, InstallState};
 use stir_db::{
-    FileOrigin, IgnoreRule, IgnoreRules, PhpVersion, PhpVersions, RootDatabase, Settings,
-    SourceFile, Workspace,
+    FileOrigin, IgnoreRule, IgnoreRules, PhpVersion, PhpVersions, RootDatabase, ScriptFile,
+    Settings, SourceFile, Workspace,
 };
 
 /// Maximum number of files read concurrently.
@@ -30,6 +30,8 @@ pub struct LoadOptions {
     pub level: Option<u8>,
     /// Apply the baseline in `parameters.stirphp.baseline`: generating one starts without.
     pub baseline: bool,
+    /// Let the scripts in `parameters.stirphp.rules` run. Only for someone who chose to.
+    pub rules: bool,
 }
 
 impl Default for LoadOptions {
@@ -38,6 +40,7 @@ impl Default for LoadOptions {
             vendor: true,
             level: None,
             baseline: true,
+            rules: false,
         }
     }
 }
@@ -56,6 +59,8 @@ pub struct Loaded {
     pub vendor_dir: PathBuf,
     /// What a person should be told about the project, once.
     pub notices: Vec<String>,
+    /// The project's scripts, whether they're allowed to run or not.
+    pub rules: Vec<ScriptFile>,
 }
 
 /// Builds the database for `project`: discovered sources, all builtin stubs and
@@ -108,6 +113,8 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         Vec::new()
     };
 
+    let rules = read_rules(project).await;
+
     let db = RootDatabase::default();
     let mut files = Vec::new();
     let mut sources = Vec::new();
@@ -154,7 +161,21 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
     if let Some(level) = options.level {
         settings.php_level = level;
     }
-    let workspace = Workspace::new(&db, files, settings);
+    let rules: Vec<ScriptFile> = rules
+        .into_iter()
+        .map(|(path, text)| ScriptFile::new(&db, path, text))
+        .collect();
+    let allowed = if options.rules {
+        rules.clone()
+    } else {
+        Vec::new()
+    };
+    for rule in &allowed {
+        tracing::info!(path = %rule.path(&db).display(), "running rules");
+    }
+    let workspace = Workspace::builder(files, settings)
+        .scripts(allowed)
+        .new(&db);
     tracing::debug!(
         sources = sources.len(),
         stubs = stub_count,
@@ -171,7 +192,25 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         composer,
         vendor_dir,
         notices,
+        rules,
     })
+}
+
+/// The scripts of `parameters.stirphp.rules` and their texts, in order. Those that can't be read
+/// are kept, for what uses them to say so at the script.
+pub async fn read_rules(project: &Project) -> Vec<(PathBuf, Result<String, String>)> {
+    let mut seen = BTreeSet::new();
+    let mut scripts = Vec::new();
+    for path in &project.config.rules {
+        let path = stir_composer::normalize(&project.root.join(path));
+        if seen.insert(path.clone()) {
+            let text = tokio::fs::read_to_string(&path)
+                .await
+                .map_err(|e| format!("it can't be read: {e}"));
+            scripts.push((path, text));
+        }
+    }
+    scripts
 }
 
 /// `project`, with a custom `vendor-dir` left out of its sources like `vendor/` is.

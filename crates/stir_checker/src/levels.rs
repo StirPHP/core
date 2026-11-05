@@ -141,6 +141,8 @@ pub fn is_ignorable(code: &str) -> bool {
             | codes::RETURN_NEVER_NOT_SUPPORTED
             | codes::RETURN_UNION_NOT_SUPPORTED
             | codes::THROW_NOT_SUPPORTED
+            | codes::SCRIPT_FAILED
+            | codes::SCRIPT_NOT_USABLE
     )
 }
 

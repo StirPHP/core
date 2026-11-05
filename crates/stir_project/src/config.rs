@@ -24,7 +24,7 @@ pub struct Config {
     pub composer: Option<PathBuf>,
     /// The file with our own baseline, which PHPStan doesn't read.
     pub baseline: Option<PathBuf>,
-    /// The project's rules, as scripts. Stored for when they can run.
+    /// The project's rules, as scripts.
     pub rules: Vec<PathBuf>,
 }
 

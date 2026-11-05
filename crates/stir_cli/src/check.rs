@@ -63,6 +63,8 @@ pub async fn run(args: CheckArgs) -> anyhow::Result<ExitCode> {
             vendor: !args.no_vendor,
             level: args.level,
             baseline: true,
+            // whoever runs this chose to, like running `phpstan` in a project
+            rules: true,
         },
     )
     .await?;
@@ -196,6 +198,7 @@ async fn generate_baseline(
             vendor: !args.no_vendor,
             level: args.level,
             baseline: false,
+            rules: true,
         },
     )
     .await?;
@@ -282,6 +285,11 @@ async fn collect_diagnostics(
 
     let start = Instant::now();
     let mut diagnostics = check_files(loaded, &targets).await?;
+    diagnostics.extend(stir_checker::script_diagnostics(
+        &loaded.db,
+        loaded.workspace,
+        &targets,
+    ));
     tracing::debug!(files = targets.len(), elapsed = ?start.elapsed(), "checked");
     diagnostics.sort_by(|a, b| {
         (&a.file, a.range.start(), a.range.end(), a.severity, &a.code).cmp(&(
@@ -295,13 +303,18 @@ async fn collect_diagnostics(
     Ok((diagnostics, targets.len()))
 }
 
-/// Path → text of every project source, for rendering diagnostics.
+/// Path → text of every project source and script, for rendering diagnostics.
 fn source_texts(loaded: &Loaded) -> HashMap<&Path, &str> {
-    loaded
+    let db = &loaded.db;
+    let sources = loaded
         .sources
         .iter()
-        .map(|f| (f.path(&loaded.db).as_path(), f.text(&loaded.db).as_str()))
-        .collect()
+        .map(|f| (f.path(db).as_path(), f.text(db).as_str()));
+    let scripts = loaded.rules.iter().filter_map(|s| {
+        let text = s.text(db).as_ref().ok()?;
+        Some((s.path(db).as_path(), text.as_str()))
+    });
+    sources.chain(scripts).collect()
 }
 
 /// Renders diagnostics for humans (coloured when stdout is a terminal), showing at

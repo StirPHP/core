@@ -150,6 +150,111 @@ pub struct ClassMods {
     pub is_readonly: bool,
 }
 
+/// `@property*` and `@method` tags on a class with the type parameters `names`, as its members. Those
+/// it has already aren't touched.
+pub fn magic_members(
+    doc: &DocBlock,
+    scope: &Scope,
+    aliases: &Aliases,
+    names: &[SmolStr],
+    ptr: NodePtr,
+    properties: &mut Vec<PropertyDef>,
+    methods: &mut Vec<MethodDef>,
+) {
+    for tag in doc.effective_tags() {
+        match &tag.kind {
+            TagKind::Property(p) => {
+                if properties.iter().any(|x| x.name == p.name.name) {
+                    continue;
+                }
+                let cx = DocCx {
+                    scope,
+                    type_params: names,
+                    aliases,
+                };
+                properties.push(PropertyDef {
+                    name: p.name.name.clone(),
+                    ty: None,
+                    doc_ty: Some(cx.lower(&p.ty)),
+                    magic: true,
+                    mods: MemberMods::default(),
+                    immutable: p.access == stir_phpdoc::PropertyAccess::Read,
+                    has_default: false,
+                    doc: None,
+                    range: tag.range,
+                    ptr,
+                });
+            }
+            TagKind::Method(m) => {
+                if methods
+                    .iter()
+                    .any(|x| x.name.eq_ignore_ascii_case(&m.name.name))
+                {
+                    continue;
+                }
+                let mut tps: Vec<TypeParamDef> = Vec::new();
+                let mut mnames: Vec<SmolStr> =
+                    m.templates.iter().map(|t| t.name.name.clone()).collect();
+                mnames.extend(names.iter().cloned());
+                let dcx = DocCx {
+                    scope,
+                    type_params: &mnames,
+                    aliases,
+                };
+                for t in &m.templates {
+                    tps.push(TypeParamDef {
+                        name: t.name.name.clone(),
+                        variance: Variance::Invariant,
+                        bound: t.bound.as_ref().map(|b| dcx.lower(b)),
+                        range: t.range,
+                    });
+                }
+                let params = m
+                    .params
+                    .iter()
+                    .map(|mp| ParamDef {
+                        name: mp.name.name.clone(),
+                        ty: None,
+                        doc_ty: mp.ty.as_ref().map(|t| dcx.lower(t)),
+                        has_default: mp.default.is_some(),
+                        default_is_null: false,
+                        default_ty: None,
+                        out_ty: None,
+                        closure_this: None,
+                        variadic: mp.variadic,
+                        by_ref: mp.by_ref,
+                        promoted: None,
+                        range: mp.range,
+                        name_range: mp.name.range,
+                        ptr,
+                    })
+                    .collect();
+                methods.push(MethodDef {
+                    name: m.name.name.clone(),
+                    mods: MemberMods {
+                        is_static: m.is_static,
+                        ..MemberMods::default()
+                    },
+                    sig: Signature {
+                        type_params: tps,
+                        params,
+                        ret: None,
+                        doc_ret: m.return_type.as_ref().map(|t| dcx.lower(t)),
+                        by_ref: false,
+                        asserts: Vec::new(),
+                    },
+                    has_body: true,
+                    magic: true,
+                    doc: None,
+                    ptr,
+                    name_range: m.name.range,
+                });
+            }
+            _ => {}
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PropertyDef {
     pub name: SmolStr,
@@ -972,7 +1077,15 @@ impl Lowerer {
             }
         }
         if let Some(d) = doc {
-            self.magic_members(d, node, &mut class, &names);
+            magic_members(
+                d,
+                self.cur_scope(),
+                &self.aliases,
+                &names,
+                NodePtr::new(node),
+                &mut class.properties,
+                &mut class.methods,
+            );
             let dcx = self.doc_cx(&names);
             for tag in d.effective_tags() {
                 if tag.name.ends_with("mixin")
@@ -986,101 +1099,6 @@ impl Lowerer {
             }
         }
         self.out.classes.push(class);
-    }
-
-    /// `@property*` and `@method` tags on a class.
-    fn magic_members(
-        &self,
-        doc: &DocBlock,
-        node: &SyntaxNode,
-        class: &mut ClassDef,
-        names: &[SmolStr],
-    ) {
-        let ptr = NodePtr::new(node);
-        for tag in doc.effective_tags() {
-            match &tag.kind {
-                TagKind::Property(p) => {
-                    if class.properties.iter().any(|x| x.name == p.name.name) {
-                        continue;
-                    }
-                    class.properties.push(PropertyDef {
-                        name: p.name.name.clone(),
-                        ty: None,
-                        doc_ty: Some(self.doc_cx(names).lower(&p.ty)),
-                        magic: true,
-                        mods: MemberMods::default(),
-                        immutable: p.access == stir_phpdoc::PropertyAccess::Read,
-                        has_default: false,
-                        doc: None,
-                        range: tag.range,
-                        ptr,
-                    });
-                }
-                TagKind::Method(m) => {
-                    if class
-                        .methods
-                        .iter()
-                        .any(|x| x.name.eq_ignore_ascii_case(&m.name.name))
-                    {
-                        continue;
-                    }
-                    let mut tps: Vec<TypeParamDef> = Vec::new();
-                    let mut mnames: Vec<SmolStr> =
-                        m.templates.iter().map(|t| t.name.name.clone()).collect();
-                    mnames.extend(names.iter().cloned());
-                    let dcx = self.doc_cx(&mnames);
-                    for t in &m.templates {
-                        tps.push(TypeParamDef {
-                            name: t.name.name.clone(),
-                            variance: Variance::Invariant,
-                            bound: t.bound.as_ref().map(|b| dcx.lower(b)),
-                            range: t.range,
-                        });
-                    }
-                    let params = m
-                        .params
-                        .iter()
-                        .map(|mp| ParamDef {
-                            name: mp.name.name.clone(),
-                            ty: None,
-                            doc_ty: mp.ty.as_ref().map(|t| dcx.lower(t)),
-                            has_default: mp.default.is_some(),
-                            default_is_null: false,
-                            default_ty: None,
-                            out_ty: None,
-                            closure_this: None,
-                            variadic: mp.variadic,
-                            by_ref: mp.by_ref,
-                            promoted: None,
-                            range: mp.range,
-                            name_range: mp.name.range,
-                            ptr,
-                        })
-                        .collect();
-                    class.methods.push(MethodDef {
-                        name: m.name.name.clone(),
-                        mods: MemberMods {
-                            is_static: m.is_static,
-                            ..MemberMods::default()
-                        },
-                        sig: Signature {
-                            type_params: tps,
-                            params,
-                            ret: None,
-                            doc_ret: m.return_type.as_ref().map(|t| dcx.lower(t)),
-                            by_ref: false,
-                            asserts: Vec::new(),
-                        },
-                        has_body: true,
-                        magic: true,
-                        doc: None,
-                        ptr,
-                        name_range: m.name.range,
-                    });
-                }
-                _ => {}
-            }
-        }
     }
 
     fn member(&self, m: &SyntaxNode, class: &mut ClassDef, names: &[SmolStr]) {

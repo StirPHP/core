@@ -98,3 +98,7 @@ pub const TYPE_MISMATCH: &str = "SPHP0005";
 pub const PHP_SYNTAX_VERSION: &str = "SPHP0060";
 /// Something of PHP's library that isn't on the project's PHP version.
 pub const PHP_LIBRARY_VERSION: &str = "SPHP0061";
+/// A project's script failed while running: it took too long, or its code went wrong.
+pub const SCRIPT_FAILED: &str = "SPHP0070";
+/// A project's script can't run at all: it can't be read, or it doesn't compile.
+pub const SCRIPT_NOT_USABLE: &str = "SPHP0071";

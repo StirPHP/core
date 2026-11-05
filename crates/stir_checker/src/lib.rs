@@ -20,11 +20,13 @@ pub mod levels;
 mod model;
 pub mod model_api;
 pub mod php_version;
+pub mod script;
 mod typed;
 
 pub use body::{Checker, LocalKind};
 pub use infer::widen_literals;
 pub use model::Ctx;
+pub use script::{ScriptFailure, script_diagnostics};
 pub use typed::{Def, MemberKind, TypedFile, typed_file};
 
 /// What checking a file comes to.
@@ -33,6 +35,9 @@ pub struct FileCheck {
     pub diags: Arc<Vec<Diagnostic>>,
     /// How many diagnostics each rule of the baseline hid here, by the rule's index.
     pub baseline_hits: Vec<(u32, u32)>,
+    /// What went wrong with the project's scripts on this file. Not its fault, so not its problem:
+    /// see [`script_diagnostics`].
+    pub script_failures: Vec<ScriptFailure>,
 }
 
 /// All diagnostics of `file` within `ws`.
@@ -50,9 +55,11 @@ pub fn checked_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> FileCheck {
         return FileCheck {
             diags: Arc::new(Vec::new()),
             baseline_hits: Vec::new(),
+            script_failures: Vec::new(),
         };
     }
     let mut diags = stir_db::syntax_diagnostics(db, file).as_ref().clone();
+    let mut script_failures = Vec::new();
     // Semantic errors on a broken tree are mostly noise: fix syntax first.
     if file.origin(db) == FileOrigin::Source && diags.is_empty() {
         diags.extend(
@@ -60,7 +67,13 @@ pub fn checked_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> FileCheck {
                 .iter()
                 .cloned(),
         );
-        diags.extend(typed_file(db, ws, file).diags.iter().cloned());
+        let typed = typed_file(db, ws, file);
+        diags.extend(typed.diags.iter().cloned());
+        script_failures.extend(typed.script_failures.iter().cloned());
+        // what rules report goes the way of everything else from here on
+        let rules = script::rule_check(db, ws, file);
+        diags.extend(rules.diags.iter().cloned());
+        script_failures.extend(rules.failures.iter().cloned());
     }
     levels::filter_php(&mut diags, settings);
     diags.sort_by_key(|d| (d.range.start(), d.range.end()));
@@ -79,6 +92,7 @@ pub fn checked_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> FileCheck {
     FileCheck {
         diags: Arc::new(diags),
         baseline_hits,
+        script_failures,
     }
 }
 
