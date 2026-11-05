@@ -3,7 +3,7 @@
 use stir_checker::levels;
 use stir_syntax::{SyntaxKind::*, TextRange, TextSize};
 
-use super::style::{indent_at, starts_line};
+use super::style::starts_line;
 use super::{Change, Cx, Kind, Offer};
 use crate::imports;
 
@@ -72,8 +72,16 @@ fn ignore_list_end(comment: &str) -> Option<usize> {
     Some(at + TAG.len() + list.len())
 }
 
+/// The end of the line `at` is on, before its line break.
+fn end_of_line(text: &str, at: TextSize) -> TextSize {
+    let rest = &text[usize::from(at)..];
+    let len = rest.find('\n').unwrap_or(rest.len());
+    let len = if rest[..len].ends_with('\r') { len - 1 } else { len };
+    at + TextSize::from(len as u32)
+}
+
 fn place_of(cx: &Cx<'_>, offset: TextSize) -> Option<Place> {
-    let end = imports::line_end(cx.text, offset);
+    let end = end_of_line(cx.text, offset);
     let line_start = imports::line_start(cx.text, offset);
     // the comment that's on the line already, or the line above if that's all there is to it
     for candidate in [end, line_start] {
@@ -130,15 +138,10 @@ fn edit_of(cx: &Cx<'_>, place: Place, code: &str) -> super::FileEdit {
         Place::AddTo(at) => cx.insert(at, format!(", {code}")),
         Place::EndOfLine(at) => cx.insert(at, format!(" // @phpstan-ignore {code}")),
         Place::Above(at) => {
-            let indent = indent_at(cx.text, at + TextSize::from(0));
-            let indent = if indent.is_empty() {
-                cx.text[usize::from(at)..]
-                    .chars()
-                    .take_while(|c| *c == ' ' || *c == '\t')
-                    .collect()
-            } else {
-                indent
-            };
+            let indent: String = cx.text[usize::from(at)..]
+                .chars()
+                .take_while(|c| *c == ' ' || *c == '\t')
+                .collect();
             cx.insert(
                 at,
                 format!("{indent}// @phpstan-ignore {code}{}", cx.style.nl),

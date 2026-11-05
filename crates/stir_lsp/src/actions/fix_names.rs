@@ -173,7 +173,11 @@ fn class_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
             continue;
         }
         let rank = (
-            usize::from(loc.file.origin(db) == FileOrigin::Vendor),
+            match loc.file.origin(db) {
+                FileOrigin::Source => 0,
+                FileOrigin::Vendor => 1,
+                FileOrigin::Stub => 2,
+            },
             namespace_distance(&def.name, &namespace),
             def.name.as_str().len(),
         );
@@ -185,7 +189,9 @@ fn class_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
     }
     exact.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.as_str().cmp(b.1.as_str())));
     exact.truncate(MAX_IMPORTS);
-    let single = exact.len() == 1;
+    // the only one of the project's, whatever else goes by that name in PHP's stubs
+    let single = exact.iter().filter(|(rank, _)| rank.0 == 0).count() == 1 || exact.len() == 1;
+    let mut first = true;
     for (_, fqn) in exact {
         let name = imports.class(db, cx.ws, &fqn);
         // qualified the way it's written: what the import is for is the first part of that
@@ -211,9 +217,10 @@ fn class_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
             move || Ok(import_change(cx, range, text, import)),
         )
         .fixing(d.shown, &d.code);
-        if single {
+        if single && first {
             offer = offer.preferred();
         }
+        first = false;
         out.push(offer);
     }
     close.sort_by(|a, b| {

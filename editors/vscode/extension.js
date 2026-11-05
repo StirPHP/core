@@ -147,6 +147,8 @@ function createClient(command) {
     // in an untrusted workspace, scripts and PHPStan never run, and the server doesn't ask about them
     initializationOptions: {
       workspaceTrusted: vscode.workspace.isTrusted,
+      // what the server can have this do around a code action, which the protocol has no word for
+      clientCommands: ['stirphp.renameAt', 'stirphp.askParameter'],
       phpstan: {
         enable: config().get('phpstan.enable', 'auto'),
         path: config().get('phpstan.path', ''),
@@ -192,6 +194,54 @@ async function restart() {
   await start();
 }
 
+/**
+ * After a code action that made up a name: lets the person choose it, as rename does everywhere it's
+ * used. A snippet's tab stop couldn't do that, with the name in two places.
+ * @param {string} uri
+ * @param {number} line
+ * @param {number} character
+ */
+async function renameAt(uri, line, character) {
+  const editor = await vscode.window.showTextDocument(vscode.Uri.parse(uri));
+  const position = new vscode.Position(line, character);
+  editor.selection = new vscode.Selection(position, position);
+  await vscode.commands.executeCommand('editor.action.rename');
+}
+
+/**
+ * The "Add parameter..." code action: asks what it is, and has the server make the change.
+ * @param {string} uri
+ * @param {number} offset
+ * @param {string} hash
+ */
+async function askParameter(uri, offset, hash) {
+  const title = 'Add a parameter';
+  const parameter = await vscode.window.showInputBox({
+    title,
+    prompt: 'As it is to be declared. With a default, existing calls stay as they are.',
+    placeHolder: 'int $limit = 10',
+    validateInput: (value) => (/\$\w/.test(value) ? undefined : 'It needs a name, such as $limit'),
+  });
+  if (!parameter) {
+    return;
+  }
+  let passed;
+  if (!parameter.includes('=')) {
+    passed = await vscode.window.showInputBox({
+      title,
+      prompt: 'What existing calls pass. Left empty, they pass TODO_NEW_ARGUMENT, which is an error at each until it is replaced.',
+      placeHolder: 'TODO_NEW_ARGUMENT',
+    });
+    if (passed === undefined) {
+      return;
+    }
+  }
+  await client?.sendRequest('workspace/executeCommand', {
+    command: 'stirphp.addParameter',
+    arguments: [{ uri, offset, hash, parameter, passed }],
+  });
+}
+
 /** @param {vscode.ExtensionContext} context */
 export async function activate(context) {
   ctx = context;
@@ -199,6 +249,8 @@ export async function activate(context) {
   context.subscriptions.push(
     log,
     vscode.commands.registerCommand('stirphp.restartServer', restart),
+    vscode.commands.registerCommand('stirphp.renameAt', renameAt),
+    vscode.commands.registerCommand('stirphp.askParameter', askParameter),
     vscode.commands.registerCommand('stirphp.checkForUpdates', async () => {
       if (config().get('server.path', '').trim()) {
         vscode.window.showInformationMessage('StirPHP: `stirphp.server.path` is set, so the extension does not manage stirphp.');

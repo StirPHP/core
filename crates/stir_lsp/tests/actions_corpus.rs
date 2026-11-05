@@ -77,6 +77,23 @@ fn code_counts(db: &RootDatabase, ws: Workspace, file: SourceFile) -> BTreeMap<S
     counts
 }
 
+/// What can be new after an action, because of what the action is:
+/// a class that wasn't known is now checked; a new parameter's placeholder is meant to be an error;
+/// and a new function's types are only those that are certain, so that where the rule level asks
+/// for more, there's less than it wants, and what the old code had narrowed isn't known in it.
+fn explained(tag: &str, code: &str) -> bool {
+    match tag {
+        "import.class" | "typo.class" | "import.function" | "typo.function" | "import.const"
+        | "typo.const" => true,
+        "signature.add" => code == "constant.notFound" || code.starts_with("missingType."),
+        "create.method" | "create.property" | "accessor.get" | "accessor.set" | "accessor.both"
+        | "extract.function" | "override" | "implement" | "constructor.generate" => {
+            code.starts_with("missingType.")
+        }
+        _ => false,
+    }
+}
+
 /// The tag an offer is counted under: its id without what's particular to the place.
 fn tag(id: &str) -> String {
     id.split(':').next().unwrap_or(id).to_owned()
@@ -182,7 +199,7 @@ fn try_at(
             let now = code_counts(db, ws, *f);
             for (code, n) in &now {
                 let had = was.get(code).copied().unwrap_or(0);
-                if *n > had {
+                if *n > had && !explained(&t, code) {
                     let messages: Vec<String> = stir_checker::check_file(db, ws, *f)
                         .iter()
                         .filter(|d| &d.code == code)
