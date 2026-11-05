@@ -141,7 +141,7 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
     let mut out: Vec<MemberInfo> = Vec::new();
 
     let mut seen = rustc_hash::FxHashSet::default();
-    for anc in ctx.ancestors(ty) {
+    for anc in ctx.ancestors(ty).iter() {
         let TyKind::Class { name, args } = anc.kind() else {
             continue;
         };

@@ -305,6 +305,7 @@ fn attaches_doc_comment(kind: SyntaxKind) -> bool {
             | CLASS_CONST_DECL
             | CONST_DECL
             | ENUM_CASE
+            | TRAIT_USE
             | PARAM
             | EXPR_STMT
             | RETURN_STMT

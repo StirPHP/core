@@ -901,7 +901,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             TyKind::Never => (Ty::never(), Ty::never()),
             TyKind::Class { name, args } => {
                 // Traversable / Iterator / IteratorAggregate
-                for anc in self.ctx.ancestors(&Ty::class(name.clone(), args.clone())) {
+                for anc in self.ctx.ancestors(&Ty::class(name.clone(), args.clone())).iter() {
                     if let TyKind::Class { name: n, args: a } = anc.kind()
                         && matches!(
                             n.to_ascii_lowercase().as_str(),
@@ -1044,25 +1044,62 @@ impl<'a, 'db> Checker<'a, 'db> {
         self.check_class_rules(&model);
 
         if let Some(body) = node.child(CLASS_BODY) {
-            for member in body.children() {
-                match member.kind() {
-                    METHOD_DECL => self.method_decl(&member, &model),
-                    PROPERTY_DECL => self.property_decl(&member, &model),
-                    CLASS_CONST_DECL | ENUM_CASE => {
-                        for e in member.descendants().filter(|d| {
-                            is_expr_kind(d.kind())
-                                && d.parent()
-                                    .is_some_and(|p| matches!(p.kind(), CONST_ELEM | ENUM_CASE))
-                        }) {
-                            self.expr(&e, None);
-                        }
-                    }
-                    _ => {}
+            // A trait's code runs as part of the classes using it, so that's where it's checked,
+            // as PHPStan does. One nobody here uses can only be checked by itself.
+            let users = if model.kind() == ClassKind::Trait {
+                self.ctx.trait_users(&model.key)
+            } else {
+                Vec::new()
+            };
+            if users.is_empty() {
+                self.class_members(&body, &model, &model);
+            } else {
+                let start = self.diags.len();
+                for user in &users {
+                    let Some(context) = self.ctx.class(user) else {
+                        continue;
+                    };
+                    self.class = Some(context.clone());
+                    self.lower_cx = self.ctx.member_cx(&model, &context);
+                    self.class_members(&body, &model, &context);
                 }
+                // the same mistake in the context of each class is one mistake
+                let found = self.diags.split_off(start);
+                let mut seen = rustc_hash::FxHashSet::default();
+                self.diags.extend(
+                    found
+                        .into_iter()
+                        .filter(|d| seen.insert((d.range, d.code))),
+                );
             }
         }
         self.lower_cx = saved_cx;
         self.class = saved_class;
+    }
+
+    /// Checks the bodies of the members `model` declares, in class `context`.
+    fn class_members(
+        &mut self,
+        body: &SyntaxNode,
+        model: &Rc<ClassModel<'db>>,
+        context: &Rc<ClassModel<'db>>,
+    ) {
+        for member in body.children() {
+            match member.kind() {
+                METHOD_DECL => self.method_decl(&member, model, context),
+                PROPERTY_DECL => self.property_decl(&member, model),
+                CLASS_CONST_DECL | ENUM_CASE => {
+                    for e in member.descendants().filter(|d| {
+                        is_expr_kind(d.kind())
+                            && d.parent()
+                                .is_some_and(|p| matches!(p.kind(), CONST_ELEM | ENUM_CASE))
+                    }) {
+                        self.expr(&e, None);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn check_class_header(&mut self, model: &Rc<ClassModel<'db>>) {
@@ -1077,19 +1114,24 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
-    fn method_decl(&mut self, node: &SyntaxNode, model: &Rc<ClassModel<'db>>) {
+    fn method_decl(
+        &mut self,
+        node: &SyntaxNode,
+        model: &Rc<ClassModel<'db>>,
+        context: &Rc<ClassModel<'db>>,
+    ) {
         let ptr = stir_hir::NodePtr::new(node);
         let Some(m) = model.def.methods.iter().find(|m| m.ptr == ptr) else {
             return;
         };
-        let sig = self.ctx.method_sig(model, m);
+        let sig = self.ctx.method_sig_in(model, m, context);
         let mut sink = Vec::new();
         // report type errors written on the method signature
         let _ = self.ctx.build_sig(
             "m:check",
             &m.name,
             &m.sig,
-            &self.ctx.class_cx(model),
+            &self.ctx.member_cx(model, context),
             &mut sink,
         );
         for e in sink {
@@ -1105,7 +1147,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         let this = if m.mods.is_static {
             None
         } else {
-            Some(Ty::this_of(model.self_ty()))
+            Some(Ty::this_of(context.self_ty()))
         };
         if m.has_body {
             self.function_body(node, &sig, this);
@@ -2336,8 +2378,12 @@ impl<'a, 'db> Checker<'a, 'db> {
         if let Some(p) = self.ctx.find_property(&class_of(&bt), &name)
             && p.immutable
         {
-            let in_own_ctor =
-                self.in_ctor && self.class.as_ref().is_some_and(|c| c.key == p.class.key);
+            let in_own_ctor = self.in_ctor
+                && self.class.as_ref().is_some_and(|c| {
+                    c.key == p.class.key
+                        || (p.class.kind() == ClassKind::Trait
+                            && self.ctx.is_subclass(&c.name, &p.class.name))
+                });
             if !in_own_ctor {
                 self.error(
                     lhs.text_range(),
@@ -2974,10 +3020,12 @@ impl<'a, 'db> Checker<'a, 'db> {
                             variadic: p.kind == stir_types::ParamKind::Variadic,
                             by_ref: false,
                             range: node.text_range(),
+                            documented: false,
                         })
                         .collect(),
                     ret: f.ret.clone(),
                     ret_declared: true,
+                    ret_documented: false,
                     external: false,
                 };
                 self.check_args(node, &sig, &FxHashMap::default(), expected, &[])
@@ -3165,7 +3213,10 @@ impl<'a, 'db> Checker<'a, 'db> {
     /// Are `ty` and all its ancestors known? A member can come from an unknown ancestor, so
     /// a missing one isn't an error: the unknown class is reported where it's named.
     fn class_known(&self, ty: &Ty) -> bool {
-        matches!(ty.kind(), TyKind::Class { .. }) && self.ctx.hierarchy_known(ty)
+        // what a trait has depends on the class using it: this is a trait nobody here uses
+        let in_a_trait = matches!(ty.kind(), TyKind::Class { name, .. }
+            if self.ctx.class(name).is_some_and(|c| c.kind() == ClassKind::Trait));
+        matches!(ty.kind(), TyKind::Class { .. }) && !in_a_trait && self.ctx.hierarchy_known(ty)
     }
 
     fn visible(&self, owner: &Rc<ClassModel<'db>>, vis: Visibility) -> bool {
@@ -3370,6 +3421,8 @@ impl<'a, 'db> Checker<'a, 'db> {
                 return match &self.class {
                     Some(c) => match &self.ctx.supers(c).parent {
                         Some(p) => p.clone(),
+                        // a trait's parent is that of the class using it
+                        None if c.kind() == ClassKind::Trait => Ty::error(),
                         None => {
                             self.error(
                                 node.text_range(),

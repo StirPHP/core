@@ -9,6 +9,8 @@ mod items;
 pub mod name;
 pub mod type_ref;
 
+use rustc_hash::FxHashMap;
+use smol_str::SmolStr;
 use std::sync::Arc;
 
 use stir_db::{Db, SourceFile, Workspace};
@@ -64,6 +66,30 @@ pub fn def_index(db: &dyn Db, ws: Workspace) -> Arc<DefIndex> {
     }
     index.sort();
     Arc::new(index)
+}
+
+/// By lowercase trait name, the project's classes and traits that use the trait directly,
+/// sorted. A vendor class using a trait says nothing about the project's code.
+#[salsa::tracked(returns(ref))]
+pub fn trait_uses(db: &dyn Db, ws: Workspace) -> Arc<FxHashMap<SmolStr, Vec<SmolStr>>> {
+    let mut uses: FxHashMap<SmolStr, Vec<SmolStr>> = FxHashMap::default();
+    for &file in ws.files(db) {
+        if file.origin(db) != stir_db::FileOrigin::Source {
+            continue;
+        }
+        for c in &file_items(db, file).classes {
+            for t in &c.traits {
+                if let type_ref::TypeRefKind::Named(name, _) = &t.kind {
+                    uses.entry(name.key()).or_default().push(c.name.key());
+                }
+            }
+        }
+    }
+    for users in uses.values_mut() {
+        users.sort();
+        users.dedup();
+    }
+    Arc::new(uses)
 }
 
 #[cfg(test)]

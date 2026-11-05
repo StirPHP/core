@@ -87,6 +87,8 @@ pub struct ParamSig {
     pub variadic: bool,
     pub by_ref: bool,
     pub range: TextRange,
+    /// Has a PHPDoc type, its own or inherited: overrides inherit it.
+    pub documented: bool,
 }
 
 /// A resolved function or method signature.
@@ -98,6 +100,8 @@ pub struct FnSig {
     pub ret: Ty,
     /// Was a return type written (or known from the declaration)?
     pub ret_declared: bool,
+    /// The return type comes from PHPDoc, its own or inherited: overrides inherit it.
+    pub ret_documented: bool,
     /// A declared function, not a function value: it takes untyped values.
     pub external: bool,
 }
@@ -147,6 +151,9 @@ pub struct Ctx<'db> {
     classes: RefCell<FxHashMap<SmolStr, Option<Rc<ClassModel<'db>>>>>,
     supers: RefCell<FxHashMap<SmolStr, Rc<Supers>>>,
     fn_sigs: RefCell<FxHashMap<(SourceFile, u32), Rc<FnSig>>>,
+    /// By the class they're seen in, the declaring class and the lowercase method name.
+    method_sigs: RefCell<FxHashMap<(SmolStr, SmolStr, SmolStr), Rc<FnSig>>>,
+    ancestors: RefCell<FxHashMap<Ty, Rc<Vec<Ty>>>>,
     in_progress: RefCell<FxHashSet<SmolStr>>,
 }
 
@@ -167,6 +174,8 @@ impl<'db> Ctx<'db> {
             classes: RefCell::default(),
             supers: RefCell::default(),
             fn_sigs: RefCell::default(),
+            method_sigs: RefCell::default(),
+            ancestors: RefCell::default(),
             in_progress: RefCell::default(),
         }
     }
@@ -294,9 +303,36 @@ impl<'db> Ctx<'db> {
                 .iter()
                 .map(|p| (p.name.clone(), p.ty.clone()))
                 .collect(),
-            self_ty: Some(c.self_ty()),
+            // `self` in a trait is whichever class uses it
+            self_ty: Some(if c.kind() == ClassKind::Trait {
+                Ty::static_of(c.self_ty())
+            } else {
+                c.self_ty()
+            }),
             parent_ty,
         }
+    }
+
+    /// The project's classes using trait `key`, directly or through other traits, sorted.
+    pub fn trait_users(&self, key: &str) -> Vec<SmolStr> {
+        let uses = stir_hir::trait_uses(self.db, self.ws);
+        let mut out = Vec::new();
+        let mut seen = FxHashSet::default();
+        let mut queue = vec![SmolStr::new(key)];
+        while let Some(t) = queue.pop() {
+            for user in uses.get(&t).into_iter().flatten() {
+                if !seen.insert(user.clone()) {
+                    continue;
+                }
+                match self.class(user) {
+                    Some(c) if c.kind() == ClassKind::Trait => queue.push(user.clone()),
+                    Some(_) => out.push(user.clone()),
+                    None => {}
+                }
+            }
+        }
+        out.sort();
+        out
     }
 
     pub fn supers(&self, c: &ClassModel<'db>) -> Rc<Supers> {
@@ -351,13 +387,32 @@ impl<'db> Ctx<'db> {
         s
     }
 
-    /// `ty` and all its supertypes (class types only), breadth-first.
-    pub fn ancestors(&self, ty: &Ty) -> Vec<Ty> {
+    /// `ty` and all its supertypes (class types only), in the order PHP looks members up:
+    /// a class, the traits it uses, then its parent likewise, and finally the interfaces.
+    pub fn ancestors(&self, ty: &Ty) -> Rc<Vec<Ty>> {
+        if let Some(a) = self.ancestors.borrow().get(ty) {
+            return a.clone();
+        }
         let mut out: Vec<Ty> = Vec::new();
-        let mut queue = vec![ty.clone()];
+        let mut interfaces = std::collections::VecDeque::new();
         let mut seen = FxHashSet::default();
-        while let Some(t) = queue.first().cloned() {
-            queue.remove(0);
+        let mut parent = Some(ty.clone());
+        while let Some(t) = parent.take() {
+            let TyKind::Class { name, args } = t.kind() else {
+                break;
+            };
+            if !seen.insert(name.to_ascii_lowercase()) {
+                break;
+            }
+            out.push(t.clone());
+            let Some(c) = self.class(name) else { break };
+            let s = self.supers(&c);
+            let map = self.subst_map(&c, args);
+            self.add_traits(&s.traits, &map, &mut out, &mut seen);
+            interfaces.extend(s.interfaces.iter().map(|i| stir_types::subst(i, &map)));
+            parent = s.parent.as_ref().map(|p| stir_types::subst(p, &map));
+        }
+        while let Some(t) = interfaces.pop_front() {
             let TyKind::Class { name, args } = t.kind() else {
                 continue;
             };
@@ -368,15 +423,41 @@ impl<'db> Ctx<'db> {
             if let Some(c) = self.class(name) {
                 let s = self.supers(&c);
                 let map = self.subst_map(&c, args);
-                for sup in s.parent.iter().chain(&s.interfaces).chain(&s.traits) {
-                    queue.push(stir_types::subst(sup, &map));
-                }
-            }
-            if out.len() > 64 {
-                break;
+                interfaces.extend(
+                    s.parent
+                        .iter()
+                        .chain(&s.interfaces)
+                        .map(|i| stir_types::subst(i, &map)),
+                );
             }
         }
+        let out = Rc::new(out);
+        self.ancestors.borrow_mut().insert(ty.clone(), out.clone());
         out
+    }
+
+    /// Traits, and the traits they use, in the order PHP looks members up.
+    fn add_traits(
+        &self,
+        traits: &[Ty],
+        map: &FxHashMap<ParamId, Ty>,
+        out: &mut Vec<Ty>,
+        seen: &mut FxHashSet<String>,
+    ) {
+        for t in traits {
+            let t = stir_types::subst(t, map);
+            let TyKind::Class { name, args } = t.kind() else {
+                continue;
+            };
+            if !seen.insert(name.to_ascii_lowercase()) {
+                continue;
+            }
+            out.push(t.clone());
+            if let Some(c) = self.class(name) {
+                let s = self.supers(&c);
+                self.add_traits(&s.traits, &self.subst_map(&c, args), out, seen);
+            }
+        }
     }
 
     /// Are `ty` and all its ancestors known?
@@ -426,6 +507,7 @@ impl<'db> Ctx<'db> {
                 PhpBuiltin::Iterable => Ty::plain_iterable(),
                 PhpBuiltin::SelfType => cx.self_ty.clone().unwrap_or_else(Ty::error),
                 PhpBuiltin::Static => match &cx.self_ty {
+                    Some(s) if matches!(s.kind(), TyKind::SelfType { .. }) => s.clone(),
                     Some(s) => Ty::static_of(s.clone()),
                     None => Ty::error(),
                 },
@@ -724,6 +806,7 @@ impl<'db> Ctx<'db> {
             params,
             ret,
             ret_declared,
+            ret_documented: sig.doc_ret.is_some(),
             external: true,
         }
     }
@@ -740,19 +823,187 @@ impl<'db> Ctx<'db> {
             variadic: p.variadic,
             by_ref: p.by_ref,
             range: p.range,
+            documented: p.doc_ty.is_some(),
         }
     }
 
+    /// The signature of method `m` declared in `c`, with the PHPDoc it inherits.
     pub fn method_sig(&self, c: &ClassModel<'db>, m: &MethodDef) -> FnSig {
-        let cx = self.class_cx(c);
+        self.method_sig_in(c, m, c)
+    }
+
+    /// The signature of method `m` declared in `owner`, as seen in `context`: `owner` itself,
+    /// or for a trait, a class using it.
+    pub fn method_sig_in(
+        &self,
+        owner: &ClassModel<'db>,
+        m: &MethodDef,
+        context: &ClassModel<'db>,
+    ) -> FnSig {
+        let key = (
+            context.key.clone(),
+            owner.key.clone(),
+            SmolStr::new(m.name.to_ascii_lowercase()),
+        );
+        if let Some(s) = self.method_sigs.borrow().get(&key) {
+            return (**s).clone();
+        }
+        let cx = self.member_cx(owner, context);
         let mut sink = Vec::new();
-        self.build_sig(
-            &format!("m:{}::{}", c.key, m.name.to_ascii_lowercase()),
+        let mut sig = self.build_sig(
+            &format!("m:{}::{}", owner.key, m.name.to_ascii_lowercase()),
             &m.name,
             &m.sig,
             &cx,
             &mut sink,
-        )
+        );
+        // a method's magic declaration has nothing to inherit from
+        if !m.magic {
+            let guard = SmolStr::new(format!("doc:{}::{}", key.0, key.2));
+            if self.in_progress.borrow_mut().insert(guard.clone()) {
+                self.inherit_method_doc(owner, m, context, &mut sig, &cx);
+                self.in_progress.borrow_mut().remove(&guard);
+            }
+        }
+        self.method_sigs.borrow_mut().insert(key, Rc::new(sig.clone()));
+        sig
+    }
+
+    /// What types inside `owner`'s members are lowered against, when seen in `context`.
+    /// Seen in `owner` itself, `self` in a trait is whichever class uses it.
+    pub fn member_cx(&self, owner: &ClassModel<'db>, context: &ClassModel<'db>) -> LowerCx {
+        if owner.key == context.key {
+            return self.class_cx(owner);
+        }
+        let mut cx = self.class_cx(context);
+        let args = self
+            .ancestors(&context.self_ty())
+            .iter()
+            .find_map(|a| match a.kind() {
+                TyKind::Class { name, args } if name.eq_ignore_ascii_case(&owner.name) => {
+                    Some(args.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_default();
+        let map = self.subst_map(owner, &args);
+        cx.generics.extend(owner.params.iter().map(|p| {
+            let ty = map.get(&p.id).cloned().unwrap_or_else(|| p.ty.clone());
+            (p.name.clone(), ty)
+        }));
+        cx
+    }
+
+    /// Like PHPStan, a method's parameters and return type without a PHPDoc type of their
+    /// own take it from the method it overrides: first along the parent classes, then the
+    /// interfaces, then abstract methods of traits.
+    fn inherit_method_doc(
+        &self,
+        owner: &ClassModel<'db>,
+        m: &MethodDef,
+        context: &ClassModel<'db>,
+        sig: &mut FnSig,
+        cx: &LowerCx,
+    ) {
+        if sig.ret_documented && sig.params.iter().all(|p| p.documented) {
+            return;
+        }
+        let ctor = m.name.eq_ignore_ascii_case("__construct");
+        let self_ty = context.self_ty();
+        for anc in self.ancestors(&self_ty).iter().skip(1) {
+            let TyKind::Class { name, args } = anc.kind() else {
+                continue;
+            };
+            let Some(pc) = self.class(name) else { continue };
+            if pc.key == owner.key {
+                continue;
+            }
+            let Some(pm) = pc
+                .def
+                .methods
+                .iter()
+                .find(|x| !x.magic && x.name.eq_ignore_ascii_case(&m.name))
+            else {
+                continue;
+            };
+            let concrete_in_trait = pc.kind() == ClassKind::Trait && !pm.mods.is_abstract;
+            if pm.mods.visibility == Visibility::Private
+                || concrete_in_trait
+                || (ctor && pc.origin == FileOrigin::Stub)
+            {
+                continue;
+            }
+            let parent = self.method_sig(&pc, pm);
+            if !parent.ret_documented && !parent.params.iter().any(|p| p.documented) {
+                continue;
+            }
+            let map = self.subst_map(&pc, args);
+            let inherited = |t: &Ty| {
+                let t = stir_types::subst(t, &map);
+                t.transform(&mut |x| match x.kind() {
+                    TyKind::SelfType { kind, class } if matches!(class.kind(), TyKind::Class { name: n, .. } if n.eq_ignore_ascii_case(&pc.name)) => {
+                        Some(match kind {
+                            stir_types::SelfKind::Static => Ty::static_of(self_ty.clone()),
+                            stir_types::SelfKind::This => Ty::this_of(self_ty.clone()),
+                        })
+                    }
+                    _ => None,
+                })
+            };
+            let mut inherited_any = false;
+            if !sig.ret_documented && parent.ret_documented {
+                let doc = inherited(&parent.ret);
+                let native = m.sig.ret.as_ref().map(|t| self.lower(t, cx, &mut Vec::new()));
+                if let Some(t) = self.refine_native(native, doc) {
+                    sig.ret = t;
+                    sig.ret_declared = true;
+                    sig.ret_documented = true;
+                    inherited_any = true;
+                }
+            }
+            for (i, p) in sig.params.iter_mut().enumerate() {
+                let Some(pp) = parent.params.get(i) else { break };
+                if p.documented || !pp.documented || p.variadic != pp.variadic {
+                    continue;
+                }
+                let doc = inherited(&pp.ty);
+                let def = &m.sig.params[i];
+                let native = def.ty.as_ref().map(|t| self.lower(t, cx, &mut Vec::new()));
+                if let Some(t) = self.refine_native(native, doc) {
+                    p.ty = if def.default_is_null { t.nullable() } else { t };
+                    p.documented = true;
+                    inherited_any = true;
+                }
+            }
+            if inherited_any {
+                let mine: Vec<ParamId> = sig.type_params.iter().map(|p| p.id).collect();
+                sig.type_params.extend(
+                    parent
+                        .type_params
+                        .iter()
+                        .filter(|p| !mine.contains(&p.id))
+                        .cloned(),
+                );
+            }
+            return;
+        }
+    }
+
+    /// An inherited PHPDoc type applies if it refines the native type. Otherwise the native
+    /// type stands, as an override may declare a narrower one.
+    fn refine_native(&self, native: Option<Ty>, doc: Ty) -> Option<Ty> {
+        match native {
+            None => Some(doc),
+            Some(n)
+                if !doc.is_error()
+                    && !matches!(doc.kind(), TyKind::Mixed)
+                    && (!stir_types::free_params(&doc).is_empty()
+                        || stir_types::is_assignable(self, &doc, &n)) =>
+            {
+                Some(doc)
+            }
+            Some(_) => None,
+        }
     }
 
     /// Finds a method on `ty` (a class type), walking supertypes. Returns the
@@ -762,7 +1013,7 @@ impl<'db> Ctx<'db> {
         ty: &Ty,
         name: &str,
     ) -> Option<(Rc<ClassModel<'db>>, &'db MethodDef, FxHashMap<ParamId, Ty>)> {
-        for anc in self.ancestors(ty) {
+        for anc in self.ancestors(ty).iter() {
             let TyKind::Class { name: cname, args } = anc.kind() else {
                 continue;
             };
@@ -782,7 +1033,7 @@ impl<'db> Ctx<'db> {
 
     /// Finds a property (declared or constructor-promoted) on `ty`.
     pub fn find_property(&self, ty: &Ty, name: &str) -> Option<PropertyInfo<'db>> {
-        for anc in self.ancestors(ty) {
+        for anc in self.ancestors(ty).iter() {
             let TyKind::Class { name: cname, args } = anc.kind() else {
                 continue;
             };
@@ -821,7 +1072,7 @@ impl<'db> Ctx<'db> {
 
     /// Finds a class constant or enum case on class `name`.
     pub fn find_const(&self, ty: &Ty, name: &str) -> Option<Ty> {
-        for anc in self.ancestors(ty) {
+        for anc in self.ancestors(ty).iter() {
             let TyKind::Class { name: cname, .. } = anc.kind() else {
                 continue;
             };
@@ -844,7 +1095,7 @@ impl<'db> Ctx<'db> {
     /// The class declaring constant or enum case `name` visible on `ty`, and
     /// whether it is an enum case.
     pub fn const_owner(&self, ty: &Ty, name: &str) -> Option<(Rc<ClassModel<'db>>, bool)> {
-        for anc in self.ancestors(ty) {
+        for anc in self.ancestors(ty).iter() {
             let TyKind::Class { name: cname, .. } = anc.kind() else {
                 continue;
             };
