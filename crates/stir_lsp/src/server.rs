@@ -35,7 +35,7 @@ struct State {
     files: FxHashMap<PathBuf, SourceFile>,
     /// Documents open in the editor, with their version.
     open: FxHashMap<PathBuf, i32>,
-    /// The project root (directory of `sphp.toml`, else the workspace folder).
+    /// The project root (where its configuration or `composer.json` is, else the workspace folder).
     root: Option<PathBuf>,
     /// Directories whose files are not project sources (generated output,
     /// `vendor/`): opened files there are dependencies, never checked.
@@ -639,8 +639,8 @@ impl LanguageServer for Server {
         if *self.watch_dynamic.lock().unwrap() {
             let watchers = [
                 "**/*.php",
-                "**/sphp.toml",
-                "**/phpstan.neon*",
+                // configurations, what they include and baselines, by whatever name
+                "**/*.neon*",
                 "**/composer.json",
                 "**/composer.lock",
                 "**/composer/installed.json",
@@ -741,10 +741,8 @@ impl LanguageServer for Server {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or_default();
-            if matches!(
-                name,
-                "sphp.toml" | "composer.json" | "composer.lock" | "installed.json"
-            ) || name.starts_with("phpstan.neon")
+            if matches!(name, "composer.json" | "composer.lock" | "installed.json")
+                || name.contains(".neon")
             {
                 reload = true;
                 continue;

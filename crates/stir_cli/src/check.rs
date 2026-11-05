@@ -31,6 +31,9 @@ pub struct CheckArgs {
     /// Show at most N diagnostics (all are still counted).
     #[arg(long, value_name = "N")]
     pub max_errors: Option<usize>,
+    /// The configuration, instead of `stirphp.neon` or PHPStan's in the project folder.
+    #[arg(short = 'c', long, value_name = "FILE")]
+    pub configuration: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -41,7 +44,10 @@ pub enum Format {
 
 pub async fn run(args: CheckArgs) -> anyhow::Result<ExitCode> {
     let cwd = std::env::current_dir()?;
-    let project = Project::load_or_default(&cwd).await?;
+    let project = match &args.configuration {
+        Some(file) => Project::load_with_config(&cwd, file).await?,
+        None => Project::load_or_default(&cwd).await?,
+    };
 
     let filters = canonical_filters(&cwd, &args.paths).await?;
     let loaded = load_workspace(
@@ -49,6 +55,7 @@ pub async fn run(args: CheckArgs) -> anyhow::Result<ExitCode> {
         LoadOptions {
             vendor: !args.no_vendor,
             level: args.level,
+            baseline: true,
         },
     )
     .await?;

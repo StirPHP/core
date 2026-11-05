@@ -1,27 +1,31 @@
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use stir_neon::phpstan::{LoadOptions, PhpstanConfig};
 
 use crate::error::{Error, Result};
 
-/// Name of the project configuration file.
-pub const CONFIG_FILE: &str = "sphp.toml";
+/// Name of the project's own configuration file.
+pub const CONFIG_FILE: &str = "stirphp.neon";
+/// The names PHPStan finds its configuration under, which is read if there's no [`CONFIG_FILE`].
+pub const PHPSTAN_CONFIG_FILES: [&str; 3] =
+    ["phpstan.neon", "phpstan.neon.dist", "phpstan.dist.neon"];
 
-/// Contents of `sphp.toml`. All keys are camelCase and optional.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+/// The settings in `parameters.stirphp`. All are optional.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
-    /// Source directory, relative to the project root.
+    /// Source directory: absolute, or relative to the project root.
     pub src_dir: PathBuf,
     /// Globs of files to include, relative to `srcDir`.
     pub include: Vec<String>,
     /// Globs of files to exclude, matched relative to both the project root and `srcDir`.
     pub exclude: Vec<String>,
-    /// Path to a `phpstan.neon` file, relative to the project root.
-    pub phpstan: Option<PathBuf>,
-    /// Path to `composer.json`, relative to the project root. When unset,
-    /// `composer.json` in the project root is used if it exists.
+    /// Path to `composer.json`. When unset, `composer.json` in the project root is used if it
+    /// exists.
     pub composer: Option<PathBuf>,
+    /// The file with our own baseline, which PHPStan doesn't read.
+    pub baseline: Option<PathBuf>,
+    /// The project's rules, as scripts. Stored for when they can run.
+    pub rules: Vec<PathBuf>,
 }
 
 impl Default for Config {
@@ -30,89 +34,99 @@ impl Default for Config {
             src_dir: PathBuf::from("."),
             include: vec!["**/*.php".into()],
             exclude: vec!["vendor/**".into()],
-            phpstan: None,
             composer: None,
+            baseline: None,
+            rules: Vec::new(),
         }
     }
 }
 
 impl Config {
-    /// Parses config from TOML text. `path` is only used for error messages.
-    pub fn parse(text: &str, path: &Path) -> Result<Self> {
-        toml::from_str(text).map_err(|source| Error::TomlParse {
-            path: path.to_path_buf(),
-            source: Box::new(source),
+    /// Reads `parameters.stirphp` out of the NEON file at `path` and what it includes. `root` is
+    /// what `%currentWorkingDirectory%` stands for.
+    pub fn load(path: &Path, root: &Path) -> Result<Self> {
+        let opts = LoadOptions::new().param("currentWorkingDirectory", root.to_string_lossy());
+        let own = PhpstanConfig::load_with(path, &opts)?.stirphp;
+        let defaults = Self::default();
+        Ok(Self {
+            src_dir: own.src_dir.unwrap_or(defaults.src_dir),
+            include: own.include.unwrap_or(defaults.include),
+            exclude: own.exclude.unwrap_or(defaults.exclude),
+            composer: own.composer,
+            baseline: own.baseline,
+            rules: own.rules,
         })
     }
 }
 
-/// A loaded project: its root directory (the one containing `sphp.toml`) and config.
+/// A loaded project: its root directory, where its configuration comes from, and its settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
     pub root: PathBuf,
     pub config: Config,
+    /// The NEON file the settings come from: PHPStan's parameters are read from it too. `None`
+    /// means defaults.
+    pub config_file: Option<PathBuf>,
+}
+
+/// The configuration in `dir`: `stirphp.neon` wins over PHPStan's, and can include that.
+pub fn config_in(dir: &Path) -> Option<PathBuf> {
+    std::iter::once(CONFIG_FILE)
+        .chain(PHPSTAN_CONFIG_FILES)
+        .map(|name| dir.join(name))
+        .find(|path| path.is_file())
 }
 
 impl Project {
-    /// Searches `start_dir` and its ancestors for `sphp.toml` and loads it.
-    pub async fn load(start_dir: impl AsRef<Path>) -> Result<Self> {
-        let start = start_dir.as_ref();
-        let start = tokio::fs::canonicalize(start)
-            .await
-            .map_err(|e| Error::io(start, e))?;
-        for dir in start.ancestors() {
-            let candidate = dir.join(CONFIG_FILE);
-            if tokio::fs::try_exists(&candidate).await.unwrap_or(false) {
-                return Self::load_exact(dir).await;
-            }
-        }
-        Err(Error::ConfigNotFound { start })
-    }
-
-    /// Like [`Project::load`], but a project doesn't need a config file: without one the
-    /// root is the nearest ancestor with a `composer.json`, else `start_dir` itself.
+    /// The nearest project at or above `start`: a directory with a configuration, or else
+    /// `composer.json`. A project doesn't need either: then it's `start` itself.
     pub async fn load_or_default(start_dir: impl AsRef<Path>) -> Result<Self> {
-        let start = start_dir.as_ref();
-        match Self::load(start).await {
-            Err(Error::ConfigNotFound { start }) => {
-                let root = start
-                    .ancestors()
-                    .find(|dir| dir.join("composer.json").is_file())
-                    .unwrap_or(&start)
-                    .to_path_buf();
-                Ok(Self {
-                    root,
-                    config: Config::default(),
-                })
+        let start = canonical(start_dir.as_ref()).await?;
+        for dir in start.ancestors() {
+            if let Some(file) = config_in(dir) {
+                return Self::read(dir.to_path_buf(), Some(file)).await;
             }
-            other => other,
+            if dir.join("composer.json").is_file() {
+                return Self::read(dir.to_path_buf(), None).await;
+            }
         }
+        Self::read(start, None).await
     }
 
-    /// Loads `sphp.toml` from exactly `root`, without searching upward.
-    pub async fn load_exact(root: impl AsRef<Path>) -> Result<Self> {
-        let root = root.as_ref().to_path_buf();
-        let path = root.join(CONFIG_FILE);
-        let text = tokio::fs::read_to_string(&path)
-            .await
-            .map_err(|e| Error::io(&path, e))?;
-        let config = Config::parse(&text, &path)?;
-        Ok(Self { root, config })
+    /// Like [`Project::load_or_default`], with `file` as the configuration wherever it is.
+    pub async fn load_with_config(start_dir: impl AsRef<Path>, file: &Path) -> Result<Self> {
+        let start = canonical(start_dir.as_ref()).await?;
+        let root = start
+            .ancestors()
+            .find(|dir| config_in(dir).is_some() || dir.join("composer.json").is_file())
+            .unwrap_or(&start)
+            .to_path_buf();
+        let file = canonical(&start.join(file)).await?;
+        Self::read(root, Some(file)).await
     }
 
-    /// Path of this project's `sphp.toml`.
-    pub fn config_path(&self) -> PathBuf {
-        self.root.join(CONFIG_FILE)
+    async fn read(root: PathBuf, config_file: Option<PathBuf>) -> Result<Self> {
+        let Some(file) = config_file else {
+            return Ok(Self {
+                root,
+                config: Config::default(),
+                config_file: None,
+            });
+        };
+        let (config, root, file) = tokio::task::spawn_blocking(move || {
+            Config::load(&file, &root).map(|config| (config, root, file))
+        })
+        .await??;
+        Ok(Self {
+            root,
+            config,
+            config_file: Some(file),
+        })
     }
 
     /// Absolute source directory.
     pub fn src_dir(&self) -> PathBuf {
         stir_composer::normalize(&self.root.join(&self.config.src_dir))
-    }
-
-    /// Absolute path of `phpstan.neon`, if configured.
-    pub fn phpstan_path(&self) -> Option<PathBuf> {
-        self.config.phpstan.as_ref().map(|p| self.root.join(p))
     }
 
     /// Absolute path of `composer.json`: the configured one, or `composer.json`
@@ -129,4 +143,10 @@ impl Project {
             }
         }
     }
+}
+
+async fn canonical(path: &Path) -> Result<PathBuf> {
+    tokio::fs::canonicalize(path)
+        .await
+        .map_err(|e| Error::io(path, e))
 }

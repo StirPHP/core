@@ -418,6 +418,77 @@ fn parameter_references() {
 }
 
 #[test]
+fn stirphp_section_and_parameters_schema() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = root(&tmp);
+    write(
+        &dir,
+        "conf/base.neon",
+        "parameters:\n    level: 3\n    stirphp:\n        srcDir: ../lib\n        rules: [one.rhai]\n",
+    );
+    let file = write(
+        &dir,
+        "stirphp.neon",
+        r#"
+includes:
+    - conf/base.neon
+parametersSchema:
+    ?stirphp: mixed()
+    ?other: schema(listOf(string()), nullable())
+    ?more: structure([
+        ?a: string()
+        b: anyOf(int(), 'auto')
+    ])
+parameters:
+    stirphp:
+        rules:
+            - rules/two.rhai
+        baseline: stirphp-baseline.neon
+        include: ['**/*.php']
+        exclude: []
+        composer: app/composer.json
+"#,
+    );
+    let cfg = PhpstanConfig::load_with(&file, &opts()).unwrap();
+    assert_eq!(cfg.level, Some(Level::Level(3)));
+    let own = cfg.stirphp;
+    assert_eq!(own.src_dir, Some(dir.join("lib")));
+    assert_eq!(own.composer, Some(dir.join("app/composer.json")));
+    assert_eq!(own.baseline, Some(dir.join("stirphp-baseline.neon")));
+    assert_eq!(own.include.as_deref(), Some(&["**/*.php".to_owned()][..]));
+    assert_eq!(own.exclude.as_deref(), Some(&[][..]));
+    assert_eq!(
+        own.rules,
+        [dir.join("conf/one.rhai"), dir.join("rules/two.rhai")]
+    );
+}
+
+#[test]
+fn stirphp_section_rejects_what_it_does_not_know() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = root(&tmp);
+    for text in [
+        "parameters:\n    stirphp:\n        srcDri: src\n",
+        "parameters:\n    stirphp:\n        rules: 3\n",
+        "parameters:\n    stirphp: src\n",
+    ] {
+        let file = write(&dir, "stirphp.neon", text);
+        let err = PhpstanConfig::load_with(&file, &opts()).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid { .. }), "{err}");
+    }
+}
+
+#[test]
+fn reads_phpstans_own_parameters_schema() {
+    let conf = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../corpus/phpstan-src/conf/parametersSchema.neon");
+    if conf.is_file() {
+        let text = fs::read_to_string(conf).unwrap();
+        stir_neon::parse(&text).unwrap();
+    }
+}
+
+#[test]
 fn an_ignore_entry_can_be_only_a_path() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = root(&tmp);

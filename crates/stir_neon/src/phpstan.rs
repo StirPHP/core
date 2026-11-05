@@ -1,4 +1,7 @@
-//! Typed loader for `phpstan.neon` / `phpstan.dist.neon`.
+//! Typed loader for `phpstan.neon` / `phpstan.dist.neon`, and for `stirphp.neon`, which has the
+//! same shape. Our own settings are in `parameters.stirphp` ([`StirphpParameters`]); the
+//! `parametersSchema` section that real PHPStan needs to accept those is read as any other
+//! section nothing looks at.
 //!
 //! Semantics follow Nette DI's config loader as used by PHPStan:
 //! - `includes:` are loaded first (recursively, relative to the including file); each later
@@ -76,6 +79,24 @@ pub struct IgnoreError {
     pub report_unmatched: Option<bool>,
 }
 
+/// `parameters.stirphp`: StirPHP's own settings. Paths are resolved against the file declaring them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StirphpParameters {
+    /// `srcDir`: where the project's sources are, if not in the project folder.
+    pub src_dir: Option<PathBuf>,
+    /// `include`: globs of the source files, relative to `srcDir`.
+    pub include: Option<Vec<String>>,
+    /// `exclude`: globs left out of them, relative to `srcDir` or the project folder.
+    pub exclude: Option<Vec<String>>,
+    /// `composer`: the path of `composer.json`, if not in the project folder.
+    pub composer: Option<PathBuf>,
+    /// `baseline`: the file `sphp check --generate-baseline` writes. PHPStan never sees it,
+    /// which is why it isn't in `includes`.
+    pub baseline: Option<PathBuf>,
+    /// `rules`: the project's own rules, as scripts.
+    pub rules: Vec<PathBuf>,
+}
+
 /// Options for [`PhpstanConfig::load_with`].
 #[derive(Debug, Clone, Default)]
 pub struct LoadOptions {
@@ -126,6 +147,8 @@ pub struct PhpstanConfig {
     pub treat_phpdoc_types_as_certain: Option<bool>,
     /// `phpVersion`, as `PHP_VERSION_ID`-style numbers: `(min, max)`, the same for a single one.
     pub php_version: Option<(u32, u32)>,
+    /// `parameters.stirphp`.
+    pub stirphp: StirphpParameters,
     /// The full merged `parameters` mapping (after path resolution and expansion).
     pub parameters: IndexMap<Key, Value>,
     /// The whole merged config (all sections, `includes` removed).
@@ -146,6 +169,8 @@ const PATH_LIST_PARAMS: &[&str] = &[
 ];
 /// Parameters whose values are single paths.
 const PATH_SCALAR_PARAMS: &[&str] = &["tmpDir", "bootstrap"];
+/// Keys of `parameters.stirphp` whose values are paths.
+const STIRPHP_PATH_PARAMS: &[&str] = &["srcDir", "composer", "baseline", "rules"];
 
 impl PhpstanConfig {
     /// Loads `path` with default options (`%currentWorkingDirectory%` = process cwd).
@@ -201,6 +226,7 @@ impl PhpstanConfig {
             scan_directories: Vec::new(),
             treat_phpdoc_types_as_certain: None,
             php_version: None,
+            stirphp: StirphpParameters::default(),
             parameters,
             raw: Value::Null,
         };
@@ -333,7 +359,42 @@ impl PhpstanConfig {
             Some(Value::Bool(b)) => Some(*b),
             Some(_) => return Err(self.invalid("treatPhpDocTypesAsCertain", "expected a bool")),
         };
+        self.stirphp = self.stirphp_parameters()?;
         Ok(())
+    }
+
+    fn stirphp_parameters(&self) -> Result<StirphpParameters, ConfigError> {
+        const KEY: &str = "stirphp";
+        let mut out = StirphpParameters::default();
+        let Some(section) = self.param(KEY) else {
+            return Ok(out);
+        };
+        let Some(entries) = section.entries() else {
+            return Err(self.invalid(KEY, "expected a mapping"));
+        };
+        let path = |v: &Value, what: &str| -> Result<PathBuf, ConfigError> {
+            v.as_str()
+                .map(PathBuf::from)
+                .ok_or_else(|| self.invalid(KEY, format!("`{what}` must be a path")))
+        };
+        let strings = |v: &Value, what: &str| -> Result<Vec<String>, ConfigError> {
+            v.values()
+                .and_then(|vs| vs.iter().map(|v| v.as_str().map(str::to_string)).collect())
+                .ok_or_else(|| self.invalid(KEY, format!("`{what}` must be a list of strings")))
+        };
+        for (k, v) in entries {
+            let k = key_string(&k);
+            match k.as_str() {
+                "srcDir" => out.src_dir = Some(path(v, &k)?),
+                "include" => out.include = Some(strings(v, &k)?),
+                "exclude" => out.exclude = Some(strings(v, &k)?),
+                "composer" => out.composer = Some(path(v, &k)?),
+                "baseline" => out.baseline = Some(path(v, &k)?),
+                "rules" => out.rules = strings(v, &k)?.into_iter().map(PathBuf::from).collect(),
+                other => return Err(self.invalid(KEY, format!("unknown key `{other}`"))),
+            }
+        }
+        Ok(out)
     }
 
     fn ignore_error(&self, item: &Value) -> Result<IgnoreError, ConfigError> {
@@ -495,6 +556,15 @@ impl Loader<'_> {
                 let name = name.strip_suffix('!').unwrap_or(name);
                 if PATH_LIST_PARAMS.contains(&name) || PATH_SCALAR_PARAMS.contains(&name) {
                     resolve_strings(v, &dir, &self.opts.params);
+                } else if name == "stirphp"
+                    && let Value::Mapping(section) = v
+                {
+                    for (key, value) in section.iter_mut() {
+                        let key = key.as_str().unwrap_or_default();
+                        if STIRPHP_PATH_PARAMS.contains(&key.strip_suffix('!').unwrap_or(key)) {
+                            resolve_strings(value, &dir, &self.opts.params);
+                        }
+                    }
                 } else if name == "ignoreErrors"
                     && let Some(items) = values_mut(v)
                 {

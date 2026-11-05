@@ -3,9 +3,6 @@ use std::path::PathBuf;
 /// Errors produced while loading, discovering or initialising a StirPHP project.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("could not find `{file}` in `{start}` or any parent directory", file = crate::CONFIG_FILE, start = .start.display())]
-    ConfigNotFound { start: PathBuf },
-
     #[error("{}: {source}", .path.display())]
     Io {
         path: PathBuf,
@@ -13,12 +10,8 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    #[error("failed to parse `{}`: {source}", .path.display())]
-    TomlParse {
-        path: PathBuf,
-        #[source]
-        source: Box<toml::de::Error>,
-    },
+    #[error(transparent)]
+    Config(#[from] stir_neon::phpstan::ConfigError),
 
     #[error("failed to read `{}`: {source}", .path.display())]
     Composer {
@@ -37,8 +30,8 @@ pub enum Error {
     #[error("error while walking source files: {0}")]
     Walk(#[from] ignore::Error),
 
-    #[error("`{}` already exists (use --force to overwrite)", .path.display())]
-    AlreadyInitialized { path: PathBuf },
+    #[error("can't add to `{}` without changing the rest of it: {reason}", .path.display())]
+    CantEditConfig { path: PathBuf, reason: String },
 
     #[error("background task failed: {0}")]
     Join(#[from] tokio::task::JoinError),

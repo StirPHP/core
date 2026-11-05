@@ -327,3 +327,39 @@ fn nothing_hides_a_syntax_error() {
         .stdout(contains("phpstan.parse"))
         .stdout(contains("1 error, 0 warnings"));
 }
+
+#[test]
+fn init_writes_what_check_reads() {
+    let tmp = project();
+    sphp()
+        .current_dir(tmp.path())
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(contains("stirphp.neon"));
+    sphp()
+        .current_dir(tmp.path())
+        .arg("check")
+        .assert()
+        .success();
+
+    let tmp = project();
+    sphp()
+        .current_dir(tmp.path())
+        .args(["init", "--phpstan"])
+        .assert()
+        .success()
+        .stdout(contains("phpstan.neon"));
+    assert!(!tmp.path().join("stirphp.neon").exists());
+    sphp()
+        .current_dir(tmp.path())
+        .arg("check")
+        .assert()
+        .success();
+    sphp()
+        .current_dir(tmp.path())
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(contains("set up already"));
+}

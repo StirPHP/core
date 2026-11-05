@@ -2,7 +2,9 @@ mod check;
 
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+use stir_project::Project;
+use stir_project::init::Outcome;
 use tracing_subscriber::EnvFilter;
 
 /// The version shown by `--version`: release builds set `SPHP_BUILD_VERSION`
@@ -28,8 +30,28 @@ struct Cli {
 enum Command {
     /// Type-check the project.
     Check(check::CheckArgs),
+    /// Write a configuration, or add to the PHPStan one the project has.
+    Init(InitArgs),
     /// Run the language server (over stdin/stdout).
     Lsp,
+}
+
+#[derive(Debug, Args)]
+struct InitArgs {
+    /// Keep the settings in PHPStan's configuration, creating that if there's none.
+    #[arg(long)]
+    phpstan: bool,
+}
+
+/// `sphp init`.
+async fn init(args: InitArgs) -> anyhow::Result<ExitCode> {
+    let project = Project::load_or_default(std::env::current_dir()?).await?;
+    match stir_project::init::init(&project.root, args.phpstan)? {
+        Outcome::Created(path) => println!("Created `{}`.", path.display()),
+        Outcome::Updated(path) => println!("Added `parameters.stirphp` to `{}`.", path.display()),
+        Outcome::AlreadySetUp(path) => println!("`{}` is set up already.", path.display()),
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 #[tokio::main]
@@ -47,6 +69,7 @@ async fn main() -> anyhow::Result<ExitCode> {
     let cli = Cli::parse();
     match cli.command {
         Command::Check(args) => check::run(args).await,
+        Command::Init(args) => init(args).await,
         Command::Lsp => {
             stir_lsp::run_stdio().await;
             Ok(ExitCode::SUCCESS)

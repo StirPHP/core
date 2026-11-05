@@ -2,7 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use stir_project::{
-    Autoload, CONFIG_FILE, Config, Error, Project, discover, load_autoload, parse_installed,
+    Autoload, CONFIG_FILE, Config, Error, PHPSTAN_CONFIG_FILES, Project, discover, init,
+    load_autoload, parse_installed,
 };
 use tempfile::TempDir;
 
@@ -20,60 +21,125 @@ fn canon(dir: &TempDir) -> PathBuf {
 
 #[test]
 fn config_defaults() {
-    let c = Config::parse("", Path::new("sphp.toml")).unwrap();
-    assert_eq!(c, Config::default());
+    let c = Config::default();
     assert_eq!(c.src_dir, PathBuf::from("."));
     assert_eq!(c.include, ["**/*.php"]);
     assert_eq!(c.exclude, ["vendor/**"]);
-    assert_eq!(c.phpstan, None);
     assert_eq!(c.composer, None);
+    assert_eq!(c.baseline, None);
+    assert!(c.rules.is_empty());
 }
 
-#[test]
-fn config_parses_camel_case_keys() {
-    let text = r#"
-        srcDir = "lib"
-        include = ["app/**/*.php"]
-        exclude = []
-        phpstan = "phpstan.neon"
-        composer = "app/composer.json"
-    "#;
-    let c = Config::parse(text, Path::new("sphp.toml")).unwrap();
-    assert_eq!(c.src_dir, PathBuf::from("lib"));
+#[tokio::test]
+async fn config_reads_the_section() {
+    let tmp = TempDir::new().unwrap();
+    let root = canon(&tmp);
+    write(
+        root.join(CONFIG_FILE),
+        r#"
+parameters:
+    stirphp:
+        srcDir: lib
+        include: ["app/**/*.php"]
+        exclude: []
+        composer: app/composer.json
+        baseline: stirphp-baseline.neon
+        rules: [rules/no-var-dump.rhai]
+"#,
+    );
+    let p = Project::load_or_default(&root).await.unwrap();
+    assert_eq!(p.config_file, Some(root.join(CONFIG_FILE)));
+    let c = p.config;
+    assert_eq!(c.src_dir, root.join("lib"));
     assert_eq!(c.include, ["app/**/*.php"]);
     assert!(c.exclude.is_empty());
-    assert_eq!(c.phpstan, Some("phpstan.neon".into()));
-    assert_eq!(c.composer, Some("app/composer.json".into()));
+    assert_eq!(c.composer, Some(root.join("app/composer.json")));
+    assert_eq!(c.baseline, Some(root.join("stirphp-baseline.neon")));
+    assert_eq!(c.rules, [root.join("rules/no-var-dump.rhai")]);
 }
 
-#[test]
-fn config_parse_error_mentions_path() {
-    let err = Config::parse("srcDir = 3", Path::new("/p/sphp.toml")).unwrap_err();
-    assert!(matches!(err, Error::TomlParse { .. }));
-    assert!(err.to_string().contains("/p/sphp.toml"), "{err}");
-    let err = Config::parse("srcDri = \"x\"", Path::new("/p/sphp.toml")).unwrap_err();
-    assert!(matches!(err, Error::TomlParse { .. }));
+#[tokio::test]
+async fn config_errors_mention_the_file() {
+    let tmp = TempDir::new().unwrap();
+    let root = canon(&tmp);
+    write(root.join(CONFIG_FILE), "parameters:\n    stirphp: [\n");
+    let err = Project::load_or_default(&root).await.unwrap_err();
+    assert!(matches!(err, Error::Config(_)), "{err}");
+    assert!(err.to_string().contains(CONFIG_FILE), "{err}");
+
+    write(
+        root.join(CONFIG_FILE),
+        "parameters:\n    stirphp:\n        srcDri: x\n",
+    );
+    let err = Project::load_or_default(&root).await.unwrap_err();
+    assert!(err.to_string().contains("srcDri"), "{err}");
+}
+
+#[tokio::test]
+async fn sphp_toml_means_nothing_now() {
+    let tmp = TempDir::new().unwrap();
+    let root = canon(&tmp);
+    write(root.join("sphp.toml"), "srcDir = [");
+    let project = Project::load_or_default(&root).await.unwrap();
+    assert_eq!(project.config, Config::default());
+    assert_eq!(project.config_file, None);
 }
 
 #[tokio::test]
 async fn load_searches_upward() {
     let tmp = TempDir::new().unwrap();
     let root = canon(&tmp);
-    write(root.join(CONFIG_FILE), "srcDir = \"lib\"\n");
+    write(
+        root.join(CONFIG_FILE),
+        "parameters:\n    stirphp:\n        srcDir: lib\n",
+    );
     let nested = root.join("a/b/c");
     fs::create_dir_all(&nested).unwrap();
 
-    let project = Project::load(&nested).await.unwrap();
+    let project = Project::load_or_default(&nested).await.unwrap();
     assert_eq!(project.root, root);
-    assert_eq!(project.config.src_dir, PathBuf::from("lib"));
     assert_eq!(project.src_dir(), root.join("lib"));
 }
 
 #[tokio::test]
-async fn load_reports_missing_config() {
+async fn phpstan_config_is_found_and_stirphp_neon_wins() {
+    for name in PHPSTAN_CONFIG_FILES {
+        let tmp = TempDir::new().unwrap();
+        let root = canon(&tmp);
+        write(
+            root.join(name),
+            "parametersSchema:\n    ?stirphp: mixed()\nparameters:\n    stirphp:\n        srcDir: lib\n",
+        );
+        let project = Project::load_or_default(&root).await.unwrap();
+        assert_eq!(project.config_file, Some(root.join(name)));
+        assert_eq!(project.src_dir(), root.join("lib"), "{name}");
+
+        write(
+            root.join(CONFIG_FILE),
+            "parameters:\n    stirphp:\n        srcDir: own\n",
+        );
+        let project = Project::load_or_default(&root).await.unwrap();
+        assert_eq!(project.config_file, Some(root.join(CONFIG_FILE)));
+        assert_eq!(project.src_dir(), root.join("own"), "{name}");
+    }
+}
+
+#[tokio::test]
+async fn a_config_elsewhere_keeps_the_project_root() {
     let tmp = TempDir::new().unwrap();
-    let err = Project::load(tmp.path()).await.unwrap_err();
-    assert!(matches!(err, Error::ConfigNotFound { .. }), "{err}");
+    let root = canon(&tmp);
+    write(root.join("app/composer.json"), "{}");
+    let file = root.join("conf/my.neon");
+    write(
+        &file,
+        "parameters:\n    stirphp:\n        baseline: b.neon\n",
+    );
+    let project = Project::load_with_config(root.join("app"), &file)
+        .await
+        .unwrap();
+    assert_eq!(project.root, root.join("app"));
+    assert_eq!(project.config_file, Some(file));
+    assert_eq!(project.config.baseline, Some(root.join("conf/b.neon")));
 }
 
 #[tokio::test]
@@ -98,19 +164,96 @@ async fn load_or_default_without_anything_uses_the_start_dir() {
     assert_eq!(project.root, root);
 }
 
-#[tokio::test]
-async fn load_reports_toml_errors_with_path() {
+// ---------- init ----------
+
+#[test]
+fn init_writes_a_minimal_config() {
     let tmp = TempDir::new().unwrap();
-    write(tmp.path().join(CONFIG_FILE), "srcDir = [");
-    let err = Project::load(tmp.path()).await.unwrap_err();
-    assert!(matches!(err, Error::TomlParse { .. }));
-    assert!(err.to_string().contains(CONFIG_FILE));
+    let root = canon(&tmp);
+    let outcome = init::init(&root, false).unwrap();
+    assert_eq!(outcome, init::Outcome::Created(root.join(CONFIG_FILE)));
+    let text = fs::read_to_string(root.join(CONFIG_FILE)).unwrap();
+    assert!(text.contains("stirphp:"), "{text}");
+    assert!(!text.contains("parametersSchema"), "{text}");
+    assert_eq!(
+        init::init(&root, false).unwrap(),
+        init::Outcome::AlreadySetUp(root.join(CONFIG_FILE))
+    );
+}
+
+#[test]
+fn init_adds_to_a_phpstan_config_and_keeps_the_rest() {
+    let tmp = TempDir::new().unwrap();
+    let root = canon(&tmp);
+    let file = root.join("phpstan.neon.dist");
+    let text = "# top comment\nincludes:\n\t- vendor/x.neon # why\n\nparameters:\n\t# the level\n\tlevel: 5 # enough\n\tpaths:\n\t\t- src\n\n# about services\nservices: []\n";
+    write(&file, text);
+    assert_eq!(
+        init::init(&root, false).unwrap(),
+        init::Outcome::Updated(file.clone())
+    );
+    let new = fs::read_to_string(&file).unwrap();
+    assert_eq!(
+        new,
+        "# top comment\nincludes:\n\t- vendor/x.neon # why\n\nparameters:\n\t# the level\n\tlevel: 5 # enough\n\tpaths:\n\t\t- src\n\tstirphp:\n\t\trules: []\n\n# about services\nservices: []\nparametersSchema:\n\t?stirphp: mixed()\n"
+    );
+    assert_eq!(
+        init::init(&root, false).unwrap(),
+        init::Outcome::AlreadySetUp(file.clone())
+    );
+    assert_eq!(fs::read_to_string(&file).unwrap(), new);
+}
+
+#[test]
+fn init_follows_the_files_indent_and_its_schema() {
+    let tmp = TempDir::new().unwrap();
+    let root = canon(&tmp);
+    let file = root.join("phpstan.neon");
+    write(
+        &file,
+        "parametersSchema:\n  foo: string()\nparameters:\n  foo: x\n",
+    );
+    init::init(&root, true).unwrap();
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        "parametersSchema:\n  foo: string()\n  ?stirphp: mixed()\nparameters:\n  foo: x\n  stirphp:\n    rules: []\n"
+    );
+}
+
+#[test]
+fn init_with_phpstan_creates_that_config() {
+    let tmp = TempDir::new().unwrap();
+    let root = canon(&tmp);
+    assert_eq!(
+        init::init(&root, true).unwrap(),
+        init::Outcome::Created(root.join("phpstan.neon"))
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("phpstan.neon")).unwrap(),
+        "parameters:\n\tstirphp:\n\t\trules: []\nparametersSchema:\n\t?stirphp: mixed()\n"
+    );
+}
+
+#[test]
+fn init_leaves_what_it_cant_follow_alone() {
+    let tmp = TempDir::new().unwrap();
+    let root = canon(&tmp);
+    let file = root.join("phpstan.neon");
+    let text = "parameters: {level: 5}\n";
+    write(&file, text);
+    let err = init::init(&root, false).unwrap_err();
+    assert!(matches!(err, Error::CantEditConfig { .. }), "{err}");
+    assert_eq!(fs::read_to_string(&file).unwrap(), text);
 }
 
 // ---------- discovery ----------
 
 fn project(root: PathBuf, config: Config) -> Project {
-    Project { root, config }
+    Project {
+        root,
+        config,
+        config_file: None,
+    }
 }
 
 fn rel(project: &Project, files: &[stir_project::SourceFile]) -> Vec<String> {

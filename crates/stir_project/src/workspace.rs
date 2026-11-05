@@ -28,6 +28,8 @@ pub struct LoadOptions {
     pub vendor: bool,
     /// The rule level, over the one in the PHPStan config.
     pub level: Option<u8>,
+    /// Apply the baseline in `parameters.stirphp.baseline`: generating one starts without.
+    pub baseline: bool,
 }
 
 impl Default for LoadOptions {
@@ -35,6 +37,7 @@ impl Default for LoadOptions {
         Self {
             vendor: true,
             level: None,
+            baseline: true,
         }
     }
 }
@@ -135,7 +138,7 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         files.push(SourceFile::new(&db, path, text, FileOrigin::Vendor));
     }
 
-    let config = load_phpstan_config(project, composer.as_ref()).await?;
+    let config = load_neon_config(project, composer.as_ref()).await?;
     if let Some(config) = &config {
         let own: BTreeSet<PathBuf> = sources
             .iter()
@@ -145,7 +148,8 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
             files.push(SourceFile::new(&db, path, text, FileOrigin::Vendor));
         }
     }
-    let (mut settings, ignore_notice) = settings_from(&project.root, config, composer.as_ref());
+    let (mut settings, ignore_notice) =
+        settings_from(project, config, composer.as_ref(), options.baseline).await;
     notices.extend(ignore_notice);
     if let Some(level) = options.level {
         settings.php_level = level;
@@ -249,27 +253,20 @@ pub fn builtin_files(db: &RootDatabase) -> Vec<SourceFile> {
         .collect()
 }
 
-/// Check settings: the rule level and `ignoreErrors` of the PHPStan config (the
-/// `phpstan` key of `sphp.toml`, else
-/// `phpstan.neon`, `phpstan.neon.dist` or `phpstan.dist.neon` at the project root).
+/// Check settings: the rule level and `ignoreErrors` of the configuration, if there is one.
 pub async fn load_settings(project: &Project) -> anyhow::Result<Settings> {
     let composer = crate::load_composer(project).await.ok().flatten();
-    let config = load_phpstan_config(project, composer.as_ref()).await?;
-    Ok(settings_from(&project.root, config, composer.as_ref()).0)
+    let config = load_neon_config(project, composer.as_ref()).await?;
+    Ok(settings_from(project, config, composer.as_ref(), true)
+        .await
+        .0)
 }
 
-async fn load_phpstan_config(
+async fn load_neon_config(
     project: &Project,
     composer: Option<&Composer>,
 ) -> anyhow::Result<Option<stir_neon::phpstan::PhpstanConfig>> {
-    let path = match project.phpstan_path() {
-        Some(p) => Some(p),
-        None => ["phpstan.neon", "phpstan.neon.dist", "phpstan.dist.neon"]
-            .iter()
-            .map(|n| project.root.join(n))
-            .find(|p| p.is_file()),
-    };
-    let Some(path) = path else {
+    let Some(path) = project.config_file.clone() else {
         return Ok(None);
     };
     let root = project.root.clone();
@@ -285,12 +282,9 @@ async fn load_phpstan_config(
         })
     })
     .await?
-    .context("failed to load the PHPStan configuration")?;
+    .context("failed to load the configuration")?;
     for skipped in config.skipped_includes.iter().filter(|p| !is_php(p)) {
-        tracing::warn!(
-            "skipping PHPStan include {}: not installed",
-            skipped.display()
-        );
+        tracing::warn!("skipping include {}: not installed", skipped.display());
     }
     Ok(Some(config))
 }
@@ -323,6 +317,27 @@ pub fn ignore_rules(entries: &[stir_neon::phpstan::IgnoreError]) -> (Vec<IgnoreR
         rules.extend(e.identifiers.iter().map(|i| rule(vec![i.clone()])));
     }
     (rules, skipped)
+}
+
+/// The rules of the baseline at `path`, and what's wrong with it if it can't be applied.
+fn baseline_rules(path: PathBuf, root: &Path) -> (Vec<IgnoreRule>, usize, Vec<String>) {
+    if path.extension().is_some_and(|e| e == "php") {
+        return (Vec::new(), 0, vec![display(&path, root)]);
+    }
+    let opts = stir_neon::phpstan::LoadOptions::new()
+        .param("currentWorkingDirectory", root.to_string_lossy());
+    match stir_neon::phpstan::PhpstanConfig::load_with(&path, &opts) {
+        Ok(config) => {
+            let (rules, skipped) = ignore_rules(&config.ignore_errors);
+            let php = config.skipped_includes.iter().filter(|p| is_php(p));
+            let php: Vec<String> = php.map(|p| display(p, root)).collect();
+            (rules, skipped, php)
+        }
+        Err(error) => {
+            tracing::warn!(%error, "ignoring the baseline");
+            (Vec::new(), 0, Vec::new())
+        }
+    }
 }
 
 fn is_php(path: &Path) -> bool {
@@ -415,10 +430,11 @@ fn php_versions(
         .unwrap_or_default()
 }
 
-fn settings_from(
-    root: &Path,
+async fn settings_from(
+    project: &Project,
     config: Option<stir_neon::phpstan::PhpstanConfig>,
     composer: Option<&Composer>,
+    with_baseline: bool,
 ) -> (Settings, Option<String>) {
     let mut settings = Settings {
         php_version: php_versions(config.as_ref(), composer),
@@ -430,8 +446,19 @@ fn settings_from(
             settings.pending_install = Some(composer.own_namespaces());
         }
     }
+    let mut skipped = 0;
+    let mut php = Vec::new();
+    if let Some(baseline) = project.config.baseline.clone().filter(|_| with_baseline) {
+        let root = project.root.clone();
+        let read = tokio::task::spawn_blocking(move || baseline_rules(baseline, &root)).await;
+        if let Ok((rules, count, files)) = read {
+            settings.baseline = IgnoreRules::new(rules);
+            skipped += count;
+            php.extend(files);
+        }
+    }
     let Some(config) = config else {
-        return (settings, None);
+        return (settings, ignore_notice(skipped, &php));
     };
     settings.php_paths = config.paths.clone();
     settings.php_excludes = config
@@ -447,14 +474,16 @@ fn settings_from(
             stir_neon::phpstan::Level::Max => stir_db::MAX_PHP_LEVEL,
         };
     }
-    let (rules, skipped) = ignore_rules(&config.ignore_errors);
+    let (rules, count) = ignore_rules(&config.ignore_errors);
     settings.ignore_errors = IgnoreRules::new(rules);
-    let php: Vec<String> = config
-        .skipped_includes
-        .iter()
-        .filter(|p| is_php(p))
-        .map(|p| display(p, root))
-        .collect();
+    skipped += count;
+    php.extend(
+        config
+            .skipped_includes
+            .iter()
+            .filter(|p| is_php(p))
+            .map(|p| display(p, &project.root)),
+    );
     (settings, ignore_notice(skipped, &php))
 }
 
@@ -656,6 +685,8 @@ mod tests {
 
     use super::*;
 
+    const SRC_DIR: &str = "parameters:\n    stirphp:\n        srcDir: src\n";
+
     fn write(path: &Path, text: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
@@ -665,7 +696,7 @@ mod tests {
     async fn loads_sources_stubs_and_vendor() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path();
-        write(&root.join("sphp.toml"), "srcDir = \"src\"\n");
+        write(&root.join("stirphp.neon"), SRC_DIR);
         write(&root.join("src/main.php"), "<?php\n$x = 1;\n");
         write(&root.join("src/Legacy.php"), "<?php\nclass Legacy {}\n");
         write(
@@ -691,7 +722,7 @@ mod tests {
             "<?php\nfunction h() {}\n",
         );
 
-        let project = Project::load(root).await.unwrap();
+        let project = Project::load_or_default(root).await.unwrap();
         let loaded = load_workspace(&project, LoadOptions::default())
             .await
             .unwrap();
@@ -730,11 +761,11 @@ mod tests {
     async fn a_source_that_is_not_utf8_still_loads() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path();
-        write(&root.join("sphp.toml"), "srcDir = \"src\"\n");
+        write(&root.join("stirphp.neon"), SRC_DIR);
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/latin1.php"), b"<?php\n// caf\xe9\n").unwrap();
 
-        let project = Project::load(root).await.unwrap();
+        let project = Project::load_or_default(root).await.unwrap();
         let loaded = load_workspace(
             &project,
             LoadOptions {
@@ -752,12 +783,11 @@ mod tests {
     async fn reads_phpstan_settings() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path();
-        write(&root.join("sphp.toml"), "srcDir = \"src\"\n");
         write(
             &root.join("phpstan.neon.dist"),
             "parameters:\n    level: 5\n    ignoreErrors:\n        - '#^unknown function#'\n        -\n            identifier: function.notFound\n            path: src/legacy.php\n            count: 3\n",
         );
-        let project = Project::load(root).await.unwrap();
+        let project = Project::load_or_default(root).await.unwrap();
         let settings = load_settings(&project).await.unwrap();
         assert_eq!(settings.php_level, 5);
         let rules = settings.ignore_errors.rules();
@@ -766,15 +796,16 @@ mod tests {
         assert!(rules[0].paths[0].ends_with("src/legacy.php"));
         assert_eq!(rules[0].count, Some(3));
 
+        // `stirphp.neon` wins, and can include a PHPStan config
         write(
-            &root.join("sphp.toml"),
-            "srcDir = \"src\"\nphpstan = \"conf/custom.neon\"\n",
+            &root.join("stirphp.neon"),
+            "includes:\n    - conf/custom.neon\n",
         );
         write(
             &root.join("conf/custom.neon"),
             "parameters:\n    level: max\n",
         );
-        let project = Project::load(root).await.unwrap();
+        let project = Project::load_or_default(root).await.unwrap();
         let settings = load_settings(&project).await.unwrap();
         assert_eq!(settings.php_level, stir_db::MAX_PHP_LEVEL);
     }
@@ -783,7 +814,7 @@ mod tests {
     async fn knows_phpstans_helpers_only_with_phpstan_installed() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path();
-        write(&root.join("sphp.toml"), "srcDir = \"src\"\n");
+        write(&root.join("stirphp.neon"), SRC_DIR);
         write(&root.join("src/a.php"), "<?php\n");
         let has_helpers = |loaded: &Loaded| {
             loaded
@@ -792,7 +823,7 @@ mod tests {
                 .iter()
                 .any(|f| f.path(&loaded.db).ends_with("phpstan/helpers.php"))
         };
-        let project = Project::load(root).await.unwrap();
+        let project = Project::load_or_default(root).await.unwrap();
         let loaded = load_workspace(&project, LoadOptions::default())
             .await
             .unwrap();
@@ -810,9 +841,8 @@ mod tests {
         for name in ["phpstan.neon", "phpstan.neon.dist", "phpstan.dist.neon"] {
             let tmp = tempfile::TempDir::new().unwrap();
             let root = tmp.path();
-            write(&root.join("sphp.toml"), "srcDir = \"src\"\n");
             write(&root.join(name), "parameters:\n    level: 3\n");
-            let project = Project::load(root).await.unwrap();
+            let project = Project::load_or_default(root).await.unwrap();
             let settings = load_settings(&project).await.unwrap();
             assert_eq!(settings.php_level, 3, "{name}");
         }
@@ -822,7 +852,6 @@ mod tests {
     async fn loads_phpstan_paths_and_scanned_files() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path().canonicalize().unwrap();
-        write(&root.join("sphp.toml"), "srcDir = \"src\"\n");
         write(&root.join("src/a.php"), "<?php\necho BOOTED;\n");
         write(
             &root.join("tools/boot.php"),
@@ -830,9 +859,9 @@ mod tests {
         );
         write(
             &root.join("phpstan.neon"),
-            "parameters:\n    paths:\n        - src\n    excludePaths:\n        analyse:\n            - src/gen\n    bootstrapFiles:\n        - tools/boot.php\n    scanFiles:\n        - src/a.php\n",
+            "parameters:\n    stirphp:\n        srcDir: src\n    paths:\n        - src\n    excludePaths:\n        analyse:\n            - src/gen\n    bootstrapFiles:\n        - tools/boot.php\n    scanFiles:\n        - src/a.php\n",
         );
-        let project = Project::load(&root).await.unwrap();
+        let project = Project::load_or_default(&root).await.unwrap();
         let loaded = load_workspace(
             &project,
             LoadOptions {

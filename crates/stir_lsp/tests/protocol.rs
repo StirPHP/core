@@ -128,7 +128,10 @@ fn write(path: &Path, text: &str) {
 async fn editing_a_php_file() {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = std::fs::canonicalize(tmp.path()).unwrap();
-    write(&root.join("sphp.toml"), "srcDir = \"src\"\n");
+    write(
+        &root.join("stirphp.neon"),
+        "parameters:\n    stirphp:\n        srcDir: src\n",
+    );
     let lib = root.join("src/lib.php");
     write(
         &lib,
@@ -420,6 +423,57 @@ async fn the_editor_follows_the_php_version() {
         .map(|i| i["label"].as_str().unwrap())
         .collect();
     assert!(!labels.contains(&"array_is_list"), "{labels:?}");
+
+    let _ = c.request("shutdown", Value::Null).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn baselines_and_ignore_rules_apply_as_in_the_cli() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    write(
+        &root.join("stirphp.neon"),
+        "parameters:
+    stirphp:
+        baseline: base.neon
+    ignoreErrors:
+        - '#a message alone#'
+",
+    );
+    write(
+        &root.join("base.neon"),
+        "parameters:
+    ignoreErrors:
+        -
+            identifier: function.notFound
+            count: 1
+            path: main.php
+",
+    );
+    let main = root.join("main.php");
+    write(&main, "<?php\nmissing_one();\nmissing_two();\n");
+    let main_uri = uri(&main);
+
+    let mut c = Client::start();
+    c.request(
+        "initialize",
+        json!({"processId": null, "rootUri": uri(&root), "capabilities": {}}),
+    )
+    .await;
+    c.notify("initialized", json!({})).await;
+
+    // the first is in the baseline, and the count's used up after it
+    let diags = c.diagnostics(&main_uri).await;
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0]["code"], "function.notFound");
+    assert_eq!(diags[0]["range"]["start"]["line"], 2);
+    c.drain(&main_uri).await;
+    let shown = c.shown_messages();
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert!(
+        shown[0].contains("Skipped 1 `ignoreErrors` entry"),
+        "{shown:?}"
+    );
 
     let _ = c.request("shutdown", Value::Null).await;
 }
