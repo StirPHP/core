@@ -264,7 +264,30 @@ fn missing_vendor_include_is_skipped() {
     );
     let cfg = PhpstanConfig::load_with(&file, &opts()).unwrap();
     assert_eq!(cfg.level, Some(Level::Level(3)));
-    assert_eq!(cfg.skipped_includes, vec![dir.join("vendor/x/extension.neon")]);
+    assert_eq!(
+        cfg.skipped_includes,
+        vec![dir.join("vendor/x/extension.neon")]
+    );
+    assert!(cfg.included_files.is_empty());
+}
+
+#[test]
+fn php_include_is_skipped_and_not_parsed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = root(&tmp);
+    write(
+        &dir,
+        "baseline.php",
+        "<?php\nreturn ['parameters' => []];\n",
+    );
+    let file = write(
+        &dir,
+        "phpstan.neon",
+        "includes:\n    - baseline.php\nparameters:\n    level: 3\n",
+    );
+    let cfg = PhpstanConfig::load_with(&file, &opts()).unwrap();
+    assert_eq!(cfg.level, Some(Level::Level(3)));
+    assert_eq!(cfg.skipped_includes, vec![dir.join("baseline.php")]);
     assert!(cfg.included_files.is_empty());
 }
 

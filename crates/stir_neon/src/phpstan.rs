@@ -102,8 +102,9 @@ pub struct PhpstanConfig {
     pub file: PathBuf,
     /// Every included file, in load order.
     pub included_files: Vec<PathBuf>,
-    /// Includes under `vendor/` that don't exist yet (`composer install` hasn't run);
-    /// they are skipped so a project can be checked without its dev dependencies.
+    /// Includes that can't be read: those under `vendor/` that don't exist yet
+    /// (`composer install` hasn't run), so a project can be checked without its dev
+    /// dependencies, and `.php` configs, because running them would run the project's code.
     pub skipped_includes: Vec<PathBuf>,
     pub level: Option<Level>,
     pub paths: Vec<PathBuf>,
@@ -435,7 +436,8 @@ impl Loader<'_> {
                     .as_str()
                     .ok_or_else(|| invalid("includes", "expected a list of files"))?;
                 let inc_path = resolve_path(&expand_known(inc, &self.opts.params), &dir);
-                if !inc_path.exists() && is_in_vendor(&inc_path) {
+                let is_php = inc_path.extension().is_some_and(|e| e == "php");
+                if is_php || (!inc_path.exists() && is_in_vendor(&inc_path)) {
                     self.skipped.push(inc_path);
                     continue;
                 }

@@ -47,7 +47,7 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
 
     let source_texts: Vec<(PathBuf, FileKind, String)> =
         futures::stream::iter(discovered.into_iter().map(|file| async move {
-            let text = tokio::fs::read_to_string(&file.path)
+            let text = read_lossy(&file.path)
                 .await
                 .with_context(|| format!("failed to read `{}`", file.path.display()))?;
             anyhow::Ok((file.path, file.kind, text))
@@ -183,7 +183,7 @@ async fn load_phpstan_config(
     .context("failed to load the PHPStan configuration")?;
     for skipped in &config.skipped_includes {
         tracing::warn!(
-            "skipping PHPStan include {}: not installed",
+            "skipping PHPStan include {}: not installed, or a PHP file, which is never run",
             skipped.display()
         );
     }
@@ -332,16 +332,19 @@ fn walk_php(root: &Path, seen_dirs: &mut BTreeSet<PathBuf>, found: &mut BTreeSet
     }
 }
 
-/// Reads vendor files concurrently. Unreadable files are skipped with a warning and
-/// invalid UTF-8 is replaced.
+/// Reads a PHP file. PHP source isn't always UTF-8, so invalid bytes are replaced
+/// rather than failing the whole project.
+async fn read_lossy(path: &Path) -> std::io::Result<String> {
+    let bytes = tokio::fs::read(path).await?;
+    Ok(String::from_utf8(bytes)
+        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
+}
+
+/// Reads vendor files concurrently. Unreadable files are skipped with a warning.
 async fn read_vendor(paths: Vec<PathBuf>) -> Vec<(PathBuf, String)> {
     futures::stream::iter(paths.into_iter().map(|path| async move {
-        match tokio::fs::read(&path).await {
-            Ok(bytes) => {
-                let text = String::from_utf8(bytes)
-                    .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
-                Some((path, text))
-            }
+        match read_lossy(&path).await {
+            Ok(text) => Some((path, text)),
             Err(error) => {
                 tracing::warn!(path = %path.display(), %error, "cannot read vendor file");
                 None
@@ -426,6 +429,22 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(without.vendor_count, 0);
+    }
+
+    #[tokio::test]
+    async fn a_source_that_is_not_utf8_still_loads() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        write(&root.join("sphp.toml"), "srcDir = \"src\"\n");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/latin1.php"), b"<?php\n// caf\xe9\n").unwrap();
+
+        let project = Project::load(root).await.unwrap();
+        let loaded = load_workspace(&project, LoadOptions { vendor: false })
+            .await
+            .unwrap();
+        assert_eq!(loaded.sources.len(), 1);
+        assert!(loaded.sources[0].text(&loaded.db).contains("caf\u{fffd}"));
     }
 
     #[tokio::test]
