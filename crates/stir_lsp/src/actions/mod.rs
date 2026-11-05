@@ -371,8 +371,10 @@ pub fn offers<'c>(cx: &'c Cx<'c>) -> Vec<Offer<'c>> {
     if cx.wants(Kind::RefactorInline) {
         variables::inline_offers(cx, &mut out);
     }
-    if cx.wants(Kind::RefactorRewrite) {
+    if cx.wants(Kind::RefactorRewrite) || !cx.foreign.is_empty() {
         members::offers(cx, &mut out);
+    }
+    if cx.wants(Kind::RefactorRewrite) {
         classes::offers(cx, &mut out);
         flow::offers(cx, &mut out);
         fix_types::refactor_offers(cx, &mut out);

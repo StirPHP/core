@@ -1,0 +1,21 @@
+=== action: Implement `need()`
+=== fixes: SPHP0062
+=== input
+<?php
+trait T { abstract public function need(): int; }
+
+class A‸ {
+    use T;
+}
+=== output
+<?php
+trait T { abstract public function need(): int; }
+
+class A {
+    use T;
+
+    public function need(): int
+    {
+        throw new LogicException('Not implemented: need');
+    }
+}

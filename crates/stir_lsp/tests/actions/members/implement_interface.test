@@ -1,0 +1,52 @@
+=== action: Implement 2 missing methods
+=== fixes: SPHP0062
+=== file: /src/I.php
+<?php
+namespace App\Contracts;
+
+use App\Models\User;
+
+interface Repo
+{
+    /** @return list<User> */
+    public function all(int $limit = self::LIMIT, ?User ...$rest): array;
+
+    public static function make(self $other, string &$out, $free = [1, 2]): static;
+
+    const LIMIT = 10;
+}
+=== file: /src/U.php
+<?php
+namespace App\Models;
+class User {}
+=== input
+<?php
+
+namespace App;
+
+use App\Contracts\Repo;
+
+class SqlRe‸po implements Repo
+{
+}
+=== output
+<?php
+
+namespace App;
+
+use App\Contracts\Repo;
+use App\Models\User;
+use LogicException;
+
+class SqlRepo implements Repo
+{
+    public function all(int $limit = Repo::LIMIT, ?User ...$rest): array
+    {
+        throw new LogicException('Not implemented: all');
+    }
+
+    public static function make(Repo $other, string &$out, $free = [1, 2]): static
+    {
+        throw new LogicException('Not implemented: make');
+    }
+}

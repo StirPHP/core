@@ -1,0 +1,25 @@
+=== action: Create method `save()`
+=== fixes: method.notFound
+=== input
+<?php
+class A {
+    public function run(string $name, int $n): void {
+        $this->sa‸ve($name, $n + 1, 'x');
+    }
+
+    public function other(): void {}
+}
+=== output
+<?php
+class A {
+    public function run(string $name, int $n): void {
+        $this->save($name, $n + 1, 'x');
+    }
+
+    private function save(string $name, int $arg2, string $arg3): void
+    {
+        throw new LogicException('Not implemented: save');
+    }
+
+    public function other(): void {}
+}

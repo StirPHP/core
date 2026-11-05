@@ -1,0 +1,32 @@
+=== action: Override `Base::log()`
+=== php: 8.3
+=== input
+<?php
+class Base {
+    protected function log(): void {}
+    public function a(): void {}
+}
+
+class Child extends Base {
+    #[\Override]
+    public function a(): void {}
+‸
+}
+=== output
+<?php
+class Base {
+    protected function log(): void {}
+    public function a(): void {}
+}
+
+class Child extends Base {
+    #[\Override]
+    public function a(): void {}
+
+    #[\Override]
+    protected function log(): void
+    {
+        parent::log();
+    }
+
+}

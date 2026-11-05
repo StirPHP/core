@@ -1,0 +1,21 @@
+=== action: Create method `make()`
+=== fixes: staticMethod.notFound
+=== input
+<?php
+class A {
+    public function run(): void {
+        self::ma‸ke();
+    }
+}
+=== output
+<?php
+class A {
+    public function run(): void {
+        self::make();
+    }
+
+    private static function make(): void
+    {
+        throw new LogicException('Not implemented: make');
+    }
+}

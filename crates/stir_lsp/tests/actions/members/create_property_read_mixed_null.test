@@ -1,0 +1,18 @@
+=== action: Create property `$name`
+=== fixes: property.notFound
+=== input
+<?php
+class A {
+    public function run(): mixed {
+        return $this->na‸me;
+    }
+}
+=== output
+<?php
+class A {
+    private mixed $name = null;
+
+    public function run(): mixed {
+        return $this->name;
+    }
+}

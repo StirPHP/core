@@ -1,0 +1,27 @@
+=== action: Implement `run()`
+=== fixes: SPHP0062
+=== input
+<?php
+abstract class Base {
+    abstract protected function run(int $a): int;
+    public function other(): void {}
+}
+
+final class Ch‸ild extends Base {
+    public int $x = 0;
+}
+=== output
+<?php
+abstract class Base {
+    abstract protected function run(int $a): int;
+    public function other(): void {}
+}
+
+final class Child extends Base {
+    public int $x = 0;
+
+    protected function run(int $a): int
+    {
+        throw new LogicException('Not implemented: run');
+    }
+}

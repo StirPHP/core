@@ -1,0 +1,8 @@
+=== action: Create method `save()`
+=== no-offer
+=== file: /src/B.php
+<?php
+class B {}
+=== input
+<?php
+function f(B $b): void { $b->sa‸ve(); }

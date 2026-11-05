@@ -1,0 +1,10 @@
+=== action: Implement `need()`
+=== no-offer
+=== input
+<?php
+interface I { public function need(): int; }
+trait T { public function need(): int { return 1; } }
+
+class A‸ implements I {
+    use T;
+}

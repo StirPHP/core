@@ -1,0 +1,32 @@
+=== action: Override `Base::run()`
+=== input
+<?php
+class Base {
+    public function run(int $a, string ...$rest): int { return 1; }
+    protected function log(): void {}
+    final public function done(): void {}
+    private function secret(): void {}
+}
+
+class Child extends Base {
+    public int $x = 1;
+    ‸
+}
+=== output
+<?php
+class Base {
+    public function run(int $a, string ...$rest): int { return 1; }
+    protected function log(): void {}
+    final public function done(): void {}
+    private function secret(): void {}
+}
+
+class Child extends Base {
+    public int $x = 1;
+
+    public function run(int $a, string ...$rest): int
+    {
+        return parent::run($a, ...$rest);
+    }
+    
+}

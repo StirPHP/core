@@ -108,6 +108,66 @@ pub fn ctor_info(ctx: &Ctx<'_>, class: &str) -> Option<SigInfo> {
     Some(sig)
 }
 
+/// The abstract methods and interface methods `model` has to implement and doesn't, with the class
+/// of each: none for what doesn't have to, or what has an ancestor that can't be found, which may
+/// well implement them.
+pub fn unimplemented_methods<'db>(
+    ctx: &Ctx<'db>,
+    model: &ClassModelRef<'db>,
+) -> Vec<(ClassModelRef<'db>, &'db stir_hir::MethodDef)> {
+    use stir_hir::{ClassKind, Visibility};
+    let kind = model.kind();
+    if model.def.mods.is_abstract || matches!(kind, ClassKind::Interface | ClassKind::Trait) {
+        return Vec::new();
+    }
+    let self_ty = model.self_ty();
+    if !ctx.hierarchy_known(&self_ty) {
+        return Vec::new();
+    }
+    let ancestors = ctx.ancestors(&self_ty);
+    let classes: Vec<ClassModelRef<'db>> = ancestors
+        .iter()
+        .filter_map(|t| match t.kind() {
+            TyKind::Class { name, .. } => ctx.class(name),
+            _ => None,
+        })
+        .collect();
+    let mut concrete = rustc_hash::FxHashSet::default();
+    for c in &classes {
+        for (alias, _) in &c.def.trait_aliases {
+            concrete.insert(alias.to_ascii_lowercase());
+        }
+        if c.kind() == ClassKind::Interface {
+            continue;
+        }
+        for m in &c.def.methods {
+            let own = c.key == model.key;
+            if !m.magic && !m.mods.is_abstract && (own || m.mods.visibility != Visibility::Private)
+            {
+                concrete.insert(m.name.to_ascii_lowercase());
+            }
+        }
+    }
+    let mut seen = rustc_hash::FxHashSet::default();
+    let mut out = Vec::new();
+    for c in &classes {
+        for m in &c.def.methods {
+            let lower = m.name.to_ascii_lowercase();
+            if m.magic
+                || !(c.kind() == ClassKind::Interface || m.mods.is_abstract)
+                || concrete.contains(&lower)
+                // what an enum has by being one
+                || (kind == ClassKind::Enum && matches!(lower.as_str(), "cases" | "from" | "tryfrom"))
+                || !seen.insert(lower)
+            {
+                continue;
+            }
+            out.push((c.clone(), m));
+        }
+    }
+    out
+}
+
 /// What a member is.
 #[derive(Debug, Clone)]
 pub enum MemberTy {

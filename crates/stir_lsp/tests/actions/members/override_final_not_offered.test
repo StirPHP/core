@@ -1,0 +1,10 @@
+=== action: Override `Base::done()`
+=== no-offer
+=== input
+<?php
+class Base {
+    final public function done(): void {}
+}
+class Child extends Base {
+‸
+}

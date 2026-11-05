@@ -1,0 +1,21 @@
+=== action: Create method `make()`
+=== fixes: method.notFound
+=== input
+<?php
+class A {
+    public function run(): ?self {
+        return $this->ma‸ke();
+    }
+}
+=== output
+<?php
+class A {
+    public function run(): ?self {
+        return $this->make();
+    }
+
+    private function make(): ?self
+    {
+        throw new LogicException('Not implemented: make');
+    }
+}

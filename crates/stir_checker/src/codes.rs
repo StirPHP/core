@@ -104,6 +104,8 @@ pub const TYPE_MISMATCH: &str = "SPHP0005";
 pub const PHP_SYNTAX_VERSION: &str = "SPHP0060";
 /// Something of PHP's library that isn't on the project's PHP version.
 pub const PHP_LIBRARY_VERSION: &str = "SPHP0061";
+/// A class that can be created, but has abstract methods nothing implements: PHP won't load it.
+pub const CLASS_UNIMPLEMENTED: &str = "SPHP0062";
 /// An import nothing uses: not an error, only a hint for an editor to grey it out.
 pub const UNUSED_IMPORT: &str = "SPHP0080";
 /// A project's script failed while running: it took too long, or its code went wrong.

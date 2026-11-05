@@ -1,0 +1,21 @@
+=== action: Create method `go()`
+=== fixes: method.notFound
+=== input
+<?php
+$a = new class {
+    public function run(): void {
+        $this->g‸o();
+    }
+};
+=== output
+<?php
+$a = new class {
+    public function run(): void {
+        $this->go();
+    }
+
+    private function go(): void
+    {
+        throw new LogicException('Not implemented: go');
+    }
+};

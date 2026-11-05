@@ -1,0 +1,23 @@
+=== action: Add `#[\Override]`
+=== php: 8.3
+=== input
+<?php
+class Base {
+    public function a(): void {}
+}
+
+class Child extends Base {
+    /** Doc */
+    public function a‸(): void {}
+}
+=== output
+<?php
+class Base {
+    public function a(): void {}
+}
+
+class Child extends Base {
+    /** Doc */
+    #[\Override]
+    public function a(): void {}
+}

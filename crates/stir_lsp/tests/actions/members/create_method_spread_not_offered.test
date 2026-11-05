@@ -1,0 +1,9 @@
+=== action: Create method `save()`
+=== no-offer
+=== input
+<?php
+class A {
+    public function run(array $a): void {
+        $this->sa‸ve(...$a);
+    }
+}

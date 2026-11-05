@@ -4108,6 +4108,25 @@ impl<'a, 'db> Checker<'a, 'db> {
         if model.origin != stir_db::FileOrigin::Source {
             return;
         }
+        let missing = crate::model_api::unimplemented_methods(self.ctx, model);
+        if !missing.is_empty() {
+            let names: Vec<String> = missing
+                .iter()
+                .map(|(owner, m)| format!("`{}::{}()`", owner.name, m.name))
+                .collect();
+            let shown = names.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+            let more = names.len().saturating_sub(5);
+            let more = if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            };
+            self.error(
+                def.name_range,
+                codes::CLASS_UNIMPLEMENTED,
+                format!("`{}` doesn't implement {shown}{more}", model.name),
+            );
+        }
         let self_ty = model.self_ty();
         let ancestors = self.ctx.ancestors(&self_ty);
         for m in &def.methods {

@@ -1,0 +1,6 @@
+=== action: Implement `run()`
+=== no-offer
+=== input
+<?php
+interface I { public function run(): void; }
+abstract class A‸ implements I {}

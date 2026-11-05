@@ -1,0 +1,12 @@
+=== action: Add `#[\Override]`
+=== php: 8.2
+=== no-offer
+=== input
+<?php
+class Base {
+    public function a(): void {}
+}
+
+class Child extends Base {
+    public function a‸(): void {}
+}

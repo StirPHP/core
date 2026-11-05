@@ -1,0 +1,13 @@
+=== action: Implement `count()`
+=== fixes: SPHP0062
+=== input
+<?php
+class C‸ implements Countable {}
+=== output
+<?php
+class C implements Countable {
+    public function count(): int
+    {
+        throw new LogicException('Not implemented: count');
+    }
+}

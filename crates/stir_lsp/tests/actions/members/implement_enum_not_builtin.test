@@ -1,0 +1,22 @@
+=== action: Implement `label()`
+=== php: 8.1
+=== fixes: SPHP0062
+=== input
+<?php
+interface HasLabel { public function label(): string; }
+
+enum Co‸lor: string implements HasLabel {
+    case Red = 'red';
+}
+=== output
+<?php
+interface HasLabel { public function label(): string; }
+
+enum Color: string implements HasLabel {
+    case Red = 'red';
+
+    public function label(): string
+    {
+        throw new LogicException('Not implemented: label');
+    }
+}

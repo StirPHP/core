@@ -1,0 +1,21 @@
+=== action: Create property `$name`
+=== fixes: property.notFound
+=== input
+<?php
+class A {
+    public int $x = 0;
+
+    public function run(): void {
+        $this->na‸me = 'a';
+    }
+}
+=== output
+<?php
+class A {
+    public int $x = 0;
+    private string $name;
+
+    public function run(): void {
+        $this->name = 'a';
+    }
+}
