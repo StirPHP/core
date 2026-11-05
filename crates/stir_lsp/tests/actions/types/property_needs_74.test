@@ -1,0 +1,9 @@
+=== action: Add type `int` to `$a`
+=== no-offer
+=== php: 7.3
+=== input
+<?php
+class C {
+    /** @var int */
+    public $a‸ = 1;
+}

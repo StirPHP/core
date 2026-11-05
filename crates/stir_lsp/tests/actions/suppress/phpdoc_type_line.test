@@ -1,0 +1,12 @@
+=== action: Ignore `return.type` on this line
+=== fixes: return.type
+=== input
+<?php
+function f(): int {
+    return 'a‸';
+}
+=== output
+<?php
+function f(): int {
+    return 'a'; // @phpstan-ignore return.type
+}

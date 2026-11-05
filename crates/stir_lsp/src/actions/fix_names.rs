@@ -4,13 +4,13 @@ use rustc_hash::FxHashSet;
 use smol_str::SmolStr;
 use stir_checker::model_api::{self, MemberTy};
 use stir_checker::{Def, codes};
-use stir_db::{Diagnostic, FileOrigin, SourceFile};
+use stir_db::{FileOrigin, SourceFile};
 use stir_hir::name::Fqn;
 use stir_hir::{ClassKind, Visibility, file_items};
 use stir_syntax::{SyntaxKind::*, SyntaxNode, TextRange};
 use stir_types::{Ty, TyKind};
 
-use super::{Change, Cx, Kind, Offer};
+use super::{Change, Cx, Found, Kind, Offer};
 use crate::imports::Imports;
 use crate::nav;
 
@@ -20,7 +20,8 @@ const MAX_TYPOS: usize = 3;
 const MAX_IMPORTS: usize = 15;
 
 pub fn offers<'c>(cx: &'c Cx<'c>, out: &mut Vec<Offer<'c>>) {
-    for d in cx.diagnostics() {
+    for d in cx.found() {
+        let d = &d;
         match d.code.as_str() {
             codes::CLASS_NOT_FOUND | codes::INTERFACE_NOT_FOUND | codes::TRAIT_NOT_FOUND => {
                 class_name(cx, d, out);
@@ -129,7 +130,7 @@ fn import_change(
     Change::new(edits)
 }
 
-fn class_name<'c>(cx: &'c Cx<'c>, d: &'c Diagnostic, out: &mut Vec<Offer<'c>>) {
+fn class_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
     let Some(written) = written_name(cx, d.range) else {
         return;
     };
@@ -209,7 +210,7 @@ fn class_name<'c>(cx: &'c Cx<'c>, d: &'c Diagnostic, out: &mut Vec<Offer<'c>>) {
             Kind::QuickFix,
             move || Ok(import_change(cx, range, text, import)),
         )
-        .fixing(d.range, &d.code);
+        .fixing(d.shown, &d.code);
         if single {
             offer = offer.preferred();
         }
@@ -235,12 +236,12 @@ fn class_name<'c>(cx: &'c Cx<'c>, d: &'c Diagnostic, out: &mut Vec<Offer<'c>>) {
                     move || Ok(import_change(cx, range, text, import))
                 },
             )
-            .fixing(d.range, &d.code),
+            .fixing(d.shown, &d.code),
         );
     }
 }
 
-fn function_name<'c>(cx: &'c Cx<'c>, d: &'c Diagnostic, out: &mut Vec<Offer<'c>>) {
+fn function_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
     let Some(written) = written_name(cx, d.range) else {
         return;
     };
@@ -293,7 +294,7 @@ fn function_name<'c>(cx: &'c Cx<'c>, d: &'c Diagnostic, out: &mut Vec<Offer<'c>>
             Kind::QuickFix,
             move || Ok(import_change(cx, range, name.text, name.import)),
         )
-        .fixing(d.range, &d.code);
+        .fixing(d.shown, &d.code);
         if single {
             offer = offer.preferred();
         }
@@ -315,12 +316,12 @@ fn function_name<'c>(cx: &'c Cx<'c>, d: &'c Diagnostic, out: &mut Vec<Offer<'c>>
                 Kind::QuickFix,
                 move || Ok(import_change(cx, range, name.text, name.import)),
             )
-            .fixing(d.range, &d.code),
+            .fixing(d.shown, &d.code),
         );
     }
 }
 
-fn constant_name<'c>(cx: &'c Cx<'c>, d: &'c Diagnostic, out: &mut Vec<Offer<'c>>) {
+fn constant_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
     let Some(written) = written_name(cx, d.range) else {
         return;
     };
@@ -368,7 +369,7 @@ fn constant_name<'c>(cx: &'c Cx<'c>, d: &'c Diagnostic, out: &mut Vec<Offer<'c>>
             Kind::QuickFix,
             move || Ok(import_change(cx, range, name.text, name.import)),
         )
-        .fixing(d.range, &d.code);
+        .fixing(d.shown, &d.code);
         if single {
             offer = offer.preferred();
         }
@@ -386,7 +387,7 @@ fn constant_name<'c>(cx: &'c Cx<'c>, d: &'c Diagnostic, out: &mut Vec<Offer<'c>>
                 Kind::QuickFix,
                 move || Ok(import_change(cx, range, name.text, name.import)),
             )
-            .fixing(d.range, &d.code),
+            .fixing(d.shown, &d.code),
         );
     }
 }
@@ -437,7 +438,7 @@ fn receiver_class(cx: &Cx<'_>, fetch: &SyntaxNode) -> Option<(Ty, bool)> {
     }
 }
 
-fn member_typo<'c>(cx: &'c Cx<'c>, d: &'c Diagnostic, method: bool, out: &mut Vec<Offer<'c>>) {
+fn member_typo<'c>(cx: &'c Cx<'c>, d: &Found, method: bool, out: &mut Vec<Offer<'c>>) {
     let Some(token) = cx.token_at(d.range.start()) else {
         return;
     };
@@ -502,7 +503,7 @@ fn member_typo<'c>(cx: &'c Cx<'c>, d: &'c Diagnostic, method: bool, out: &mut Ve
             Kind::QuickFix,
             move || Ok(Change::new(vec![cx.edit(range, text)])),
         )
-        .fixing(d.range, &d.code);
+        .fixing(d.shown, &d.code);
         if single {
             offer = offer.preferred();
         }
@@ -537,7 +538,7 @@ fn locals_before(cx: &Cx<'_>, node: &SyntaxNode, before: TextRange) -> FxHashSet
     names
 }
 
-fn variable_typo<'c>(cx: &'c Cx<'c>, d: &'c Diagnostic, out: &mut Vec<Offer<'c>>) {
+fn variable_typo<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
     let Some(token) = cx.token_at(d.range.start()) else {
         return;
     };
@@ -571,7 +572,7 @@ fn variable_typo<'c>(cx: &'c Cx<'c>, d: &'c Diagnostic, out: &mut Vec<Offer<'c>>
             Kind::QuickFix,
             move || Ok(Change::new(vec![cx.edit(range, text)])),
         )
-        .fixing(d.range, &d.code);
+        .fixing(d.shown, &d.code);
         if single {
             offer = offer.preferred();
         }

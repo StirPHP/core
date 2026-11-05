@@ -1,0 +1,11 @@
+=== action: Add return type `int`
+=== input
+<?php
+function f‸(string $s) {
+    return strlen($s) + 1;
+}
+=== output
+<?php
+function f(string $s): int {
+    return strlen($s) + 1;
+}

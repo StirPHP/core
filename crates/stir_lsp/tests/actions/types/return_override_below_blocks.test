@@ -1,0 +1,10 @@
+=== action: Add return type `void`
+=== no-offer
+=== file: /src/B.php
+<?php
+class B extends A { public function f() { echo 2; } }
+=== input
+<?php
+class A {
+    public function f‸() { echo 1; }
+}

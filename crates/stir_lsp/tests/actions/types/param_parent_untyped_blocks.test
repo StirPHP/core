@@ -1,0 +1,11 @@
+=== action: Add type `int` to `$a`
+=== no-offer
+=== file: /src/P.php
+<?php
+class P { public function f($a): void {} }
+=== input
+<?php
+class C extends P {
+    /** @param int $a */
+    public function f($a‸): void {}
+}

@@ -1,0 +1,11 @@
+=== action: Add return type `Generator`
+=== input
+<?php
+function f‸() {
+    yield 1;
+}
+=== output
+<?php
+function f(): Generator {
+    yield 1;
+}

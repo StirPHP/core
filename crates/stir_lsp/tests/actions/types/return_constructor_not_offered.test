@@ -1,0 +1,7 @@
+=== action: Add return type `void`
+=== no-offer
+=== input
+<?php
+class A {
+    public function __construct‸() {}
+}

@@ -1,0 +1,17 @@
+=== action: Add type `?string` to `$a`
+=== level: 6
+=== fixes: missingType.property
+=== input
+<?php
+class C {
+    private $a‸;
+    public function set(string $v): void { $this->a = $v; }
+    public function get(): ?string { return $this->a; }
+}
+=== output
+<?php
+class C {
+    private ?string $a = null;
+    public function set(string $v): void { $this->a = $v; }
+    public function get(): ?string { return $this->a; }
+}

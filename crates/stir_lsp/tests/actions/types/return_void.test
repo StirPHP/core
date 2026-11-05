@@ -1,0 +1,13 @@
+=== action: Add return type `void`
+=== level: 6
+=== fixes: missingType.return
+=== input
+<?php
+function f‸() {
+    echo 1;
+}
+=== output
+<?php
+function f(): void {
+    echo 1;
+}

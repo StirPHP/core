@@ -1,0 +1,12 @@
+=== action: Make the property's type nullable
+=== fixes: property.defaultValue
+=== input
+<?php
+class C {
+    public int $a = nu‸ll;
+}
+=== output
+<?php
+class C {
+    public ?int $a = null;
+}

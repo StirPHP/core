@@ -1,0 +1,5 @@
+=== action: Add type `int` to `$a`
+=== no-offer
+=== input
+<?php
+function f($a‸ = 1): void {}

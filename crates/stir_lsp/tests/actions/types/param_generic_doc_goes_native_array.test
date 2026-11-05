@@ -1,0 +1,9 @@
+=== action: Add type `array` to `$a`
+=== input
+<?php
+/** @param list<int> $a */
+function f($a‸): void {}
+=== output
+<?php
+/** @param list<int> $a */
+function f(array $a): void {}

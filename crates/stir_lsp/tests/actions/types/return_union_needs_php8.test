@@ -1,0 +1,21 @@
+=== action: Add `@return int|string` to the doc comment
+=== php: 7.4
+=== input
+<?php
+function f‸(bool $b) {
+    if ($b) {
+        return 1;
+    }
+    return 'a';
+}
+=== output
+<?php
+/**
+ * @return int|string
+ */
+function f(bool $b) {
+    if ($b) {
+        return 1;
+    }
+    return 'a';
+}

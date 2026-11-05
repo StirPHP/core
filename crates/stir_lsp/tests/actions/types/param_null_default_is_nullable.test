@@ -1,0 +1,9 @@
+=== action: Add type `?int` to `$a`
+=== input
+<?php
+/** @param int $a */
+function f($a‸ = null): void {}
+=== output
+<?php
+/** @param int $a */
+function f(?int $a = null): void {}

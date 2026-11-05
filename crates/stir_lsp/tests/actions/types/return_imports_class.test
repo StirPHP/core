@@ -1,0 +1,21 @@
+=== action: Add return type `Thing`
+=== file: /src/Thing.php
+<?php
+namespace App\Things;
+class Thing {}
+=== input
+<?php
+namespace App;
+
+function f‸() {
+    return new \App\Things\Thing();
+}
+=== output
+<?php
+namespace App;
+
+use App\Things\Thing;
+
+function f(): Thing {
+    return new \App\Things\Thing();
+}

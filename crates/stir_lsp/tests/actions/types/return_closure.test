@@ -1,0 +1,11 @@
+=== action: Add return type `int`
+=== input
+<?php
+$f = func‸tion () use (&$x) {
+    return 1;
+};
+=== output
+<?php
+$f = function () use (&$x): int {
+    return 1;
+};

@@ -1,0 +1,9 @@
+=== action: Add type `T` to `$a`
+=== no-offer
+=== input
+<?php
+/**
+ * @template T
+ * @param T $a
+ */
+function f($a‸): void {}

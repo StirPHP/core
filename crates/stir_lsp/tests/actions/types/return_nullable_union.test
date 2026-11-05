@@ -1,0 +1,17 @@
+=== action: Add return type `?int`
+=== input
+<?php
+function f‸(bool $b) {
+    if ($b) {
+        return null;
+    }
+    return 1;
+}
+=== output
+<?php
+function f(bool $b): ?int {
+    if ($b) {
+        return null;
+    }
+    return 1;
+}

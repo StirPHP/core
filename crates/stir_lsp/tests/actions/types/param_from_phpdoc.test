@@ -1,0 +1,10 @@
+=== action: Add type `int` to `$a`
+=== level: 6
+=== input
+<?php
+/** @param int $a */
+function f($a‸): void {}
+=== output
+<?php
+/** @param int $a */
+function f(int $a): void {}

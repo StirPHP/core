@@ -13,12 +13,15 @@
 use std::cell::OnceCell;
 
 use stir_db::{Db, Diagnostic, FileOrigin, PhpVersions, SourceFile, Workspace};
-use stir_syntax::{SyntaxNode, SyntaxToken, TextRange, TextSize};
+use stir_syntax::{SyntaxKind, SyntaxNode, SyntaxToken, TextRange, TextSize};
 
 mod classes;
+mod docs;
 mod extract;
 mod flow;
 mod fix_members;
+mod foreign;
+mod hierarchy;
 mod fix_names;
 mod fix_types;
 mod members;
@@ -171,6 +174,16 @@ pub struct ClientAbilities {
     pub asks_for_parameters: bool,
 }
 
+/// A problem at a place in the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    /// What it's about.
+    pub range: TextRange,
+    /// Where the editor shows it, which for what only has a line is the whole line.
+    pub shown: TextRange,
+    pub code: String,
+}
+
 /// What every provider of offers looks at.
 pub struct Cx<'c> {
     pub db: &'c dyn Db,
@@ -261,16 +274,48 @@ impl<'c> Cx<'c> {
             .collect()
     }
 
-    /// The token at `offset`, preferring something meaningful to whitespace and to what's before it.
+    /// What's wrong around the selection, ours and what can safely be placed of someone else's.
+    pub fn found(&self) -> Vec<Found> {
+        let mut out: Vec<Found> = self
+            .diagnostics()
+            .into_iter()
+            .map(|d| Found {
+                range: d.range,
+                shown: d.range,
+                code: d.code.to_string(),
+            })
+            .collect();
+        out.extend(foreign::located(self));
+        out
+    }
+
+    /// The token at `offset`: between two, the word if one is, then what follows, then what isn't
+    /// whitespace.
     pub fn token_at(&self, offset: TextSize) -> Option<SyntaxToken> {
+        let wordy = |t: &SyntaxToken| {
+            t.kind().is_keyword()
+                || matches!(
+                    t.kind(),
+                    SyntaxKind::IDENT
+                        | SyntaxKind::VARIABLE
+                        | SyntaxKind::NAME_QUALIFIED
+                        | SyntaxKind::NAME_FULLY_QUALIFIED
+                )
+        };
         let at = self.root.token_at_offset(offset);
-        let mut tokens: Vec<SyntaxToken> = at.collect();
-        tokens.reverse();
-        tokens
-            .iter()
-            .find(|t| !t.kind().is_trivia())
-            .or(tokens.first())
-            .cloned()
+        let right = at.clone().right_biased();
+        let left = at.left_biased();
+        match (left, right) {
+            (Some(l), Some(r)) if l == r => Some(r),
+            (Some(l), Some(r)) => Some(if wordy(&r) || (!wordy(&l) && !r.kind().is_trivia()) {
+                r
+            } else if wordy(&l) || !l.kind().is_trivia() {
+                l
+            } else {
+                r
+            }),
+            (l, r) => r.or(l),
+        }
     }
 
     /// The token at the start of the selection.

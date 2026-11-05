@@ -1,0 +1,12 @@
+=== action: Make the return type nullable
+=== fixes: return.type
+=== input
+<?php
+function f(): int {
+    return nu‸ll;
+}
+=== output
+<?php
+function f(): ?int {
+    return null;
+}

@@ -1,0 +1,9 @@
+=== action: Make the parameter's type nullable
+=== php: 8.4
+=== fixes: parameter.implicitlyNullable
+=== input
+<?php
+function f(int‸ $a = null): void {}
+=== output
+<?php
+function f(?int $a = null): void {}

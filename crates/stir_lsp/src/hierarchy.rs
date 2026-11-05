@@ -40,7 +40,7 @@ fn direct_supertypes(class: &ClassDef) -> Vec<SmolStr> {
 
 /// Everything under `key`, nearest first, without `key`. Stubs of extensions the project doesn't
 /// mention aren't its business.
-fn all_subtypes(db: &dyn Db, ws: Workspace, key: &str) -> Vec<SmolStr> {
+pub fn all_subtypes(db: &dyn Db, ws: Workspace, key: &str) -> Vec<SmolStr> {
     let graph = stir_hir::direct_subtypes(db, ws);
     let mut seen: FxHashSet<SmolStr> = FxHashSet::default();
     seen.insert(SmolStr::new(key));

@@ -1,0 +1,11 @@
+=== action: Remove the unreachable code
+=== no-offer
+=== input
+<?php
+function f(): int {
+    goto a;
+    return 1;
+    ec‸ho 2;
+    a:
+    return 3;
+}

@@ -1,0 +1,20 @@
+=== action: Add `@return array<string, int>` to the doc comment
+=== level: 6
+=== fixes: missingType.iterableValue
+=== input
+<?php
+/**
+ * @param array<string, int> $a
+ */
+function f‸(array $a): array {
+    return $a;
+}
+=== output
+<?php
+/**
+ * @param array<string, int> $a
+ * @return array<string, int>
+ */
+function f(array $a): array {
+    return $a;
+}

@@ -1,0 +1,7 @@
+=== action: Add return type `mixed`
+=== no-offer
+=== input
+<?php
+function f‸($x) {
+    return $x;
+}

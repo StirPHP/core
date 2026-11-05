@@ -279,8 +279,9 @@ pub fn doc_type(namer: &mut Namer<'_>, ty: &Ty) -> Option<String> {
         | TyKind::ArrayKey
         | TyKind::NonEmptyString
         | TyKind::NumericString
-        | TyKind::IntRange { .. }
-        | TyKind::Literal(_) => Some(ty.to_string()),
+        | TyKind::IntRange { .. } => Some(ty.to_string()),
+        // what it is now, not all it can be
+        TyKind::Literal(_) => Some(stir_checker::widen_literals(ty).to_string()),
         TyKind::ClassString(None) => bare("class-string"),
         TyKind::ClassString(Some(of)) => Some(format!("class-string<{}>", doc_type(namer, of)?)),
         TyKind::Array {
@@ -302,7 +303,14 @@ pub fn doc_type(namer: &mut Namer<'_>, ty: &Ty) -> Option<String> {
         }
         TyKind::Shape(shape) => {
             let mut fields = Vec::new();
+            let positional = shape.fields.iter().enumerate().all(|(i, f)| {
+                !f.optional && matches!(&f.key, ShapeKey::Int(k) if *k == i as i64)
+            });
             for f in &shape.fields {
+                if positional {
+                    fields.push(doc_type(namer, &f.ty)?);
+                    continue;
+                }
                 let key = match &f.key {
                     ShapeKey::Int(i) => i.to_string(),
                     ShapeKey::Str(s) => {

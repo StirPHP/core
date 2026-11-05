@@ -1,0 +1,18 @@
+=== action: Add return type `int|string`
+=== php: 8.0
+=== input
+<?php
+function f‸(bool $b) {
+    if ($b) {
+        return 1;
+    }
+    return 'a';
+}
+=== output
+<?php
+function f(bool $b): int|string {
+    if ($b) {
+        return 1;
+    }
+    return 'a';
+}

@@ -1,0 +1,11 @@
+=== action: Add type `int` to `$a`
+=== no-offer
+=== file: /src/D.php
+<?php
+class D extends C { public $a = 2; }
+=== input
+<?php
+class C {
+    /** @var int */
+    public $a‸ = 1;
+}

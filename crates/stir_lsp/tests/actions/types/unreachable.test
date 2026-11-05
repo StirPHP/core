@@ -1,0 +1,16 @@
+=== action: Remove the unreachable code
+=== fixes: deadCode.unreachable
+=== input
+<?php
+function f(): int {
+    return 1;
+    // why
+    ec‸ho 2;
+    echo 3;
+}
+=== output
+<?php
+function f(): int {
+    return 1;
+    // why
+}

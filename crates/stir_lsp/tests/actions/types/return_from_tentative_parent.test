@@ -1,0 +1,15 @@
+=== action: Add return type `int`
+=== input
+<?php
+class A implements Countable {
+    public function count‸() {
+        return 1;
+    }
+}
+=== output
+<?php
+class A implements Countable {
+    public function count(): int {
+        return 1;
+    }
+}

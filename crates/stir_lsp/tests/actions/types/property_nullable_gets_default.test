@@ -1,0 +1,13 @@
+=== action: Add type `?int` to `$a`
+=== input
+<?php
+class C {
+    /** @var int|null */
+    public $a‸;
+}
+=== output
+<?php
+class C {
+    /** @var int|null */
+    public ?int $a = null;
+}
