@@ -21,8 +21,8 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "In an untrusted workspace, custom rules never run, and `stirphp.server.path` from the workspace is ignored.",
-      "restrictedConfigurations": ["stirphp.server.path"]
+      "description": "In an untrusted workspace, custom rules and PHPStan never run, and `stirphp.server.path` and `stirphp.phpstan.path` from the workspace are ignored.",
+      "restrictedConfigurations": ["stirphp.server.path", "stirphp.phpstan.path", "stirphp.phpstan.configuration"]
     }
   },
   "contributes": {
@@ -51,6 +51,47 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Look for a newer `stirphp` every few hours and install it (when `stirphp.server.path` is empty). **StirPHP: Check for Updates** checks at any time."
+        },
+        "stirphp.phpstan.enable": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ],
+          "enumDescriptions": [
+            "If the project has PHPStan's configuration and PHPStan among its Composer packages, unless `parameters.stirphp.phpstan` says otherwise.",
+            "Run it, and say so if it can't be found.",
+            "Never run it."
+          ],
+          "default": "auto",
+          "markdownDescription": "Run the project's PHPStan in the background on save and show what it reports with StirPHP's diagnostics. You're asked first, since it runs code from the project, and it never runs in an untrusted workspace."
+        },
+        "stirphp.phpstan.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The `phpstan` to run: a path, relative to the project, or a command on the `PATH`. Leave empty to use the project's `vendor/bin/phpstan`. A global `phpstan` is only used if named here."
+        },
+        "stirphp.phpstan.configuration": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "PHPStan's configuration, relative to the project. Leave empty for the one PHPStan finds by itself."
+        },
+        "stirphp.phpstan.level": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The level, a number or `max`, over the one in PHPStan's configuration. Leave empty to use that."
+        },
+        "stirphp.phpstan.memoryLimit": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "PHP's memory limit for each PHPStan process, as in `--memory-limit`: `1G`, or `-1` for none. Leave empty for `2G`."
+        },
+        "stirphp.phpstan.timeout": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0,
+          "markdownDescription": "How many seconds a run gets. `0` means 600."
         },
         "stirphp.trace.server": {
           "type": "string",

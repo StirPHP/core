@@ -71,6 +71,7 @@ stirphp check --generate-baseline   # accept what's reported now
 stirphp check --format json         # one JSON array of diagnostics
 stirphp check --max-errors 20       # show at most 20; all are still counted
 stirphp check --no-vendor           # don't load Composer's packages
+stirphp check --with-phpstan        # run the project's PHPStan too; see Running PHPStan
 ```
 
 The levels follow PHPStan's, 0 to 10, and `level: max` in a configuration means 10.
@@ -123,6 +124,7 @@ parameters:
         rules: [rules/no_var_dump.rhai]  # see Custom rules
         indent: 4                   # or `tab`, for `stirphp fmt`; in an editor, the default is the editor's
         deprecations: true          # report the use of what's deprecated; see PHPStan compatibility
+        phpstan: true               # or `false`, or settings; see Running PHPStan
 ```
 
 An unknown key is an error.
@@ -159,7 +161,8 @@ they'd hide its own errors.
 
 ## PHPStan compatibility
 
-StirPHP is its own engine. It doesn't run PHPStan, and it doesn't need PHP installed. What's shared:
+StirPHP is its own engine, and it doesn't need PHP installed or PHPStan to work. If a project has PHPStan, it can
+[run alongside](#running-phpstan). What's shared:
 
 - **Configuration:** `level`, `paths`, `excludePaths`, `ignoreErrors`, `phpVersion`, `stubFiles` and `includes` are read
   from NEON. Includes written in PHP are skipped, because reading them would run your code.
@@ -186,13 +189,91 @@ differ from PHPStan's. So:
 The limits:
 
 - PHPStan extensions and custom rules are PHP code, which can't run in this engine. A project that relies on them, such
-  as framework extensions or strict rules, should run PHPStan alongside StirPHP, or write what it needs as
-  [scripts](#custom-rules). Until a framework's magic is described that way, expect errors PHPStan's extensions would
+  as framework extensions or strict rules, should [run PHPStan alongside StirPHP](#running-phpstan), or write what it needs
+  as [scripts](#custom-rules). Until a framework's magic is described that way, expect errors PHPStan's extensions would
   have explained away.
 - The checks don't all exist yet, and those that exist don't always agree with PHPStan. Conditions and comparisons that can
   only go one way are reported only where that's certain, so far fewer of them are found. A project with
   `treatPhpDocTypesAsCertain: false` gets none of them, because types here don't say which came from PHPDoc.
   `missingType.generics`, `missingType.callable` and `missingType.checkedException` aren't reported at all.
+
+## Running PHPStan
+
+A project that has PHPStan can get its full answer in the editor, or from `stirphp check`, with StirPHP's. This runs the
+PHPStan the project has installed, with the project's configuration and level. It's there for what StirPHP doesn't have, such
+as extensions and checks it hasn't got yet, and the same error isn't shown twice.
+
+**In an editor** it's on for a project with both PHPStan's configuration (`phpstan.neon`, `phpstan.neon.dist` or
+`phpstan.dist.neon`, in the project's folder) and PHPStan among its Composer packages, once you've said it can run. That's
+because running it means running code from the project: the `vendor/bin/phpstan` that's there, and the bootstrap files and
+extensions its configuration loads. So you're asked first, showing the command, separately from
+[custom rules](#custom-rules), as this has no sandbox. The answer is kept for that workspace, for that binary and that
+configuration file as they are, and you're asked again when either changes. What's in bootstrap files, extensions, included
+files and `vendor/` isn't part of it, so a change there doesn't ask again. In a workspace the editor doesn't trust
+(`"workspaceTrusted": false` in `initializationOptions`), it never runs and nothing's asked. A client that can't ask gets one
+notice, and it doesn't run.
+
+**On the command line**, `stirphp check --with-phpstan` runs it, which is your choice, as with running PHPStan by hand.
+`stirphp check` alone never does. If it can't give an answer, what StirPHP found is still shown, the reason goes to stderr, and
+the exit code is 1. With `--format json`, what PHPStan reported has `"source": "phpstan"`. `--level` and `-c` are passed on,
+except that a `stirphp.neon` isn't, since PHPStan refuses `parameters.stirphp` unless that's declared. It can't be combined with
+`--generate-baseline`.
+
+Which PHPStan: `parameters.stirphp.phpstan.binary` or an editor's setting (which wins), then Composer's `vendor/bin/phpstan`, or
+`bin-dir`, then the package's own script. Never one that's only on your `PATH`, unless you name it, and StirPHP never installs
+anything. All of these are optional:
+
+```neon
+parameters:
+    stirphp:
+        phpstan:
+            enabled: true                # say so if it can't be found; `false` never runs it, in an editor
+            binary: tools/phpstan.phar   # relative to this file; without the executable bit it's run by `php`
+            configuration: phpstan.ci.neon
+            level: max                   # over the one in the configuration
+            memoryLimit: 1G              # for each of its processes; default 2G, -1 for none
+            timeout: 300                 # seconds for a run; default 600
+```
+
+What happens in an editor:
+
+- **When it runs:** when the project is opened, and whenever a PHP file of the project is saved in the editor, never as you
+  type. A change made elsewhere, such as `git pull`, is noticed at the next save. It analyses what PHPStan would with
+  `phpstan analyse`, not only the saved file, since a change in one file can cause errors in others.
+- **One at a time:** a save during a run waits for it, and then there's one more run, however many saves there were. A run
+  isn't killed for a save because a killed run leaves no result cache, and with a slow first run there'd never be any results.
+  It's killed with all its worker processes when it takes too long, when the settings or configuration change, and when the
+  server stops. If the server itself is killed with `SIGKILL`, the run can only end by itself.
+- **Stale lines:** PHPStan reads files from disk and only gives line numbers. So what it said of a file is only shown while the
+  editor has the text it read: type in a file and PHPStan's errors in it go away, until the next save's run is done. StirPHP's
+  own stay and keep up.
+- **Failures:** if it's not there, crashes, runs out of memory or time, has a broken configuration or a PHP it can't run on, you
+  get one notice, and no more of that kind until it's worked again. PHP's warnings around the JSON don't matter. What it
+  said before stays until it says something else, and StirPHP's diagnostics carry on regardless.
+- **Results:** errors have the source `phpstan` and link to [PHPStan's page for the identifier](https://phpstan.org/error-identifiers),
+  which doesn't exist for a third party's identifiers. They cover the line, as that's all PHPStan gives. Errors about the run as
+  a whole, such as an ignore pattern that matched nothing, show up at the top of its configuration file.
+
+Duplicates:
+
+- Two reports are the same if they have the same file, line and identifier. Messages play no part. StirPHP's stays, because it
+  has a real range and keeps up as you type. For what's wrong in a doc comment, either the comment's line or the line of what
+  it documents counts, because PHPStan reports the latter. A syntax error counts as the same as PHPStan's `phpstan.parse`
+  anywhere in the file.
+- One of StirPHP's removes one of PHPStan's. Two on a line with one identifier may be different errors.
+- A report with no identifier is never a duplicate. Neither is a report of StirPHP's own, such as `SPHP0061`, so PHPStan's
+  error about the same thing under another identifier is shown too. Nor are the same error on different lines, as with a call
+  over several lines: on Laravel's framework at level 5, 1577 of PHPStan's 2884 errors were removed, and about 40 of the rest had
+  one of StirPHP's with its identifier within 3 lines.
+- What StirPHP reports and PHPStan doesn't stays. PHPStan's silence doesn't take anything away, and the checks don't all agree yet.
+
+Baselines and ignore rules don't cross over. PHPStan applies its own to what it reports, and StirPHP's apply to what StirPHP
+reports. So an error StirPHP's baseline hides still shows if PHPStan reports it, unless PHPStan's baseline has it too, and
+`// @stirphp-nocheck` only quiets StirPHP.
+
+On Laravel's framework with its own configuration (level 1), on 16 cores: 6 seconds for a first run, with 17 processes of up to
+420 MB each, and under a second with PHPStan's result cache when nothing or a little changed. A change to `Collection`, which
+much depends on, took under 4 seconds.
 
 ## Custom rules
 
@@ -313,7 +394,7 @@ server shows it in the editor.
 
 `stirphp lsp` is a language server over stdin and stdout. It offers:
 
-- diagnostics for the project's files, updated as you type
+- diagnostics for the project's files, updated as you type, with [PHPStan's](#running-phpstan) on save for a project that has it
 - hover with types and doc comments
 - completion of members, variables and keywords, and of functions, classes and constants from the whole workspace by fuzzy
   match, adding the `use` line a name needs in the right place
@@ -352,6 +433,7 @@ the box.
 | `stir_checker` | the type checker, and what scripts see of a project |
 | `stir_script` | the sandbox scripts run in |
 | `stir_composer` | reads Composer's files |
+| `stir_phpstan` | runs a project's PHPStan and merges what it reports with ours (not in the browser) |
 | `stir_fmt` | the formatter |
 | `stir_project` | configuration, discovery, baselines, `init` and workspace loading |
 | `stir_lsp` | the language server |

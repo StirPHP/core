@@ -144,8 +144,18 @@ function createClient(command) {
     documentSelector,
     outputChannel: log,
     // the server registers its own file watchers
-    // an untrusted workspace's scripts never run, and the server doesn't ask about them
-    initializationOptions: { workspaceTrusted: vscode.workspace.isTrusted },
+    // in an untrusted workspace, scripts and PHPStan never run, and the server doesn't ask about them
+    initializationOptions: {
+      workspaceTrusted: vscode.workspace.isTrusted,
+      phpstan: {
+        enable: config().get('phpstan.enable', 'auto'),
+        path: config().get('phpstan.path', ''),
+        configuration: config().get('phpstan.configuration', ''),
+        level: config().get('phpstan.level', ''),
+        memoryLimit: config().get('phpstan.memoryLimit', ''),
+        timeout: config().get('phpstan.timeout', 0),
+      },
+    },
   };
   return new LanguageClient('stirphp', 'StirPHP', serverOptions, clientOptions);
 }
@@ -198,7 +208,7 @@ export async function activate(context) {
     }),
     vscode.workspace.onDidGrantWorkspaceTrust(restart),
     vscode.workspace.onDidChangeConfiguration(async (e) => {
-      if (e.affectsConfiguration('stirphp.server')) {
+      if (e.affectsConfiguration('stirphp.server') || e.affectsConfiguration('stirphp.phpstan')) {
         await restart();
       }
     }),
