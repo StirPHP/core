@@ -15,4 +15,4 @@ takes_int(HOUR);
 takes_int(2 * HOUR);
 takes_int(time() + 2 * HOUR);
 takes_mode(MODE);
-takes_mode('NOPE'); // error: SPHP0005
+takes_mode('NOPE'); // error: argument.type

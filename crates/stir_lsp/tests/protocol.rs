@@ -155,7 +155,7 @@ async fn editing_a_php_file() {
 
     let diags = c.diagnostics(&main_uri).await;
     assert_eq!(diags.len(), 1, "{diags:?}");
-    assert_eq!(diags[0]["code"], "SPHP0007");
+    assert_eq!(diags[0]["code"], "function.notFound");
     assert_eq!(diags[0]["range"]["start"]["line"], 4);
 
     let hover = c
@@ -309,7 +309,7 @@ async fn composer_install_state() {
     // one notice, and no error about the package's class
     let diags = c.diagnostics(&main_uri).await;
     assert_eq!(diags.len(), 1, "{diags:?}");
-    assert_eq!(diags[0]["code"], "SPHP0008");
+    assert_eq!(diags[0]["code"], "class.notFound");
     assert_eq!(diags[0]["range"]["start"]["line"], 6);
     c.drain(&main_uri).await;
     let shown = c.shown_messages();

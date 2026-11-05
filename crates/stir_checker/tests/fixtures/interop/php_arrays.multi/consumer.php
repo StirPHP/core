@@ -3,7 +3,7 @@
 function php_bare_arrays_are_arrays(array $a, array $b): array {
     $merged = array_merge($a, $b);
     echo count(bare());
-    takes_names($merged); // error: SPHP0005
+    takes_names($merged); // error: argument.type
     $parts = unpack("N", "abcd");
     if ($parts === false) {
         return [];
@@ -44,7 +44,7 @@ function php_array_functions_keep_types(array $a, string $s): string {
     }
     foreach (array_filter($a) as $k => $v) {
         echo strlen($k) + $v;
-        echo strlen($v); // error: SPHP0005
+        echo strlen($v); // error: argument.type
     }
     return str_replace(array_keys(["a" => "b"]), array_values(["a" => "b"]), $s);
 }

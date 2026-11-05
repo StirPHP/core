@@ -35,7 +35,7 @@ final class Person extends Base
 
     public function peek(): string
     {
-        return $this->secret; // error: SPHP0024
+        return $this->secret; // error: property.private
     }
 }
 
@@ -51,32 +51,32 @@ enum Status: string
 
     public function number(): int
     {
-        return $this->value; // error: SPHP0005
+        return $this->value; // error: return.type
     }
 }
 
 function members(Person $p): void {
     echo $p->name();
-    echo $p->id;      // error: SPHP0024
-    echo $p->nope;    // error: SPHP0009
-    echo $p->nope();  // error: SPHP0009
-    $p->first = "x";  // error: SPHP0010
+    echo $p->id;      // error: property.protected
+    echo $p->nope;    // error: property.notFound
+    echo $p->nope();  // error: method.notFound
+    $p->first = "x";  // error: assign.propertyProtectedSet
     echo Person::LIMIT;
-    echo Person::NOPE; // error: SPHP0009
+    echo Person::NOPE; // error: classConstant.notFound
 }
 
 function construction(): void {
     $p = new Person("a");
     echo $p->name();
-    new Person(1);    // error: SPHP0005
-    new Person("a", "b"); // error: SPHP0014
-    new Base();       // error: SPHP0023
-    new Missing();    // error: SPHP0008
+    new Person(1);    // error: argument.type
+    new Person("a", "b"); // error: arguments.count
+    new Base();       // error: new.abstract
+    new Missing();    // error: class.notFound
 }
 
 function enums(): string {
     $s = Status::Active;
-    echo Status::Gone; // error: SPHP0009
+    echo Status::Gone; // error: classConstant.notFound
     return $s->label();
 }
 
@@ -85,7 +85,7 @@ function statics(): int {
 }
 
 function arguments(): void {
-    strlen();       // error: SPHP0014
-    strlen(1, 2);   // error: SPHP0005, SPHP0014
-    undefined_fn(); // error: SPHP0007
+    strlen();       // error: arguments.count
+    strlen(1, 2);   // error: argument.type, arguments.count
+    undefined_fn(); // error: function.notFound
 }

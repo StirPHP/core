@@ -23,7 +23,6 @@ use stir_types::{
 };
 
 use crate::codes;
-use crate::levels::PHPDOC_MISMATCH;
 
 /// A generic parameter with its id and bound.
 #[derive(Debug, Clone)]
@@ -771,7 +770,7 @@ impl<'db> Ctx<'db> {
         let Some(c) = self.class(class) else {
             sink.push(LowerError {
                 range,
-                code: codes::UNKNOWN_TYPE,
+                code: codes::CLASS_NOT_FOUND,
                 message: format!("unknown class `{class}` in `@phpstan-import-type`"),
                 symbol: Some(SmolStr::new(class)),
             });
@@ -780,7 +779,7 @@ impl<'db> Ctx<'db> {
         let Some((_, alias)) = c.def.type_aliases.iter().find(|(n, _)| n == name) else {
             sink.push(LowerError {
                 range,
-                code: codes::UNKNOWN_TYPE,
+                code: codes::TYPE_ALIAS_NOT_FOUND,
                 message: format!("`{}` has no type alias `{name}`", c.name),
                 symbol: None,
             });
@@ -804,6 +803,7 @@ impl<'db> Ctx<'db> {
         native: Option<&TypeRef>,
         doc: Option<&TypeRef>,
         cx: &LowerCx,
+        phpdoc_code: &'static str,
         sink: &mut Vec<LowerError>,
     ) -> Option<Ty> {
         let n = native.map(|t| self.lower(t, cx, sink));
@@ -824,7 +824,7 @@ impl<'db> Ctx<'db> {
             Some(n) => {
                 sink.push(LowerError {
                     range: doc.range,
-                    code: PHPDOC_MISMATCH,
+                    code: phpdoc_code,
                     message: format!("PHPDoc type `{d}` is not a subtype of the native type `{n}`"),
                     symbol: None,
                 });
@@ -859,7 +859,11 @@ impl<'db> Ctx<'db> {
             if c.params.len() != args.len() && !args.is_empty() {
                 sink.push(LowerError {
                     range,
-                    code: codes::GENERIC_ARITY,
+                    code: if c.params.is_empty() {
+                        codes::GENERICS_NOT_GENERIC
+                    } else {
+                        codes::GENERICS_MORE_TYPES
+                    },
                     message: format!(
                         "`{}` takes {} type argument(s), found {}",
                         c.name,
@@ -874,7 +878,7 @@ impl<'db> Ctx<'db> {
         }
         sink.push(LowerError {
             range,
-            code: codes::UNKNOWN_TYPE,
+            code: codes::CLASS_NOT_FOUND,
             message: format!("unknown type `{name}`"),
             symbol: Some(SmolStr::new(name)),
         });
@@ -938,11 +942,16 @@ impl<'db> Ctx<'db> {
             .iter()
             .map(|p| self.param_sig(p, &cx, sink))
             .collect();
-        let (ret, ret_declared) =
-            match self.merged_ty(sig.ret.as_ref(), sig.doc_ret.as_ref(), &cx, sink) {
-                Some(t) => (t, true),
-                None => (Ty::untyped(), false),
-            };
+        let (ret, ret_declared) = match self.merged_ty(
+            sig.ret.as_ref(),
+            sig.doc_ret.as_ref(),
+            &cx,
+            codes::RETURN_PHPDOC_TYPE,
+            sink,
+        ) {
+            Some(t) => (t, true),
+            None => (Ty::untyped(), false),
+        };
         FnSig {
             name: SmolStr::new(name),
             type_params,
@@ -957,7 +966,13 @@ impl<'db> Ctx<'db> {
 
     pub fn param_sig(&self, p: &ParamDef, cx: &LowerCx, sink: &mut Vec<LowerError>) -> ParamSig {
         let ty = self
-            .merged_ty(p.ty.as_ref(), p.doc_ty.as_ref(), cx, sink)
+            .merged_ty(
+                p.ty.as_ref(),
+                p.doc_ty.as_ref(),
+                cx,
+                codes::PARAMETER_PHPDOC_TYPE,
+                sink,
+            )
             .unwrap_or_else(Ty::untyped);
         let ty = if p.default_is_null { ty.nullable() } else { ty };
         ParamSig {
@@ -1247,7 +1262,13 @@ impl<'db> Ctx<'db> {
             let cx = self.class_cx(&c);
             let mut sink = Vec::new();
             if let Some(p) = c.def.properties.iter().find(|p| p.name == name) {
-                let mut ty = self.merged_ty(p.ty.as_ref(), p.doc_ty.as_ref(), &cx, &mut sink);
+                let mut ty = self.merged_ty(
+                    p.ty.as_ref(),
+                    p.doc_ty.as_ref(),
+                    &cx,
+                    codes::PROPERTY_PHPDOC_TYPE,
+                    &mut sink,
+                );
                 // redeclared without a PHPDoc type: it takes the one it overrides
                 if p.doc_ty.is_none()
                     && !p.magic
@@ -1270,7 +1291,13 @@ impl<'db> Ctx<'db> {
             if let Some(p) = promoted {
                 let promo = p.promoted.as_ref().unwrap();
                 let ty = self
-                    .merged_ty(p.ty.as_ref(), p.doc_ty.as_ref(), &cx, &mut sink)
+                    .merged_ty(
+                        p.ty.as_ref(),
+                        p.doc_ty.as_ref(),
+                        &cx,
+                        codes::PROPERTY_PHPDOC_TYPE,
+                        &mut sink,
+                    )
                     .unwrap_or_else(Ty::mixed);
                 return Some(PropertyInfo {
                     class: c.clone(),
@@ -1279,6 +1306,7 @@ impl<'db> Ctx<'db> {
                     visibility: promo.mods.visibility,
                     is_static: false,
                     immutable: promo.immutable || c.def.mods.is_readonly,
+                    magic: false,
                 });
             }
         }
@@ -1302,8 +1330,14 @@ impl<'db> Ctx<'db> {
                 let cx = self.class_cx(&c);
                 let mut sink = Vec::new();
                 return Some(
-                    self.merged_ty(k.ty.as_ref(), k.doc_ty.as_ref(), &cx, &mut sink)
-                        .unwrap_or_else(Ty::mixed),
+                    self.merged_ty(
+                        k.ty.as_ref(),
+                        k.doc_ty.as_ref(),
+                        &cx,
+                        codes::CLASS_CONSTANT_PHPDOC_TYPE,
+                        &mut sink,
+                    )
+                    .unwrap_or_else(Ty::mixed),
                 );
             }
         }
@@ -1387,6 +1421,8 @@ pub struct PropertyInfo<'db> {
     pub visibility: Visibility,
     pub is_static: bool,
     pub immutable: bool,
+    /// From an `@property` tag, not a declaration.
+    pub magic: bool,
 }
 
 impl<'db> PropertyInfo<'db> {
@@ -1404,6 +1440,7 @@ impl<'db> PropertyInfo<'db> {
             visibility: p.mods.visibility,
             is_static: p.mods.is_static,
             immutable: p.immutable || p.mods.is_readonly || c.def.mods.is_readonly,
+            magic: p.magic,
         }
     }
 }

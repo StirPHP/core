@@ -18,7 +18,7 @@ function by_instanceof(Shape $s): float {
     if ($s instanceof Square) {
         return $s->side();
     }
-    return $s->radius(); // error: SPHP0009
+    return $s->radius(); // error: method.notFound
 }
 
 function by_is_functions(int|string|null $v): int {
@@ -46,7 +46,7 @@ function by_match(int|string $v): string {
 }
 
 function by_match_arm(int|string $v): int {
-    return match (true) { // error: SPHP0005
+    return match (true) { // error: return.type
         is_int($v) => $v,
         is_string($v) => $v,
     };
@@ -87,5 +87,5 @@ function widened_after_branch(bool $b): string {
     if ($b) {
         $v = 1;
     }
-    return $v; // error: SPHP0005
+    return $v; // error: return.type
 }

@@ -60,16 +60,16 @@ function uses_generics(): void {
     /** @var Stack<int> $s */
     $s = new Stack();
     $s->push(1);
-    $s->push("a"); // error: SPHP0005
+    $s->push("a"); // error: argument.type
 
     $n = head([1, 2]);
     if ($n !== null) {
         wants_int($n);
-        wants_string($n); // error: SPHP0005
+        wants_string($n); // error: argument.type
     }
 
     bounded(new ArrayObject());
-    bounded(1); // error: SPHP0005
+    bounded(1); // error: argument.type
 
     foreach (keys_of(["a" => 1]) as $k) {
         wants_string($k);
@@ -96,7 +96,7 @@ function any_animal_box(Box1 $b): void {}
 function any_box(Box1 $b): void {}
 
 function call_site_variance(): void {
-    exact_box(dog_box()); // error: SPHP0005
+    exact_box(dog_box()); // error: argument.type
     any_animal_box(dog_box());
     any_box(dog_box());
 }
@@ -115,13 +115,13 @@ function tree_default(): Tree1 {
 
 /** @return Tree1<'array'> */
 function tree_other(): Tree1 {
-    return new Tree1('t', 'scalar'); // error: SPHP0005
+    return new Tree1('t', 'scalar'); // error: argument.type
 }
 
 // a generic class without arguments leaves nothing unresolved behind
 /** @return iterable<string, int> */
 function from_a_generator(): iterable {
-    return raw_generator(); // error: SPHP0005
+    return raw_generator(); // error: return.type
 }
 function raw_generator(): Generator { yield "a" => 1; }
 
@@ -136,8 +136,8 @@ class Dyn { public static array $a = []; public function get(string $n): mixed {
  */
 function keeps_template(Animal $a): Animal {
     want_animal($a);
-    wants_string($a); // error: SPHP0005
-    return new Dog(); // error: SPHP0005
+    wants_string($a); // error: argument.type
+    return new Dog(); // error: return.type
 }
 function want_animal(Animal $a): void {}
 
@@ -152,9 +152,9 @@ function make_one(string $class): object {
 }
 
 function makes(): void {
-    make_one(Dog::class)->nope(); // error: SPHP0009
+    make_one(Dog::class)->nope(); // error: method.notFound
     make_one(Dog::class);
-    make_one("NoSuchClass"); // error: SPHP0005
+    make_one("NoSuchClass"); // error: argument.type
 }
 
 // a call-site variance says nothing about the values that come out
@@ -169,5 +169,5 @@ function covariant_value(Holder1 $h): Dog {
 }
 /** @param Holder1<covariant Dog> $h */
 function covariant_wrong(Holder1 $h): int {
-    return $h->get(); // error: SPHP0005
+    return $h->get(); // error: return.type
 }

@@ -27,14 +27,14 @@ function assigned_in_one_branch(bool $b): string {
     if ($b) {
         $x = "a";
     }
-    return $x; // error: SPHP0006
+    return $x; // error: variable.undefined
 }
 
 function not_seen_by_the_other_branch(bool $b): void {
     if ($b) {
         $x = "a";
     } else {
-        want_string($x); // error: SPHP0006
+        want_string($x); // error: variable.undefined
     }
 }
 
@@ -43,7 +43,7 @@ function wrong_on_one_path(bool $b): int {
     if ($b) {
         $x = new Thing();
     }
-    return $x; // error: SPHP0005
+    return $x; // error: return.type
 }
 
 function narrowing_survives_a_loop(?Thing $t, array $rows): int {
@@ -79,7 +79,7 @@ function while_condition_narrows(?Thing $t): void {
         $t->run();
         $t = $t->next();
     }
-    want_thing($t); // error: SPHP0005
+    want_thing($t); // error: argument.type
 }
 
 function assignment_in_condition(Thing $t): void {
@@ -89,7 +89,7 @@ function assignment_in_condition(Thing $t): void {
     if ($m = $t->next()) {
         $m->run();
     }
-    $n->run(); // error: SPHP0012
+    $n->run(); // error: method.nonObject
 }
 
 function early_exit_narrows(?Thing $t): int {
@@ -108,7 +108,7 @@ function either_exit(?Thing $a, ?Thing $b): int {
 
 function either_true(int|string|array $x): void {
     if (is_int($x) || is_string($x)) {
-        want_string($x); // error: SPHP0005
+        want_string($x); // error: argument.type
         return;
     }
     foreach ($x as $v) {
@@ -142,7 +142,7 @@ function switch_no_default(int $k): string {
             $s = "one";
             break;
     }
-    return $s; // error: SPHP0006
+    return $s; // error: variable.undefined
 }
 
 function try_assigns(): string {
@@ -159,7 +159,7 @@ function caught_may_not_have_it(): void {
         $s = "a";
         want_string($s);
     } catch (\Exception $e) {
-        want_string($s); // error: SPHP0006
+        want_string($s); // error: variable.undefined
     }
 }
 
@@ -185,7 +185,7 @@ function method_narrowed(Thing $t): int {
 }
 
 function method_not_narrowed(Thing $t): int {
-    return $t->next()->run(); // error: SPHP0012
+    return $t->next()->run(); // error: method.nonObject
 }
 
 function offset_narrowed(array $a): string {
@@ -206,7 +206,7 @@ class Forgets {
         $this->fill();
         $this->t->run();
         $this->reset();
-        return $this->t->run(); // error: SPHP0012
+        return $this->t->run(); // error: method.nonObject
     }
 }
 
@@ -225,7 +225,7 @@ function class_may_exist(): int {
 }
 
 function class_may_not_exist(): int {
-    return \Not\Installed::count(); // error: SPHP0008
+    return \Not\Installed::count(); // error: class.notFound
 }
 
 function name_only(): string {
@@ -235,7 +235,7 @@ function name_only(): string {
 abstract class Makes {
     protected static string $builder = "x";
     public static function make(): static { return new static(); }
-    public static function wrong(): self { return new self(); } // error: SPHP0023
+    public static function wrong(): self { return new self(); } // error: new.abstract
     public function other(): object { return new static::$builder(); }
     public function test(mixed $x): bool { return $x instanceof static::$builder || $x instanceof self::$builder; }
 }
@@ -245,11 +245,11 @@ function inline_var(mixed $m, array $rows): void {
     /** @var Thing $t */
     $t = $m;
     $t->run();
-    $t->nope(); // error: SPHP0009
+    $t->nope(); // error: method.notFound
 
     /** @var Thing $row */
     foreach ($rows as $row) {
-        $row->nope(); // error: SPHP0009
+        $row->nope(); // error: method.notFound
     }
 
     /** @var Thing $existing */
@@ -261,7 +261,7 @@ function guarded_member(Thing $t): void {
     if (method_exists($t, 'extra')) {
         $t->extra();
     }
-    $t->extra(); // error: SPHP0009
+    $t->extra(); // error: method.notFound
     if (property_exists($t, 'more')) {
         echo $t->more;
     }
@@ -279,7 +279,7 @@ class Builder1 {
 
 /** @param Builder1<string> $b */
 function self_generic(Builder1 $b): void {
-    want_string($b->withInt()->get()); // error: SPHP0005
+    want_string($b->withInt()->get()); // error: argument.type
     want_string($b->get());
 }
 
@@ -297,7 +297,7 @@ class Caches {
     /** @return list<int> */
     public function wrong(string $k): array {
         if (!isset(self::$cache[$k])) {
-            self::$cache[$k] = "x"; // error: SPHP0005
+            self::$cache[$k] = "x"; // error: assign.propertyType
         }
         return self::$cache[$k];
     }
@@ -310,7 +310,7 @@ function anonymous_uses_trait(): object {
 }
 
 function string_or_int_offset(int|string $k): string {
-    return $k[0]; // error: SPHP0015
+    return $k[0]; // error: offsetAccess.nonOffsetAccessible
 }
 
 // taking a reference defines a variable

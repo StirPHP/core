@@ -10,12 +10,12 @@ function typed(int $n): string
 function caller(): void
 {
     typed("x"); // reported from level 5
-    undefined_function(); // error: SPHP0007
-    typed(); // error: SPHP0014
+    undefined_function(); // error: function.notFound
+    typed(); // error: arguments.count
 }
 
 /**
- * @param string $n // error: SPHP0050
+ * @param string $n // error: parameter.phpDocType
  */
 function documented(int $n): void
 {

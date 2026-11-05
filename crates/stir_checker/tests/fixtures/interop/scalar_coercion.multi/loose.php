@@ -19,6 +19,6 @@ s(1.5);
 s(true);
 i('1');
 strlen(1);
-s([]); // error: SPHP0005
-a(1); // error: SPHP0005
-lit('c'); // error: SPHP0005
+s([]); // error: argument.type
+a(1); // error: argument.type
+lit('c'); // error: argument.type

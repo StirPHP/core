@@ -312,12 +312,21 @@ pub struct Feature {
     /// Reads after "PHP 8.4 added".
     pub name: &'static str,
     pub since: PhpVersion,
+    /// What it's reported as: PHPStan's identifier, if one of its rules is for this syntax.
+    pub code: &'static str,
 }
 
 const fn feature(name: &'static str, major: u8, minor: u8) -> Feature {
     Feature {
         name,
         since: PhpVersion::new(major, minor),
+        code: codes::PHP_SYNTAX_VERSION,
+    }
+}
+
+impl Feature {
+    const fn reported_as(self, code: &'static str) -> Feature {
+        Feature { code, ..self }
     }
 }
 
@@ -329,49 +338,67 @@ pub const NUMERIC_SEPARATOR: Feature = feature("`_` in numbers", 7, 4);
 
 pub const MATCH: Feature = feature("`match`", 8, 0);
 pub const NULLSAFE: Feature = feature("the `?->` operator", 8, 0);
-pub const NAMED_ARGUMENTS: Feature = feature("named arguments", 8, 0);
-pub const PROMOTION: Feature = feature("constructor property promotion", 8, 0);
+pub const NAMED_ARGUMENTS: Feature =
+    feature("named arguments", 8, 0).reported_as(codes::NAMED_ARGUMENTS_NOT_SUPPORTED);
+pub const PROMOTION: Feature = feature("constructor property promotion", 8, 0)
+    .reported_as(codes::PROPERTY_PROMOTED_NOT_SUPPORTED);
 pub const UNION_TYPES: Feature = feature("union types", 8, 0);
 pub const ATTRIBUTES: Feature = feature("attributes", 8, 0);
 pub const STATIC_TYPE: Feature = feature("the `static` return type", 8, 0);
 pub const MIXED_TYPE: Feature = feature("the `mixed` type", 8, 0);
-pub const THROW_EXPRESSION: Feature = feature("`throw` as an expression", 8, 0);
-pub const CATCH_WITHOUT_VARIABLE: Feature = feature("`catch` without a variable", 8, 0);
+pub const THROW_EXPRESSION: Feature =
+    feature("`throw` as an expression", 8, 0).reported_as(codes::THROW_NOT_SUPPORTED);
+pub const CATCH_WITHOUT_VARIABLE: Feature = feature("`catch` without a variable", 8, 0)
+    .reported_as(codes::CATCH_NON_CAPTURING_NOT_SUPPORTED);
 pub const TRAILING_COMMA_PARAMS: Feature = feature("trailing commas in parameter lists", 8, 0);
-pub const CLASS_ON_OBJECT: Feature = feature("`::class` on an object", 8, 0);
+pub const CLASS_ON_OBJECT: Feature =
+    feature("`::class` on an object", 8, 0).reported_as(codes::CLASS_CONSTANT_NOT_SUPPORTED);
 
 pub const ENUMS: Feature = feature("enums", 8, 1);
-pub const READONLY_PROPERTIES: Feature = feature("readonly properties", 8, 1);
-pub const FIRST_CLASS_CALLABLES: Feature = feature("first-class callable syntax", 8, 1);
+pub const READONLY_PROPERTIES: Feature =
+    feature("readonly properties", 8, 1).reported_as(codes::PROPERTY_READONLY_NOT_SUPPORTED);
+pub const FIRST_CLASS_CALLABLES: Feature =
+    feature("first-class callable syntax", 8, 1).reported_as(codes::CALLABLE_NOT_SUPPORTED);
 pub const NEW_IN_INITIALIZERS: Feature = feature("`new` in initializers", 8, 1);
-pub const NEVER_TYPE: Feature = feature("the `never` type", 8, 1);
+pub const NEVER_TYPE: Feature =
+    feature("the `never` type", 8, 1).reported_as(codes::RETURN_NEVER_NOT_SUPPORTED);
 pub const INTERSECTION_TYPES: Feature = feature("intersection types", 8, 1);
-pub const FINAL_CLASS_CONSTANTS: Feature = feature("final class constants", 8, 1);
+pub const FINAL_CLASS_CONSTANTS: Feature =
+    feature("final class constants", 8, 1).reported_as(codes::CLASS_CONSTANT_FINAL_NOT_SUPPORTED);
 pub const EXPLICIT_OCTAL: Feature = feature("the `0o` octal prefix", 8, 1);
 
-pub const READONLY_CLASSES: Feature = feature("readonly classes", 8, 2);
+pub const READONLY_CLASSES: Feature =
+    feature("readonly classes", 8, 2).reported_as(codes::CLASS_CONSTANT_NATIVE_TYPE_NOT_SUPPORTED);
 pub const DNF_TYPES: Feature = feature("DNF types", 8, 2);
 pub const TRUE_TYPE: Feature = feature("the `true` type", 8, 2);
 pub const STANDALONE_NULL_FALSE: Feature =
     feature("`null` and `false` as types of their own", 8, 2);
-pub const TRAIT_CONSTANTS: Feature = feature("constants in traits", 8, 2);
+pub const TRAIT_CONSTANTS: Feature =
+    feature("constants in traits", 8, 2).reported_as(codes::CLASS_CONSTANT_IN_TRAIT);
 
-pub const TYPED_CONSTANTS: Feature = feature("typed class constants", 8, 3);
-pub const DYNAMIC_CONSTANT_FETCH: Feature = feature("dynamic class constant fetch", 8, 3);
+pub const TYPED_CONSTANTS: Feature = feature("typed class constants", 8, 3)
+    .reported_as(codes::CLASS_CONSTANT_NATIVE_TYPE_NOT_SUPPORTED);
+pub const DYNAMIC_CONSTANT_FETCH: Feature =
+    feature("dynamic class constant fetch", 8, 3).reported_as(codes::CLASS_CONSTANT_DYNAMIC_FETCH);
 pub const OVERRIDE_ATTRIBUTE: Feature = feature("`#[\\Override]`", 8, 3);
-pub const READONLY_ANONYMOUS_CLASSES: Feature = feature("readonly anonymous classes", 8, 3);
+pub const READONLY_ANONYMOUS_CLASSES: Feature = feature("readonly anonymous classes", 8, 3)
+    .reported_as(codes::CLASS_CONSTANT_NATIVE_TYPE_NOT_SUPPORTED);
 
-pub const PROPERTY_HOOKS_FEATURE: Feature = feature("property hooks", 8, 4);
+pub const PROPERTY_HOOKS_FEATURE: Feature =
+    feature("property hooks", 8, 4).reported_as(codes::PROPERTY_HOOKS_NOT_SUPPORTED);
 pub const ASYMMETRIC_VISIBILITY: Feature = feature("asymmetric visibility", 8, 4);
 pub const NEW_WITHOUT_PARENS: Feature = feature("`new` without parentheses", 8, 4);
 pub const PROPERTY_MAGIC_CONSTANT: Feature = feature("`__PROPERTY__`", 8, 4);
 
 pub const PIPE_OPERATOR: Feature = feature("the pipe operator", 8, 5);
 pub const CLONE_WITH: Feature = feature("`clone` with properties", 8, 5);
-pub const VOID_CAST_FEATURE: Feature = feature("the `(void)` cast", 8, 5);
+pub const VOID_CAST_FEATURE: Feature =
+    feature("the `(void)` cast", 8, 5).reported_as(codes::CAST_VOID_NOT_SUPPORTED);
 pub const FINAL_PROMOTED: Feature = feature("final promoted properties", 8, 5);
-pub const ATTRIBUTES_ON_CONSTANTS: Feature = feature("attributes on constants", 8, 5);
-pub const ASYMMETRIC_STATIC: Feature = feature("asymmetric visibility on static properties", 8, 5);
+pub const ATTRIBUTES_ON_CONSTANTS: Feature =
+    feature("attributes on constants", 8, 5).reported_as(codes::CONSTANT_ATTRIBUTES_NOT_SUPPORTED);
+pub const ASYMMETRIC_STATIC: Feature = feature("asymmetric visibility on static properties", 8, 5)
+    .reported_as(codes::PROPERTY_STATIC_ASYMMETRIC_VISIBILITY);
 pub const CLOSURES_IN_CONSTANTS: Feature = feature("closures in constant expressions", 8, 5);
 pub const CALLABLES_IN_CONSTANTS: Feature =
     feature("first-class callables in constant expressions", 8, 5);
@@ -444,7 +471,7 @@ impl SyntaxPass<'_> {
         self.out.push(Diagnostic::error(
             self.file.path(self.db).clone(),
             range,
-            codes::PHP_SYNTAX_VERSION,
+            feature.code,
             message,
         ));
     }
@@ -459,7 +486,7 @@ impl SyntaxPass<'_> {
             Diagnostic::error(
                 self.file.path(self.db).clone(),
                 range,
-                codes::PHP_SYNTAX_VERSION,
+                feature.code,
                 message,
             )
             .with_severity(Severity::Warning),
@@ -510,7 +537,15 @@ impl SyntaxPass<'_> {
             }
             UNION_TYPE => {
                 if !only_null_and_false(node) {
-                    self.report(trimmed(node), UNION_TYPES);
+                    // PHPStan has a rule for these places, not for all of them
+                    let code = match node.parent().map(|p| p.kind()) {
+                        Some(PARAM) => codes::PARAMETER_UNION_NOT_SUPPORTED,
+                        Some(FUNCTION_DECL | METHOD_DECL | CLOSURE_EXPR | ARROW_FN_EXPR) => {
+                            codes::RETURN_UNION_NOT_SUPPORTED
+                        }
+                        _ => codes::PHP_SYNTAX_VERSION,
+                    };
+                    self.report(trimmed(node), UNION_TYPES.reported_as(code));
                 } else {
                     self.report(trimmed(node), STANDALONE_NULL_FALSE);
                 }
@@ -785,7 +820,7 @@ impl SyntaxPass<'_> {
             Diagnostic::error(
                 self.file.path(self.db).clone(),
                 trimmed(&ty),
-                codes::PHP_DEPRECATED,
+                codes::PARAMETER_IMPLICITLY_NULLABLE,
                 message,
             )
             .with_severity(Severity::Warning),

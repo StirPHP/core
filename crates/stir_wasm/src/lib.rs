@@ -206,7 +206,7 @@ mod tests {
         let mut p = Playground::new();
         let bad = "<?php\necho missing();\n";
         let diags: serde_json::Value = serde_json::from_str(&p.check(bad)).unwrap();
-        assert_eq!(diags[0]["code"], "SPHP0007");
+        assert_eq!(diags[0]["code"], "function.notFound");
         assert_eq!(diags[0]["startLine"], 2);
         assert_eq!(diags[0]["startColumn"], 6);
 

@@ -11,7 +11,7 @@ function php_keys_and_values(array $m, array $l): void {
     foreach ($l as $i) {
         echo $i + 1;
     }
-    echo strlen($l); // error: SPHP0005
+    echo strlen($l); // error: argument.type
 }
 
 function php_after_literal_check(): string {
@@ -28,7 +28,7 @@ function php_offset_may_be_missing(array $m): bool {
 }
 
 function php_known_non_null(string $s): string {
-    return $s ?? ""; // warning: SPHP0021
+    return $s ?? ""; // warning: nullCoalesce.variable
 }
 
 function php_both_sides_narrow(?string $v): int {
@@ -40,7 +40,7 @@ function php_both_sides_narrow(?string $v): int {
 
 /** @param array<string> $l */
 function php_replaced_array(array $l): string {
-    return str_replace("a", "b", $l); // error: SPHP0005
+    return str_replace("a", "b", $l); // error: return.type
 }
 
 function php_replaced(string $s): string {
@@ -52,7 +52,7 @@ function php_replaced(string $s): string {
 function php_property_takes_php_values(string $key, int $n): void {
     $entry = new Php_Entry();
     $entry->singular = $key;
-    $entry->singular = $n; // error: SPHP0005
+    $entry->singular = $n; // error: assign.propertyType
 }
 
 function php_false_stays_in_unions(string $p): string {
@@ -64,5 +64,5 @@ function php_false_stays_in_unions(string $p): string {
 }
 
 function php_bare_array_in_union(array|string|null $o): void {
-    takes_args($o ?? []); // error: SPHP0005
+    takes_args($o ?? []); // error: argument.type
 }

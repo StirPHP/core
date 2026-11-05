@@ -6,14 +6,14 @@ class Thing { public function run(): int { return 1; } public string $name = "";
 function want_string(string $s): void {}
 
 function nullable(?string $s, ?Thing $t, ?array $a, ?\Closure $f): string {
-    want_string($s); // error: SPHP0005
-    $t->run(); // error: SPHP0012
-    $t->name; // error: SPHP0012
+    want_string($s); // error: argument.type
+    $t->run(); // error: method.nonObject
+    $t->name; // error: property.nonObject
     $t?->run();
-    foreach ($a as $x) { // error: SPHP0012
+    foreach ($a as $x) { // error: foreach.nonIterable
     }
-    $f(); // error: SPHP0012
-    return $s; // error: SPHP0005
+    $f(); // error: callable.nonCallable
+    return $s; // error: return.type
 }
 
 function mixed_still_fine(mixed $m, $untyped): void {

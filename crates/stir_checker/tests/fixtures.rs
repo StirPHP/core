@@ -1,6 +1,6 @@
 //! Fixture tests: every file under `tests/fixtures/` is checked; expected
 //! diagnostics are written as trailing comments on the offending line:
-//! `// error: SPHP0005` or `// warning: SPHP0005` (several codes separated by `,`).
+//! `// error: return.type` or `// warning: SPHP0060` (several codes separated by `,`).
 //! Run a single fixture with `cargo test -p stir_checker --test fixtures -- <name>`.
 //!
 //! A directory whose name ends in `.multi` is one fixture: all its files are

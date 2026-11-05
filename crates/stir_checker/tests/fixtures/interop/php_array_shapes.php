@@ -17,40 +17,40 @@ function want_mode(array $o): void {}
 
 function literals(): void {
     want_person(["name" => "a", "age" => 1]);
-    want_person(["name" => "a", "age" => "1"]); // error: SPHP0005
-    want_person(["name" => "a"]); // error: SPHP0005
+    want_person(["name" => "a", "age" => "1"]); // error: argument.type
+    want_person(["name" => "a"]); // error: argument.type
     want_person(["name" => "a", "age" => 1, "extra" => true]);
     want_tuple(["a", 1]);
-    want_tuple([1, "a"]); // error: SPHP0005
+    want_tuple([1, "a"]); // error: argument.type
     want_strings(["a", "b"]);
-    want_strings(["a", 1]); // error: SPHP0005
+    want_strings(["a", 1]); // error: argument.type
     want_map(["a" => 1]);
-    want_map(["a" => "b"]); // error: SPHP0005
+    want_map(["a" => "b"]); // error: argument.type
     want_mode(["mode" => "r"]);
-    want_mode(["mode" => "x"]); // error: SPHP0005
+    want_mode(["mode" => "x"]); // error: argument.type
 }
 
 function reads(): void {
     $p = ["name" => "a", "age" => 1];
     want_string($p["name"]);
     want_int($p["age"]);
-    want_string($p["age"]); // error: SPHP0005
-    echo $p["nope"]; // error: SPHP0015
+    want_string($p["age"]); // error: argument.type
+    echo $p["nope"]; // error: offsetAccess.notFound
     echo $p["nope"] ?? "x";
 
     [$a, $b] = ["x", 1];
     want_string($a);
-    want_string($b); // error: SPHP0005
+    want_string($b); // error: argument.type
 
     ["k" => $k] = ["k" => 1];
-    want_string($k); // error: SPHP0005
+    want_string($k); // error: argument.type
 
     [, $second] = [1, "s"];
     want_string($second);
 
     foreach (["a" => 1, "b" => 2] as $key => $value) {
         want_string($key);
-        want_string($value); // error: SPHP0005
+        want_string($value); // error: argument.type
     }
 }
 
@@ -61,11 +61,11 @@ function writes(bool $c): void {
     want_person($p);
 
     $q = ["name" => "a"];
-    want_person($q); // error: SPHP0005
+    want_person($q); // error: argument.type
     $q["age"] = 1;
     want_person($q);
     $q["age"] = "x";
-    want_person($q); // error: SPHP0005
+    want_person($q); // error: argument.type
 
     $l = [];
     $l[] = "a";
@@ -81,13 +81,13 @@ function writes(bool $c): void {
     $nested = ["a" => ["b" => 1]];
     $nested["a"]["c"] = "s";
     want_string($nested["a"]["c"]);
-    want_string($nested["a"]["b"]); // error: SPHP0005
+    want_string($nested["a"]["b"]); // error: argument.type
 
     $maybe = ["a" => 1];
     if ($c) {
         $maybe = ["a" => "x"];
     }
-    want_int($maybe["a"]); // error: SPHP0005
+    want_int($maybe["a"]); // error: argument.type
 
     $grow = ["x"];
     foreach ([1] as $_) {
@@ -103,7 +103,7 @@ function returns_shape(): array {
 
 /** @return array{ok: bool} */
 function returns_wrong_shape(): array {
-    return ["ok" => 1]; // error: SPHP0005
+    return ["ok" => 1]; // error: return.type
 }
 
 // conditional return types
@@ -118,7 +118,7 @@ class Thing1 { public function run(): int { return 1; } }
 
 function conditional_on_template_arg(): void {
     make_it(Thing1::class)->run();
-    make_it(Thing1::class)->nope(); // error: SPHP0009
+    make_it(Thing1::class)->nope(); // error: method.notFound
     make_it()->anything;
 }
 
@@ -127,9 +127,9 @@ function by_flag(bool $flag = false): int|string { return $flag ? "a" : 1; }
 
 function conditional_on_literal(bool $b): void {
     want_string(by_flag(true));
-    want_string(by_flag(false)); // error: SPHP0005
+    want_string(by_flag(false)); // error: argument.type
     want_int(by_flag());
-    want_string(by_flag()); // error: SPHP0005
+    want_string(by_flag()); // error: argument.type
     by_flag($b);
 }
 
@@ -142,7 +142,7 @@ function flips(mixed $v): int|string { throw new \Exception(); }
 
 function conditional_on_template(): void {
     want_string(flips(1));
-    want_string(flips("a")); // error: SPHP0005
+    want_string(flips("a")); // error: argument.type
 }
 
 function functions_keep_types(array $plain): void {
@@ -150,7 +150,7 @@ function functions_keep_types(array $plain): void {
     $m = ["a" => 1];
     foreach (array_keys($m) as $k) {
         want_string($k);
-        want_int($k); // error: SPHP0005
+        want_int($k); // error: argument.type
     }
     foreach (array_values($m) as $v) {
         want_int($v);
@@ -158,7 +158,7 @@ function functions_keep_types(array $plain): void {
     foreach (array_map(fn (int $x): string => (string) $x, $m) as $k => $v) {
         want_string($k);
         want_string($v);
-        want_int($v); // error: SPHP0005
+        want_int($v); // error: argument.type
     }
     want_strings(explode(",", "a,b"));
 }

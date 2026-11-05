@@ -8,11 +8,11 @@ trait UsesHost {
     }
 
     public function missing(): void {
-        $this->notOnAnyHost(); // error: SPHP0009
+        $this->notOnAnyHost(); // error: method.notFound
     }
 
     public function wrongType(): int {
-        return $this->hostName; // error: SPHP0005
+        return $this->hostName; // error: return.type
     }
 
     public function copy(): self {
@@ -53,7 +53,7 @@ trait Unused {
     }
 
     public function own(): int {
-        return $this->ownProperty; // error: SPHP0005
+        return $this->ownProperty; // error: return.type
     }
 
     private string $ownProperty = "";
@@ -80,7 +80,7 @@ class Ints {
     use Holds;
 
     public function first(): string {
-        return $this->all()[0]; // error: SPHP0005
+        return $this->all()[0]; // error: return.type
     }
 }
 
@@ -90,7 +90,7 @@ trait Readonly1 {
         $this->once = 1;
     }
     public function later(): void {
-        $this->once = 2; // error: SPHP0010
+        $this->once = 2; // error: property.readOnlyAssignNotInConstructor
     }
 }
 class UsesReadonly { use Readonly1; }
@@ -99,5 +99,5 @@ class Restored {
     public readonly int $value;
     public function __construct() { $this->value = 1; }
     public function __unserialize(array $data): void { $this->value = 2; }
-    public function reset(): void { $this->value = 3; } // error: SPHP0010
+    public function reset(): void { $this->value = 3; } // error: property.readOnlyAssignNotInConstructor
 }

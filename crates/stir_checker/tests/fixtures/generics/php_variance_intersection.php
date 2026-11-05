@@ -15,5 +15,5 @@ final class Source
     }
 
     /** @param T&Tagged $v */
-    public function write(object $v): void {} // error: SPHP0027
+    public function write(object $v): void {} // error: generics.variance
 }

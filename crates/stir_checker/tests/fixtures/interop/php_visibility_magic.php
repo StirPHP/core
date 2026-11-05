@@ -35,8 +35,8 @@ class SubHelper extends UsesHelper {}
 
 echo (new Magic())->hidden;
 (new Magic())->secret();
-echo (new Plain())->hidden; // error: SPHP0024
-(new Plain())->secret(); // error: SPHP0024
+echo (new Plain())->hidden; // error: property.private
+(new Plain())->secret(); // error: method.private
 
 function wants_strings(array $a, string $s): void {}
 /** @param string[]|string $v */

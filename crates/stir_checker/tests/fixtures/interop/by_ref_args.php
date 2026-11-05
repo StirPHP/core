@@ -26,5 +26,5 @@ function own_function(): array
 
 function value_argument_stays_undefined(): string
 {
-    return strtolower($nope); // error: SPHP0006
+    return strtolower($nope); // error: variable.undefined
 }

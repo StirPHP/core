@@ -12,5 +12,5 @@ function writes_superglobal(string $s): void
 
 function not_a_superglobal()
 {
-    return $_NOPE; // error: SPHP0006
+    return $_NOPE; // error: variable.undefined
 }

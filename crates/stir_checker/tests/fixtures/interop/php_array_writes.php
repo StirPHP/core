@@ -51,7 +51,7 @@ function grown_wrongly(): array
 {
     $a = array();
     $a[] = 1;
-    return $a; // error: SPHP0005
+    return $a; // error: return.type
 }
 
 function empty_read(): void
@@ -94,7 +94,7 @@ class Guarded
 
     public function missing()
     {
-        return $this->dynamic; // error: SPHP0009
+        return $this->dynamic; // error: property.notFound
     }
 }
 

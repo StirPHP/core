@@ -12,10 +12,10 @@ function wants_strings(array $v): void {}
 
 $repo = new Repo();
 wants_ints($repo->ids());
-wants_strings($repo->ids()); // error: SPHP0005
+wants_strings($repo->ids()); // error: argument.type
 wants_string($repo->name());
 wants_int($repo->count);
-wants_string($repo->count); // error: SPHP0005
+wants_string($repo->count); // error: argument.type
 wants_int($repo->size());
-wants_int($repo->all()); // error: SPHP0005
-wants_int($repo->find(1)); // error: SPHP0005
+wants_int($repo->all()); // error: argument.type
+wants_int($repo->find(1)); // error: argument.type

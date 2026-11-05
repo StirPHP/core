@@ -144,7 +144,7 @@ pub struct Diagnostic {
     pub file: PathBuf,
     pub range: TextRange,
     pub severity: Severity,
-    /// Stable code, e.g. `SPHP0001`.
+    /// Stable code: PHPStan's identifier if it has one for this, else `SPHP00xx`.
     pub code: &'static str,
     pub message: String,
     /// Secondary labelled ranges in the same file.
@@ -220,7 +220,8 @@ pub fn syntax_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<Vec<Diagnostic>>
 
 /// Stable diagnostic codes.
 pub mod codes {
-    pub const SYNTAX: &str = "SPHP0001";
+    /// PHPStan's identifier for syntax errors.
+    pub const SYNTAX: &str = "phpstan.parse";
 }
 
 #[cfg(test)]

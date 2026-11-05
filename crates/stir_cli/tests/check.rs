@@ -44,7 +44,7 @@ fn syntax_error_fails() {
         .arg("check")
         .assert()
         .code(1)
-        .stdout(contains("error[SPHP0001]"))
+        .stdout(contains("error[phpstan.parse]"))
         .stdout(contains("src/bad.php"))
         .stdout(contains("1 error, 0 warnings in 1 file"));
 
@@ -89,7 +89,7 @@ fn level_flag_overrides_the_default() {
         .args(["check", "--level", "3"])
         .assert()
         .code(1)
-        .stdout(contains("SPHP0005"));
+        .stdout(contains("return.type"));
     sphp()
         .current_dir(tmp.path())
         .args(["check", "--level", "11"])
@@ -112,7 +112,7 @@ fn json_output() {
     assert!(!items.is_empty(), "{json}");
     let first = &items[0];
     assert_eq!(first["file"], "src/bad.php");
-    assert_eq!(first["code"], "SPHP0001");
+    assert_eq!(first["code"], "phpstan.parse");
     assert_eq!(first["severity"], "error");
     // The error is at or after the unclosed `(` on line 3.
     let line = first["line"].as_u64().unwrap();
@@ -187,7 +187,7 @@ fn missing_composer_packages_are_one_notice_not_a_flood() {
         .arg("check")
         .assert()
         .code(1)
-        .stdout(contains("SPHP0008"))
+        .stdout(contains("class.notFound"))
         .stdout(contains("Own.php"));
 }
 

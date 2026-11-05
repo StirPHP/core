@@ -41,20 +41,20 @@ function partial(Thing|Other $t): int {
 }
 
 function only_null_is_wrong(): void {
-    want_string(null); // error: SPHP0005
+    want_string(null); // error: argument.type
 }
 
 function wrong(Other $o, array $a, int $i): void {
-    want_thing($o); // error: SPHP0005
-    want_string($a); // error: SPHP0005
-    want_string($i); // error: SPHP0005
-    want_class_string("NoSuchClass"); // error: SPHP0005
+    want_thing($o); // error: argument.type
+    want_string($a); // error: argument.type
+    want_string($i); // error: argument.type
+    want_class_string("NoSuchClass"); // error: argument.type
     want_class_string("Thing");
-    $o->run(); // error: SPHP0009
+    $o->run(); // error: method.notFound
 }
 
 function superclass_is_no(Node2 $n): void {
-    want_special($n); // error: SPHP0005
+    want_special($n); // error: argument.type
 }
 class Node2 {}
 class Special2 extends Node2 {}

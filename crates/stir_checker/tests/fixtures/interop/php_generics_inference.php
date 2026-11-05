@@ -39,5 +39,5 @@ function unbounded(string $name): void
     new ReflectionClass($name);
 }
 
-make_table([]); // error: SPHP0005
-echo make_table('PostsTable')->nope(); // error: SPHP0009
+make_table([]); // error: argument.type
+echo make_table('PostsTable')->nope(); // error: method.notFound

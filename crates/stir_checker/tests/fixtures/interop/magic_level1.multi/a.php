@@ -13,8 +13,8 @@ class Magic {
     public static function __callStatic($name, $args) { return 1; }
 
     public function own(): void {
-        $this->anything(); // error: SPHP0009
-        echo $this->anywhere; // error: SPHP0009
+        $this->anything(); // error: method.notFound
+        echo $this->anywhere; // error: property.notFound
         $this->declared();
         echo $this->declaredProperty;
     }
@@ -24,5 +24,5 @@ function outside(Magic $m): void {
     // from level 2 it's anything, not just `$this`
     $m->anything();
     echo $m->anywhere;
-    Magic::anything(); // error: SPHP0009
+    Magic::anything(); // error: staticMethod.notFound
 }

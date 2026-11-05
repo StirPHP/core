@@ -15,9 +15,9 @@ $m = match (1) { default => 2 };
 enum Suit { case Hearts; } // error: SPHP0060
 
 class Reading {
-    public readonly int $x; // error: SPHP0060
+    public readonly int $x; // error: property.readOnlyNotSupported
 }
 
-function no_return(): never { exit; } // error: SPHP0060
+function no_return(): never { exit; } // error: return.neverTypeNotSupported
 
-readonly class Frozen {} // error: SPHP0060
+readonly class Frozen {} // error: classConstant.nativeTypeNotSupported

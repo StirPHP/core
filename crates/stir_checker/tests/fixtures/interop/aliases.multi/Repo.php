@@ -35,7 +35,7 @@ class Repo
     }
 
     /**
-     * @return string // error: SPHP0050
+     * @return string // error: return.phpDocType
      */
     public function size(): int
     {

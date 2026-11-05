@@ -29,7 +29,7 @@ function partial_argument($v): string
 
 function wrong_argument(array $n): string
 {
-    return want($n); // error: SPHP0005
+    return want($n); // error: argument.type
 }
 
 function partial_property(Thing|bool $t): string
@@ -39,7 +39,7 @@ function partial_property(Thing|bool $t): string
 
 function no_property(Other|bool $t)
 {
-    return $t->name; // error: SPHP0009
+    return $t->name; // error: property.notFound
 }
 
 function partial_method(Thing|Other $t): int
@@ -49,7 +49,7 @@ function partial_method(Thing|Other $t): int
 
 function no_method(Other|bool $t)
 {
-    return $t->run(); // error: SPHP0009
+    return $t->run(); // error: method.notFound
 }
 
 /** @param array<string, int>|Thing|false $v */

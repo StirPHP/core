@@ -16,8 +16,8 @@ class Magic {
 
 class NotMagic {
     public function own(): void {
-        $this->nothing(); // error: SPHP0009
-        echo $this->nowhere; // error: SPHP0009
+        $this->nothing(); // error: method.notFound
+        echo $this->nowhere; // error: property.notFound
     }
 }
 

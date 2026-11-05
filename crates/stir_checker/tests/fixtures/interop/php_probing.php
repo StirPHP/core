@@ -13,10 +13,10 @@ function callable_values(string $name, array $pair, int $n, ?callable $maybe): v
 {
     $name();
     $pair();
-    $n(); // error: SPHP0018
+    $n(); // error: callable.nonCallable
 }
 
 function still_undefined()
 {
-    return $nope ?? $nope2; // error: SPHP0006
+    return $nope ?? $nope2; // error: variable.undefined
 }

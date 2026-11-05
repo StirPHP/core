@@ -20,7 +20,7 @@ class Account
 function wants_string(string $v): void {}
 
 function nullable_argument(?string $s): void {
-    wants_string($s); // error: SPHP0005
+    wants_string($s); // error: argument.type
     if ($s !== null) {
         wants_string($s);
     }
@@ -28,7 +28,7 @@ function nullable_argument(?string $s): void {
 }
 
 function nullable_member_access(?Account $a): string {
-    return $a->label(); // error: SPHP0012
+    return $a->label(); // error: method.nonObject
 }
 
 function nullable_member_guarded(?Account $a): string {
@@ -48,7 +48,7 @@ function nullable_property_read(?Account $a): void {
 }
 
 function nullable_return(?string $s): string {
-    return $s; // error: SPHP0005
+    return $s; // error: return.type
 }
 
 function early_return(?Account $a): string {
@@ -59,9 +59,9 @@ function early_return(?Account $a): string {
 }
 
 function property_is_nullable(Account $a): string {
-    return $a->nick; // error: SPHP0005
+    return $a->nick; // error: return.type
 }
 
 function nullsafe_chain_stays_nullable(Account $a): string {
-    return $a->next()?->label(); // error: SPHP0005
+    return $a->next()?->label(); // error: return.type
 }

@@ -12,17 +12,17 @@ function anonymous(): void {
     want_runs(new class implements Runs {
         public function run(): int { return 1; }
     });
-    want_runs(new class { // error: SPHP0005
-        public function run(): int { return "a"; } // error: SPHP0005
+    want_runs(new class { // error: argument.type
+        public function run(): int { return "a"; } // error: return.type
     });
     $a = new class("n") extends Base1 {
         public function secret(): int { return $this->secret; }
-        public function wrong(): string { return $this->secret; } // error: SPHP0005
+        public function wrong(): string { return $this->secret; } // error: return.type
     };
     want_base($a);
     $a->secret();
-    $a->nope(); // error: SPHP0009
-    new class(1) extends Base1 {}; // error: SPHP0005
+    $a->nope(); // error: method.notFound
+    new class(1) extends Base1 {}; // error: argument.type
 }
 
 class Real { public function real(): int { return 1; } public int $count = 0; private function hidden(): void {} }
@@ -42,16 +42,16 @@ class Generic1 {}
 class NoMagic {}
 
 function mixins(Forwards $f, NoMagic $n): int {
-    $f->anything(); // error: SPHP0009
-    $n->nope(); // error: SPHP0009
-    $n->hidden(); // error: SPHP0009
+    $f->anything(); // error: method.notFound
+    $n->nope(); // error: method.notFound
+    $n->hidden(); // error: method.notFound
     echo $n->count;
     return $n->real();
 }
 
 /** @param Generic1<Real> $g */
 function generic_mixin(Generic1 $g): string {
-    return $g->real(); // error: SPHP0005
+    return $g->real(); // error: return.type
 }
 
 trait Hello {
@@ -63,7 +63,7 @@ class Aliases {
 }
 
 function aliased(Aliases $a): string {
-    $a->nope(); // error: SPHP0009
+    $a->nope(); // error: method.notFound
     $a->hello();
     return $a->greet();
 }
@@ -74,13 +74,13 @@ function bound(Secret $s): void {
     $f = Closure::bind(function () {
         echo $this->hidden;
         echo $this->peek();
-        echo $this->nope; // error: SPHP0009
+        echo $this->nope; // error: property.notFound
     }, $s, Secret::class);
     $g = (function () { return $this->hidden; })->call($s);
     $h = Closure::bind(static function (Secret $x) {
         return $x->hidden;
     }, null, Secret::class);
-    echo $s->hidden; // error: SPHP0024
+    echo $s->hidden; // error: property.private
 }
 
 class Router {
@@ -90,7 +90,7 @@ class Router {
 
 function closure_this(Router $r): void {
     $r->group(function () {
-        $this->nope(); // error: SPHP0009
+        $this->nope(); // error: method.notFound
     });
 }
 
@@ -98,7 +98,7 @@ class Statics {
     public int $v = 0;
     public function run(): void {
         $a = function () { return $this->v; };
-        $b = static function () { return $this->v; }; // error: SPHP0006
+        $b = static function () { return $this->v; }; // error: variable.undefined
         $c = fn () => $this->v;
     }
 }
@@ -116,7 +116,7 @@ class Child1 extends Base1 { public int $extra = 0; }
 function narrowed_closure_parameter(Child1 $c): void {
     with_callback($c, function (Base1 $b): void {
         echo $b->extra;
-        echo $b->nope; // error: SPHP0009
+        echo $b->nope; // error: property.notFound
     });
 }
 
@@ -140,7 +140,7 @@ function variadic_doc(int ...$vs): void {
 function want_int_list(array $l): void {}
 function call_variadic(): void {
     variadic_doc(1, 2);
-    variadic_doc("a"); // error: SPHP0005
+    variadic_doc("a"); // error: argument.type
 }
 
 function by_reference_out(array $a): void {

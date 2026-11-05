@@ -41,7 +41,7 @@ class Child extends Base
 
 class Narrower extends Child
 {
-    public function fewer(int $required): void {} // error: SPHP0031
+    public function fewer(int $required): void {} // error: parameter.notOptional
 }
 
 /** @return non-empty-string */

@@ -14,4 +14,4 @@ function documented($s = null): void
     native(null, null);
 }
 
-native("no"); // error: SPHP0005
+native("no"); // error: argument.type

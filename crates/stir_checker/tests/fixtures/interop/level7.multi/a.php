@@ -11,14 +11,14 @@ function want_list(array $a): void {}
 function want_non_empty(string $s): void {}
 
 function maybes(object $o, iterable $i, string $s, int|string $k): void {
-    want_thing($o); // error: SPHP0005
-    want_list($i); // error: SPHP0005
-    want_non_empty($s); // error: SPHP0005
-    want_string($k); // error: SPHP0005
+    want_thing($o); // error: argument.type
+    want_list($i); // error: argument.type
+    want_non_empty($s); // error: argument.type
+    want_string($k); // error: argument.type
 }
 
 function partial(Thing|Other $t): int {
-    return $t->run(); // error: SPHP0009
+    return $t->run(); // error: method.notFound
 }
 
 function nullable_still_fine(?string $s, ?Thing $t): void {

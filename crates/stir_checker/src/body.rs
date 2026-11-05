@@ -15,6 +15,7 @@ use stir_types::{LitValue, Ty, TyKind};
 
 use crate::codes;
 use crate::infer::{Inference, widen_literals};
+use crate::levels::min_level;
 use crate::model::{ClassModel, Ctx, FnSig, LowerCx, LowerError};
 use crate::typed::{Def, MemberKind};
 
@@ -506,7 +507,14 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     /// Reports a mismatch if `from` is not assignable to `to`, at the level PHPStan reports
     /// that kind of mismatch.
-    fn check_assign(&mut self, range: TextRange, from: &Ty, to: &Ty, what: &str) {
+    fn check_assign(
+        &mut self,
+        range: TextRange,
+        from: &Ty,
+        to: &Ty,
+        what: &str,
+        code: &'static str,
+    ) {
         if from.is_error() || to.is_error() {
             return;
         }
@@ -542,12 +550,21 @@ impl<'a, 'db> Checker<'a, 'db> {
                     "; narrow the untyped value first (an `is_*()` check or `instanceof`)",
                 );
             }
-            let level =
-                self.mismatch_level(from, to, if what.starts_with("argument") { 5 } else { 3 });
-            self.error(range, codes::TYPE_MISMATCH, msg);
-            if let Some(d) = self.diags.last_mut() {
-                d.php_level = Some(level);
-            }
+            let level = self.mismatch_level(from, to, crate::levels::level_of(code));
+            self.error(range, code, msg);
+            self.tag_level(level);
+        }
+    }
+
+    /// What PHPStan's `NonexistentOffsetInArrayDimFetchRule` says of indexing `ty`: it's
+    /// "cannot access" for what surely can't be, and from level 7 for what may not be. Short of
+    /// that it goes on to look for the offset, and doesn't find it.
+    fn not_indexable_code(&self, ty: &Ty) -> &'static str {
+        let level = self.ctx.ws.settings(self.ctx.db).level();
+        if ty.is_null() || (ty.is_union() && level < 7) {
+            codes::OFFSET_NOT_FOUND
+        } else {
+            codes::OFFSET_NOT_ACCESSIBLE
         }
     }
 
@@ -1457,9 +1474,10 @@ impl<'a, 'db> Checker<'a, 'db> {
             if self.diags.len() == start {
                 self.error(
                     range,
-                    codes::NULLABLE_ACCESS,
+                    codes::FOREACH_NON_ITERABLE,
                     format!("`{ty}` is not iterable when it's null"),
                 );
+                self.tag_level(8);
             }
             return found;
         }
@@ -1480,7 +1498,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             if missing {
                 self.error(
                     range,
-                    codes::INVALID_OPERAND,
+                    codes::FOREACH_NON_ITERABLE,
                     format!("`{ty}` is not iterable"),
                 );
                 if keys.is_empty() {
@@ -1527,7 +1545,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 }
                 self.error(
                     range,
-                    codes::INVALID_OPERAND,
+                    codes::FOREACH_NON_ITERABLE,
                     format!("`{ty}` is not iterable"),
                 );
                 self.tag_level(3);
@@ -1545,7 +1563,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             TyKind::Object => {
                 self.error(
                     range,
-                    codes::INVALID_OPERAND,
+                    codes::FOREACH_NON_ITERABLE,
                     format!("`{ty}` is not iterable"),
                 );
                 self.tag_level(7);
@@ -1576,7 +1594,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             _ => {
                 self.error(
                     range,
-                    codes::INVALID_OPERAND,
+                    codes::FOREACH_NON_ITERABLE,
                     format!("`{ty}` is not iterable"),
                 );
                 self.tag_level(3);
@@ -1604,12 +1622,18 @@ impl<'a, 'db> Checker<'a, 'db> {
                     if !t.is_null() {
                         self.error(
                             v.text_range(),
-                            codes::RETURN_VALUE,
+                            codes::RETURN_VOID,
                             "this function returns `void`; it can't return a value",
                         );
                     }
                 } else if !in_generator(node) {
-                    self.check_assign(v.text_range(), &t, &fcx.ret, "return value");
+                    self.check_assign(
+                        v.text_range(),
+                        &t,
+                        &fcx.ret,
+                        "return value",
+                        codes::RETURN_TYPE,
+                    );
                 }
             }
             None => {
@@ -1667,7 +1691,13 @@ impl<'a, 'db> Checker<'a, 'db> {
                     let dt = self.expr(&d, Some(&p.ty));
                     // a default solves the template when it's used, so it can't be wrong for it
                     if stir_types::free_params(&p.ty).is_empty() {
-                        self.check_assign(d.text_range(), &dt, &p.ty, "default value");
+                        self.check_assign(
+                            d.text_range(),
+                            &dt,
+                            &p.ty,
+                            "default value",
+                            codes::PARAMETER_DEFAULT_VALUE,
+                        );
                     }
                 }
             }
@@ -1737,8 +1767,11 @@ impl<'a, 'db> Checker<'a, 'db> {
                 // the same mistake in the context of each class is one mistake
                 let found = self.diags.split_off(start);
                 let mut seen = rustc_hash::FxHashSet::default();
-                self.diags
-                    .extend(found.into_iter().filter(|d| seen.insert((d.range, d.code))));
+                self.diags.extend(found.into_iter().filter(|d| {
+                    // with one using class it's `method.notFound`, with another maybe
+                    // `method.nonObject`: the same problem
+                    seen.insert((d.range, d.code.split('.').next().unwrap_or(d.code)))
+                }));
             }
         }
         self.lower_cx = saved_cx;
@@ -1774,10 +1807,23 @@ impl<'a, 'db> Checker<'a, 'db> {
         let def = model.def;
         let mut sink = Vec::new();
         let cx = self.ctx.class_cx(model);
-        for t in def.extends.iter().chain(&def.implements) {
+        let is_interface = def.kind == ClassKind::Interface;
+        for t in &def.extends {
             self.ctx.lower(t, &cx, &mut sink);
         }
-        for e in sink {
+        for mut e in sink.drain(..) {
+            if is_interface && e.code == codes::CLASS_NOT_FOUND {
+                e.code = codes::INTERFACE_NOT_FOUND;
+            }
+            self.supertype_error(e);
+        }
+        for t in &def.implements {
+            self.ctx.lower(t, &cx, &mut sink);
+        }
+        for mut e in sink {
+            if e.code == codes::CLASS_NOT_FOUND {
+                e.code = codes::INTERFACE_NOT_FOUND;
+            }
             self.supertype_error(e);
         }
     }
@@ -1836,7 +1882,13 @@ impl<'a, 'db> Checker<'a, 'db> {
             for e in exprs_of(&elem) {
                 let vt = self.expr(&e, declared.as_ref());
                 if let Some(t) = &declared {
-                    self.check_assign(e.text_range(), &vt, t, "property initializer");
+                    self.check_assign(
+                        e.text_range(),
+                        &vt,
+                        t,
+                        "property initializer",
+                        codes::PROPERTY_DEFAULT_VALUE,
+                    );
                 }
             }
         }
@@ -2763,7 +2815,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 {
                     self.error(
                         i.text_range(),
-                        codes::INVALID_OPERAND,
+                        codes::OFFSET_NOT_FOUND,
                         format!("offset {} doesn't exist on `{bt}`", text_of(i)),
                     );
                     self.tag_level(3);
@@ -2778,7 +2830,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                         if !bad.is_empty() {
                             self.error(
                                 base.text_range(),
-                                codes::INVALID_OPERAND,
+                                codes::OFFSET_NOT_ACCESSIBLE,
                                 format!("`{bt}` can't be indexed"),
                             );
                             self.tag_partial_union();
@@ -2792,11 +2844,8 @@ impl<'a, 'db> Checker<'a, 'db> {
                     Some(t) => t,
                     None => {
                         if !bt.is_error() && !bt.is_untyped() {
-                            self.error(
-                                base.text_range(),
-                                codes::INVALID_OPERAND,
-                                format!("`{bt}` can't be indexed"),
-                            );
+                            let code = self.not_indexable_code(&bt);
+                            self.error(base.text_range(), code, format!("`{bt}` can't be indexed"));
                             self.tag_level(3);
                         }
                         Ty::error()
@@ -2876,15 +2925,15 @@ impl<'a, 'db> Checker<'a, 'db> {
             THROW_EXPR => {
                 for e in exprs_of(node) {
                     let t = self.expr(&e, None);
-                    if !t.is_error()
-                        && !t.is_untyped()
-                        && !self.assignable(&t, &Ty::class("Throwable", Vec::new()))
-                    {
+                    let throwable = Ty::class("Throwable", Vec::new());
+                    if !t.is_error() && !t.is_untyped() && !self.assignable(&t, &throwable) {
+                        let level = self.mismatch_level(&t, &throwable, 3);
                         self.error(
                             e.text_range(),
-                            codes::TYPE_MISMATCH,
+                            codes::THROW_NOT_THROWABLE,
                             format!("only `Throwable`s can be thrown, found `{t}`"),
                         );
+                        self.tag_level(level);
                     }
                 }
                 Ty::never()
@@ -2908,7 +2957,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             self.error(
                 node.text_range(),
-                codes::UNDEFINED_VARIABLE,
+                codes::VARIABLE_UNDEFINED,
                 "`$this` is only available inside instance methods",
             );
             return Ty::error();
@@ -2923,7 +2972,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 {
                     self.error(
                         node.text_range(),
-                        codes::UNDEFINED_VARIABLE,
+                        codes::VARIABLE_UNDEFINED,
                         format!("variable `${name}` might not be defined"),
                     );
                     self.tag_level(1);
@@ -2946,7 +2995,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 if self.fns.len() > 1 {
                     self.error(
                         node.text_range(),
-                        codes::UNDEFINED_VARIABLE,
+                        codes::VARIABLE_UNDEFINED,
                         format!("undefined variable `${name}`"),
                     );
                     Ty::error()
@@ -3024,7 +3073,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     Diagnostic::error(
                         self.path.clone(),
                         node.text_range(),
-                        codes::UNDEFINED_VARIABLE,
+                        codes::CONSTANT_NOT_FOUND,
                         format!("unknown name `{text}`"),
                     )
                     .with_symbol(global.as_str()),
@@ -3168,7 +3217,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             Diagnostic::error(
                 self.path.clone(),
                 left.text_range(),
-                codes::UNNECESSARY_NULL_CHECK,
+                codes::NULL_COALESCE_VARIABLE,
                 format!("`${name}` is always set and is `{ty}`, which can't be null"),
             )
             .with_severity(stir_db::Severity::Warning)
@@ -3303,7 +3352,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 if n == "this" {
                     self.error(
                         target.text_range(),
-                        codes::REASSIGN_IMMUTABLE,
+                        codes::ASSIGN_THIS,
                         "`$this` can't be reassigned",
                     );
                 }
@@ -3311,7 +3360,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             NULLSAFE_PROPERTY_FETCH_EXPR => {
                 self.error(
                     target.text_range(),
-                    codes::INVALID_OPERAND,
+                    codes::NULLSAFE_ASSIGN,
                     "can't assign through `?->`",
                 );
             }
@@ -3444,7 +3493,13 @@ impl<'a, 'db> Checker<'a, 'db> {
                     }
                     return result;
                 }
-                self.check_assign(rhs.text_range(), &result, &declared, "assignment");
+                self.check_assign(
+                    rhs.text_range(),
+                    &result,
+                    &declared,
+                    "assignment",
+                    assignment_code(lhs),
+                );
                 if lhs.kind() == INDEX_EXPR
                     && let Some(key) = exprs_of(lhs).first().and_then(|b| self.place_key(b))
                 {
@@ -3753,9 +3808,27 @@ impl<'a, 'db> Checker<'a, 'db> {
                             && self.ctx.is_subclass(&c.name, &p.class.name))
                 });
             if !in_own_ctor {
+                let in_class = self.class.as_ref().is_some_and(|c| {
+                    c.key == p.class.key
+                        || (p.class.kind() == ClassKind::Trait
+                            && self.ctx.is_subclass(&c.name, &p.class.name))
+                });
+                // since 8.4 a public readonly property can't be written outside as `protected(set)`
+                let versions = self.ctx.ws.settings(self.ctx.db).php_version;
+                let code = if p.magic {
+                    codes::ASSIGN_PROPERTY_READ_ONLY
+                } else if in_class {
+                    codes::PROPERTY_READONLY_NOT_IN_CONSTRUCTOR
+                } else if versions.min >= stir_db::PhpVersion::new(8, 4)
+                    && p.visibility == Visibility::Public
+                {
+                    codes::ASSIGN_PROPERTY_PROTECTED_SET
+                } else {
+                    codes::PROPERTY_READONLY_OUT_OF_CLASS
+                };
                 self.error(
                     lhs.text_range(),
-                    codes::REASSIGN_IMMUTABLE,
+                    code,
                     format!("property `{name}` is immutable"),
                 );
             }
@@ -3952,7 +4025,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             true
         });
         for p in problems {
-            self.error(range, codes::TYPE_BOUND, p);
+            self.error(range, codes::GENERICS_NOT_SUBTYPE, p);
         }
     }
 
@@ -3999,13 +4072,16 @@ impl<'a, 'db> Checker<'a, 'db> {
                         .filter(|p| !p.optional && !p.variadic)
                         .count()
                 };
-                if required(&sub) > required(&sup)
-                    || (sub.params.len() < sup.params.len()
-                        && !sub.params.last().is_some_and(|p| p.variadic))
-                {
+                let misses = sub.params.len() < sup.params.len()
+                    && !sub.params.last().is_some_and(|p| p.variadic);
+                if misses || required(&sub) > required(&sup) {
                     self.error(
                         m.name_range,
-                        codes::INCOMPATIBLE_OVERRIDE,
+                        if misses {
+                            codes::PARAMETER_MISSING
+                        } else {
+                            codes::PARAMETER_NOT_OPTIONAL
+                        },
                         format!(
                             "`{}` doesn't accept the same parameters as `{}::{}`",
                             m.name, c.name, sm.name
@@ -4031,7 +4107,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     if !self.override_compatible(&want, &sp.ty) {
                         self.error(
                             sp.range,
-                            codes::INCOMPATIBLE_OVERRIDE,
+                            codes::METHOD_CHILD_PARAMETER_TYPE,
                             format!(
                                 "parameter `{}` must accept `{want}` (overriding `{}::{}`)",
                                 sp.name, c.name, sm.name
@@ -4044,7 +4120,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 let sup_ret = resolve_self(&sup_ret, &self_ty);
                 let sub_ret = resolve_self(&sub.ret, &self_ty);
                 if sup.ret_declared && !self.override_compatible(&sub_ret, &sup_ret) {
-                    self.error(m.name_range, codes::INCOMPATIBLE_OVERRIDE, format!("return type `{sub_ret}` is not compatible with `{sup_ret}` of `{}::{}`", c.name, sm.name));
+                    self.error(m.name_range, codes::METHOD_CHILD_RETURN_TYPE, format!("return type `{sub_ret}` is not compatible with `{sup_ret}` of `{}::{}`", c.name, sm.name));
                     self.tag_php_override();
                 }
                 break;
@@ -4107,7 +4183,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
         }
         for (range, msg) in found {
-            self.error(range, codes::VARIANCE, msg);
+            self.error(range, codes::GENERICS_VARIANCE, msg);
         }
     }
 
@@ -4224,7 +4300,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     if idx.is_none() && !sig.params.last().is_some_and(|p| p.variadic) {
                         self.error(
                             a.text_range(),
-                            codes::ARGUMENT_COUNT,
+                            codes::ARGUMENT_UNKNOWN,
                             format!("`{}` has no parameter named `{n}`", sig.name),
                         );
                     }
@@ -4246,13 +4322,15 @@ impl<'a, 'db> Checker<'a, 'db> {
                     if idx.is_none() {
                         self.error(
                             a.text_range(),
-                            codes::ARGUMENT_COUNT,
+                            codes::ARGUMENTS_COUNT,
                             format!(
                                 "too many arguments to `{}`: it takes {}",
                                 sig.name,
                                 sig.params.len()
                             ),
                         );
+                        // PHPStan's `checkExtraArguments`
+                        self.tag_level(1);
                     }
                     assigned.push(idx);
                     pos += 1;
@@ -4266,7 +4344,12 @@ impl<'a, 'db> Checker<'a, 'db> {
                     let end = call.text_range();
                     self.error(
                         end,
-                        codes::ARGUMENT_COUNT,
+                        // with named arguments it's the parameter that's missing, not a count
+                        if args.iter().any(|a| a.kind() == NAMED_ARG) {
+                            codes::ARGUMENT_MISSING
+                        } else {
+                            codes::ARGUMENTS_COUNT
+                        },
                         format!("missing argument `{}` of `{}`", p.name, sig.name),
                     );
                 }
@@ -4360,6 +4443,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                         &Ty::union(rest),
                         &want,
                         &format!("argument `{}` of `{}`", param.name, sig.name),
+                        codes::ARGUMENT_TYPE,
                     );
                     if self.diags.len() > before {
                         self.tag_partial_union();
@@ -4372,6 +4456,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 t,
                 &want,
                 &format!("argument `{}` of `{}`", param.name, sig.name),
+                codes::ARGUMENT_TYPE,
             );
         }
         // `@param-out`: what a by-reference argument holds now
@@ -4476,7 +4561,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     Diagnostic::error(
                         self.path.clone(),
                         callee.text_range(),
-                        codes::UNDEFINED_FUNCTION,
+                        codes::FUNCTION_NOT_FOUND,
                         format!("unknown function `{text}`"),
                     )
                     .with_symbol(global.as_str()),
@@ -4505,10 +4590,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     let found = self.diags.split_off(start);
                     // what counts is what would be reported at this level
                     let level = self.ctx.ws.settings(self.ctx.db).level();
-                    let score = found
-                        .iter()
-                        .filter(|d| crate::levels::min_level(d) <= level)
-                        .count();
+                    let score = found.iter().filter(|d| min_level(d) <= level).count();
                     if best.as_ref().is_none_or(|(b, _, _)| score < *b) {
                         best = Some((score, found, t));
                     }
@@ -4590,9 +4672,10 @@ impl<'a, 'db> Checker<'a, 'db> {
             let t = self.call_value(node, &rest, expected);
             self.error(
                 node.text_range(),
-                codes::NULLABLE_ACCESS,
+                codes::CALLABLE_NON_CALLABLE,
                 format!("`{ct}` can't be called when it's null"),
             );
+            self.tag_level(8);
             return t;
         }
         match ct.kind() {
@@ -4607,7 +4690,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     results.push(self.call_value(node, m, expected));
                     let bad = self.diags[before..]
                         .iter()
-                        .any(|d| d.code == codes::NOT_CALLABLE);
+                        .any(|d| d.code == codes::CALLABLE_NON_CALLABLE);
                     any_ok |= !bad;
                     all_ok &= !bad;
                 }
@@ -4615,7 +4698,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 if !all_ok {
                     self.error(
                         node.text_range(),
-                        codes::NOT_CALLABLE,
+                        codes::CALLABLE_NON_CALLABLE,
                         format!("`{ct}` is not callable"),
                     );
                     if any_ok {
@@ -4649,7 +4732,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             TyKind::Object => {
                 self.error(
                     node.text_range(),
-                    codes::NOT_CALLABLE,
+                    codes::CALLABLE_NON_CALLABLE,
                     format!("`{ct}` is not callable"),
                 );
                 self.tag_level(7);
@@ -4706,7 +4789,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 {
                     self.error(
                         node.text_range(),
-                        codes::NOT_CALLABLE,
+                        codes::CALLABLE_NON_CALLABLE,
                         format!("`{ct}` is not callable"),
                     );
                 }
@@ -4746,10 +4829,19 @@ impl<'a, 'db> Checker<'a, 'db> {
                 .child(SyntaxKind::NAME)
                 .map(|n| format!("`{}`", text_of(&n)))
                 .unwrap_or_else(|| "a member".to_owned());
+            // a method call's receiver is reached through its fetch, with the call as the parent
+            let code = if node
+                .parent()
+                .is_some_and(|p| matches!(p.kind(), METHOD_CALL_EXPR | NULLSAFE_METHOD_CALL_EXPR))
+            {
+                codes::METHOD_NON_OBJECT
+            } else {
+                codes::PROPERTY_NON_OBJECT
+            };
             if bt.is_null() {
                 self.error(
                     node.text_range(),
-                    codes::NULLABLE_ACCESS,
+                    code,
                     format!("can't reach {what} on `null`"),
                 );
                 self.tag_level(2);
@@ -4758,9 +4850,10 @@ impl<'a, 'db> Checker<'a, 'db> {
             if bt.is_union() && bt.members().iter().any(Ty::is_null) {
                 self.error(
                     node.text_range(),
-                    codes::NULLABLE_ACCESS,
+                    code,
                     format!("can't reach {what} on `{bt}`: it may be null"),
                 );
+                self.tag_level(8);
             }
         }
         Some((stir_types::without_null(&bt), nullsafe && nullable))
@@ -4850,6 +4943,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                             &p.class,
                             p.visibility,
                             &format!("property `{name}`"),
+                            [codes::PROPERTY_PRIVATE, codes::PROPERTY_PROTECTED],
                         );
                         p.ty
                     }
@@ -4864,7 +4958,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                         if self.has_magic(&cls, "__get") {
                             self.error(
                                 range,
-                                codes::UNDEFINED_MEMBER,
+                                codes::PROPERTY_NOT_FOUND,
                                 format!("`{recv}` has no property `{name}`, only `__get`"),
                             );
                             self.tag_level(1);
@@ -4881,7 +4975,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                         if self.class_known(&cls) {
                             self.error(
                                 range,
-                                codes::UNDEFINED_MEMBER,
+                                codes::PROPERTY_NOT_FOUND,
                                 format!("`{recv}` has no property `{name}`"),
                             );
                             self.note_dynamic_property(range);
@@ -4895,7 +4989,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             _ => {
                 self.error(
                     range,
-                    codes::UNDEFINED_MEMBER,
+                    codes::PROPERTY_NON_OBJECT,
                     format!("`{recv}` has no property `{name}`"),
                 );
                 Ty::error()
@@ -4930,12 +5024,14 @@ impl<'a, 'db> Checker<'a, 'db> {
         let start = self.diags.len();
         let mut found = Vec::new();
         let mut missing = false;
+        let mut missing_on_object = false;
         for m in recv.members().to_vec() {
             let before = self.diags.len();
             let t = self.member_type(&m, name, range);
             if self.diags.len() > before {
                 self.diags.truncate(before);
                 missing = true;
+                missing_on_object |= is_object_like(&m);
             } else {
                 found.push(t);
             }
@@ -4944,7 +5040,12 @@ impl<'a, 'db> Checker<'a, 'db> {
         if missing {
             self.error(
                 range,
-                codes::UNDEFINED_MEMBER,
+                // below level 7 only the objects are looked at
+                if missing_on_object {
+                    codes::PROPERTY_NOT_FOUND
+                } else {
+                    codes::PROPERTY_NON_OBJECT
+                },
                 format!("`{recv}` has no property `{name}`"),
             );
             if !found.is_empty() {
@@ -4993,17 +5094,14 @@ impl<'a, 'db> Checker<'a, 'db> {
         owner: &Rc<ClassModel<'db>>,
         vis: Visibility,
         what: &str,
+        [private, protected]: [&'static str; 2],
     ) {
         if !self.visible(owner, vis) {
-            let v = match vis {
-                Visibility::Private => "private",
-                _ => "protected",
+            let (v, code) = match vis {
+                Visibility::Private => ("private", private),
+                _ => ("protected", protected),
             };
-            self.error(
-                range,
-                codes::VISIBILITY,
-                format!("{what} of `{}` is {v}", owner.name),
-            );
+            self.error(range, code, format!("{what} of `{}` is {v}", owner.name));
         }
     }
 
@@ -5075,8 +5173,19 @@ impl<'a, 'db> Checker<'a, 'db> {
             return;
         }
         for d in &mut self.diags[start..] {
-            if d.php_level.is_none_or(|l| l < 2)
-                && matches!(d.code, codes::UNDEFINED_MEMBER | codes::ARGUMENT_COUNT)
+            if min_level(d) < 2
+                && matches!(
+                    d.code,
+                    codes::METHOD_NOT_FOUND
+                        | codes::METHOD_PRIVATE
+                        | codes::METHOD_PROTECTED
+                        | codes::PROPERTY_NOT_FOUND
+                        | codes::PROPERTY_PRIVATE
+                        | codes::PROPERTY_PROTECTED
+                        | codes::ARGUMENTS_COUNT
+                        | codes::ARGUMENT_UNKNOWN
+                        | codes::ARGUMENT_MISSING
+                )
             {
                 d.php_level = Some(2);
             }
@@ -5136,6 +5245,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 &owner,
                 m.mods.visibility,
                 &format!("method `{name}`"),
+                [codes::METHOD_PRIVATE, codes::METHOD_PROTECTED],
             );
             let sig = sig_for_receiver(self.ctx.method_sig(&owner, m), recv);
             // `static` return types resolve to the receiver
@@ -5153,7 +5263,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         if matches!(cls.kind(), TyKind::Class { .. }) && self.has_magic(&cls, "__call") {
             self.error(
                 range,
-                codes::UNDEFINED_MEMBER,
+                codes::METHOD_NOT_FOUND,
                 format!("`{recv}` has no method `{name}`, only `__call`"),
             );
             self.tag_level(1);
@@ -5172,7 +5282,11 @@ impl<'a, 'db> Checker<'a, 'db> {
         if self.class_known(&cls) || !matches!(cls.kind(), TyKind::Class { .. }) {
             self.error(
                 range,
-                codes::UNDEFINED_MEMBER,
+                if is_object_like(&cls) {
+                    codes::METHOD_NOT_FOUND
+                } else {
+                    codes::METHOD_NON_OBJECT
+                },
                 format!("`{recv}` has no method `{name}`"),
             );
         }
@@ -5195,13 +5309,15 @@ impl<'a, 'db> Checker<'a, 'db> {
             .iter()
             .cloned()
             .partition(|m| self.responds_to(m, name));
+        // below level 7 only the objects are looked at; if they all have it, the rest aren't objects
+        let code = if lacks.iter().any(is_object_like) {
+            codes::METHOD_NOT_FOUND
+        } else {
+            codes::METHOD_NON_OBJECT
+        };
         if has.is_empty() {
             self.check_args_untyped(node);
-            self.error(
-                range,
-                codes::UNDEFINED_MEMBER,
-                format!("`{recv}` has no method `{name}`"),
-            );
+            self.error(range, code, format!("`{recv}` has no method `{name}`"));
             return Ty::error();
         }
         let mut results = Vec::new();
@@ -5213,11 +5329,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
         }
         if !lacks.is_empty() {
-            self.error(
-                range,
-                codes::UNDEFINED_MEMBER,
-                format!("`{recv}` has no method `{name}`"),
-            );
+            self.error(range, code, format!("`{recv}` has no method `{name}`"));
             self.tag_partial_union();
         }
         Ty::union(results)
@@ -5251,7 +5363,11 @@ impl<'a, 'db> Checker<'a, 'db> {
                     None => {
                         self.error(
                             node.text_range(),
-                            codes::UNDEFINED_CLASS,
+                            if text == "static" {
+                                codes::OUT_OF_CLASS_STATIC
+                            } else {
+                                codes::OUT_OF_CLASS_SELF
+                            },
                             format!("`{text}` used outside a class"),
                         );
                         Ty::error()
@@ -5267,7 +5383,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                         None => {
                             self.error(
                                 node.text_range(),
-                                codes::UNDEFINED_CLASS,
+                                codes::CLASS_NO_PARENT,
                                 "this class has no parent",
                             );
                             Ty::error()
@@ -5315,7 +5431,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     Diagnostic::error(
                         self.path.clone(),
                         node.text_range(),
-                        codes::UNDEFINED_CLASS,
+                        codes::CLASS_NOT_FOUND,
                         format!("unknown class `{text}`"),
                     )
                     .with_symbol(fqn.as_str()),
@@ -5418,6 +5534,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     &owner,
                     m.mods.visibility,
                     &format!("method `{name}`"),
+                    [codes::STATIC_METHOD_PRIVATE, codes::STATIC_METHOD_PROTECTED],
                 );
                 // `self::`, `static::` and `parent::` keep the class the call came in on
                 let forwards = fetch.children().next().is_some_and(|b| {
@@ -5467,7 +5584,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 if self.has_magic(&cls, "__callStatic") {
                     self.error(
                         name_node.text_range(),
-                        codes::UNDEFINED_MEMBER,
+                        codes::STATIC_METHOD_NOT_FOUND,
                         format!("`{cls}` has no method `{name}`, only `__callStatic`"),
                     );
                     self.tag_level(1);
@@ -5476,7 +5593,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 }
                 self.error(
                     name_node.text_range(),
-                    codes::UNDEFINED_MEMBER,
+                    codes::STATIC_METHOD_NOT_FOUND,
                     format!("`{cls}` has no method `{name}`"),
                 );
                 self.check_args_untyped(node);
@@ -5517,6 +5634,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                     &p.class,
                     p.visibility,
                     &format!("property `{name}`"),
+                    [
+                        codes::STATIC_PROPERTY_PRIVATE,
+                        codes::STATIC_PROPERTY_PROTECTED,
+                    ],
                 );
                 p.ty
             }
@@ -5532,7 +5653,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 if self.class_known(&cls) {
                     self.error(
                         var.text_range(),
-                        codes::UNDEFINED_MEMBER,
+                        codes::STATIC_PROPERTY_NOT_FOUND,
                         format!("`{cls}` has no static property `${name}`"),
                     );
                 }
@@ -5591,7 +5712,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 if self.class_known(&cls) {
                     self.error(
                         name_node.text_range(),
-                        codes::UNDEFINED_MEMBER,
+                        codes::CLASS_CONSTANT_NOT_FOUND,
                         format!("`{cls}` has no constant `{name}`"),
                     );
                 }
@@ -5671,7 +5792,11 @@ impl<'a, 'db> Checker<'a, 'db> {
             ClassKind::Interface | ClassKind::Trait | ClassKind::Enum => {
                 self.error(
                     target.text_range(),
-                    codes::INSTANTIATION,
+                    match model.kind() {
+                        ClassKind::Interface => codes::NEW_INTERFACE,
+                        ClassKind::Trait => codes::NEW_TRAIT,
+                        _ => codes::NEW_ENUM,
+                    },
                     format!("`{}` can't be instantiated", model.name),
                 );
             }
@@ -5679,7 +5804,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             _ if model.def.mods.is_abstract && !text_of(&target).eq_ignore_ascii_case("static") => {
                 self.error(
                     target.text_range(),
-                    codes::INSTANTIATION,
+                    codes::NEW_ABSTRACT,
                     format!("`{}` is abstract and can't be instantiated", model.name),
                 );
             }
@@ -5777,7 +5902,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                             } else {
                                 self.error(
                                     t.text_range(),
-                                    codes::UNDEFINED_VARIABLE,
+                                    codes::VARIABLE_UNDEFINED,
                                     format!("undefined variable `${n}`"),
                                 );
                             }
@@ -6037,6 +6162,41 @@ fn in_nullsafe_chain(node: &SyntaxNode) -> bool {
 }
 
 /// The class type to look members up on (`static`/`$this` → their class).
+/// Can a member be looked up on this at all? If not, PHPStan says it's not an object, not that
+/// the member's missing.
+fn is_object_like(ty: &Ty) -> bool {
+    matches!(
+        ty.kind(),
+        TyKind::Class { .. }
+            | TyKind::SelfType { .. }
+            | TyKind::Intersection(_)
+            | TyKind::Object
+            | TyKind::Param { .. }
+            | TyKind::Error
+            | TyKind::Mixed
+    ) || ty.is_untyped()
+}
+
+/// What a value that doesn't fit the target of an assignment is reported as: PHPStan's
+/// `TypesAssignedToPropertiesRule` sees writes through a property's offsets as writes to it, and
+/// `OffsetAccessValueAssignmentRule` the others.
+fn assignment_code(lhs: &SyntaxNode) -> &'static str {
+    let mut root = lhs.clone();
+    while root.kind() == INDEX_EXPR {
+        let Some(base) = exprs_of(&root).into_iter().next() else {
+            break;
+        };
+        root = base;
+    }
+    match root.kind() {
+        PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR | STATIC_PROPERTY_FETCH_EXPR => {
+            codes::ASSIGN_PROPERTY_TYPE
+        }
+        _ if lhs.kind() == INDEX_EXPR => codes::OFFSET_ASSIGN_VALUE,
+        _ => codes::TYPE_MISMATCH,
+    }
+}
+
 fn class_of(ty: &Ty) -> Ty {
     match ty.kind() {
         TyKind::SelfType { class, .. } => class.clone(),

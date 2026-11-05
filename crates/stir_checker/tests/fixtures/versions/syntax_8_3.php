@@ -4,7 +4,7 @@
 
 class Temperature {
     const int MAX = 100;
-    public int $degrees { get => 1; } // error: SPHP0060
+    public int $degrees { get => 1; } // error: property.hooksNotSupported
     public private(set) int $locked = 0; // error: SPHP0060
 }
 

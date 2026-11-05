@@ -14,18 +14,18 @@ function extract_defines_variables(array $args): string
 
 function no_include(): string
 {
-    return $wp_version; // error: SPHP0006
+    return $wp_version; // error: variable.undefined
 }
 
 if (defined('MAYBE_SET') && MAYBE_SET) {
     echo MAYBE_SET;
 }
-echo NEVER_TESTED; // error: SPHP0006
+echo NEVER_TESTED; // error: constant.notFound
 
 if (function_exists('maybe_there')) {
     maybe_there();
 }
-never_tested(); // error: SPHP0007
+never_tested(); // error: function.notFound
 
 function outer(): void
 {
@@ -54,7 +54,7 @@ class Zip
 
 echo strtr('abc', ['a' => 'b']);
 echo strtr('abc', 'a', 'b');
-strtr('abc'); // error: SPHP0014
+strtr('abc'); // error: arguments.count
 
 /** @param stdClass $o */
 function std($o): void {}

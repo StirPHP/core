@@ -25,7 +25,7 @@ class SpecialRule implements Rule {
 
     public function process(Node $node, int $depth): array {
         $w = $node->weight;
-        $node->nothing; // error: SPHP0009
+        $node->nothing; // error: property.notFound
         return [(string) $w];
     }
 }
@@ -37,7 +37,7 @@ class WrongReturn implements Rule {
     }
 
     public function process(Node $node, int $depth): array {
-        return [1]; // error: SPHP0005
+        return [1]; // error: return.type
     }
 }
 
@@ -58,7 +58,7 @@ class Base {
 class Child extends Base {
     protected array $names = ["a"];
 
-    public function ids(): array { return ["a"]; } // error: SPHP0005
+    public function ids(): array { return ["a"]; } // error: return.type
 
     public function copy() { return $this; }
 
@@ -76,7 +76,7 @@ class Child extends Base {
     public function ownOther(): int { return 1; }
 
     public function wrong(): string {
-        return $this->names; // error: SPHP0005
+        return $this->names; // error: return.type
     }
 }
 

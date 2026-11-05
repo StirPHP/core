@@ -6,7 +6,7 @@ new Missing2();
 // @phpstan-ignore-next-line
 new Missing3();
 new Missing4(); // @phpstan-ignore-line
-new Missing5(); // error: SPHP0008
+new Missing5(); // error: class.notFound
 
 /**
  * @template T

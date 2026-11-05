@@ -22,7 +22,7 @@ function set_in_loop(array $items)
     foreach ($items as $k => $item) {
         $last = $item;
     }
-    return [$k, $item, $last]; // error: SPHP0006
+    return [$k, $item, $last]; // error: variable.undefined
 }
 
 function set_in_try()
@@ -55,12 +55,12 @@ function overwritten_wrong(): string
 {
     $v = 'a';
     $v = 1;
-    return $v; // error: SPHP0005
+    return $v; // error: return.type
 }
 
 function still_undefined()
 {
-    return $nope; // error: SPHP0006
+    return $nope; // error: variable.undefined
 }
 
 function false_stays_in_unions(string $p): string

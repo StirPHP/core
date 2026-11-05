@@ -12,8 +12,9 @@
 //! | 9 | explicit `mixed` |
 //! | 10 | implicit `mixed`: no type at all |
 //!
-//! These follow PHPStan's documented levels and its `RuleLevelHelper`. Where a level depends
-//! on more than the kind of problem, the checker sets [`Diagnostic::php_level`].
+//! These follow PHPStan's documented levels and its `RuleLevelHelper`. A code has the level of its
+//! rule ([`level_of`]); where it depends on more than that, the checker sets
+//! [`Diagnostic::php_level`].
 
 use std::path::Path;
 
@@ -21,33 +22,47 @@ use stir_db::{Diagnostic, IgnoreRule, Settings};
 
 use crate::codes;
 
-/// A PHPDoc type that is not a subtype of the native type it documents.
-pub const PHPDOC_MISMATCH: &str = "SPHP0050";
+/// The rule level of the PHPStan rule behind `code`: the attribute on the rule's class, and
+/// `checkThisOnly` and such in its `config.level*.neon`. What only some of a code's reports need
+/// (see `RuleLevelHelper`) is on the [`Diagnostic`].
+pub fn level_of(code: &str) -> u8 {
+    match code {
+        codes::ARGUMENT_TYPE => 5,
+        codes::RETURN_TYPE
+        | codes::RETURN_VOID
+        | codes::ASSIGN_PROPERTY_TYPE
+        | codes::OFFSET_ASSIGN_VALUE
+        | codes::TYPE_MISMATCH
+        | codes::PROPERTY_DEFAULT_VALUE
+        | codes::PROPERTY_READONLY_NOT_IN_CONSTRUCTOR
+        | codes::PROPERTY_READONLY_OUT_OF_CLASS
+        | codes::THROW_NOT_THROWABLE
+        | codes::FOREACH_NON_ITERABLE
+        | codes::OFFSET_NOT_FOUND
+        | codes::OFFSET_NOT_ACCESSIBLE => 3,
+        codes::CALLABLE_NON_CALLABLE
+        | codes::ASSIGN_PROPERTY_PROTECTED_SET
+        | codes::ASSIGN_PROPERTY_READ_ONLY
+        | codes::METHOD_NON_OBJECT
+        | codes::PROPERTY_NON_OBJECT
+        | codes::PARAMETER_DEFAULT_VALUE
+        | codes::PARAMETER_PHPDOC_TYPE
+        | codes::RETURN_PHPDOC_TYPE
+        | codes::PROPERTY_PHPDOC_TYPE
+        | codes::CLASS_CONSTANT_PHPDOC_TYPE
+        | codes::GENERICS_MORE_TYPES
+        | codes::GENERICS_NOT_GENERIC
+        | codes::GENERICS_NOT_SUBTYPE
+        | codes::GENERICS_VARIANCE => 2,
+        codes::CONSTANT_NOT_FOUND | codes::NULL_COALESCE_VARIABLE => 1,
+        // unknown symbols, argument counts, what PHP itself refuses
+        _ => 0,
+    }
+}
 
 /// The minimum rule level at which `d` is reported in a `.php` file.
 pub fn min_level(d: &Diagnostic) -> u8 {
-    if let Some(l) = d.php_level {
-        return l;
-    }
-    // an untyped value prints as `mixed`
-    let untyped = d.message.contains("untyped") || d.message.contains("mixed");
-    match d.code {
-        codes::TYPE_MISMATCH if untyped => 9,
-        codes::TYPE_MISMATCH if d.message.contains("in argument") => 5,
-        codes::TYPE_MISMATCH | codes::RETURN_VALUE => 3,
-        codes::INVALID_OPERAND | codes::NOT_CALLABLE if untyped => 9,
-        codes::REASSIGN_IMMUTABLE => 3,
-        codes::NULLABLE_ACCESS => 8,
-        codes::INVALID_OPERAND
-        | codes::NOT_CALLABLE
-        | codes::VISIBILITY
-        | codes::GENERIC_ARITY
-        | codes::TYPE_BOUND
-        | codes::VARIANCE
-        | PHPDOC_MISMATCH => 2,
-        // Unknown symbols, argument counts and syntax.
-        _ => 0,
-    }
+    d.php_level.unwrap_or_else(|| level_of(d.code))
 }
 
 /// A leading `// @sphp-nocheck` comment opts a file out of checking: only the
@@ -257,14 +272,14 @@ mod tests {
             "/p/src/gen/c.php",
             "/p/other/d.php",
         ]
-        .map(|f| diag(codes::UNDEFINED_VARIABLE, "x", f))
+        .map(|f| diag(codes::VARIABLE_UNDEFINED, "x", f))
         .to_vec();
         filter_php(&mut diags, &settings);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].file, Path::new("/p/src/a.php"));
 
         // a source directory of `.`
-        let mut diags = vec![diag(codes::UNDEFINED_VARIABLE, "x", "/p/./src/gen/c.php")];
+        let mut diags = vec![diag(codes::VARIABLE_UNDEFINED, "x", "/p/./src/gen/c.php")];
         filter_php(&mut diags, &settings);
         assert!(diags.is_empty());
     }
@@ -283,43 +298,17 @@ mod tests {
 
     #[test]
     fn levels_and_ignores() {
-        assert_eq!(min_level(&diag(codes::UNDEFINED_FUNCTION, "x", "a.php")), 0);
+        assert_eq!(min_level(&diag(codes::FUNCTION_NOT_FOUND, "x", "a.php")), 0);
+        assert_eq!(min_level(&diag(codes::ARGUMENT_TYPE, "x", "a.php")), 5);
+        assert_eq!(min_level(&diag(codes::RETURN_TYPE, "x", "a.php")), 3);
         assert_eq!(
-            min_level(&diag(
-                codes::TYPE_MISMATCH,
-                "type mismatch in argument `a`",
-                "a.php"
-            )),
-            5
-        );
-        assert_eq!(
-            min_level(&diag(
-                codes::TYPE_MISMATCH,
-                "type mismatch in return value",
-                "a.php"
-            )),
-            3
-        );
-        assert_eq!(
-            min_level(&diag(codes::TYPE_MISMATCH, "x", "a.php").with_php_level(7)),
+            min_level(&diag(codes::ARGUMENT_TYPE, "x", "a.php").with_php_level(7)),
             7
         );
-        // an untyped value prints as `mixed`
+        // only the code and the level on the diagnostic count, never what the message says
         assert_eq!(
-            min_level(&diag(
-                codes::TYPE_MISMATCH,
-                "type mismatch in argument `a`: mixed is not assignable to int",
-                "a.php"
-            )),
-            9
-        );
-        assert_eq!(
-            min_level(&diag(
-                codes::TYPE_MISMATCH,
-                "type mismatch in property: narrow the untyped value first",
-                "a.php"
-            )),
-            9
+            min_level(&diag(codes::RETURN_TYPE, "mixed is untyped", "a.php")),
+            3
         );
 
         let settings = Settings {
@@ -330,7 +319,7 @@ mod tests {
                     ..IgnoreRule::default()
                 },
                 IgnoreRule {
-                    identifiers: vec![codes::UNDEFINED_CLASS.into()],
+                    identifiers: vec![codes::CLASS_NOT_FOUND.into()],
                     paths: vec!["/p/legacy/*".into()],
                     ..IgnoreRule::default()
                 },
@@ -339,30 +328,30 @@ mod tests {
         };
         let mut diags = vec![
             diag(
-                codes::UNDEFINED_FUNCTION,
+                codes::FUNCTION_NOT_FOUND,
                 "unknown function `IGNORED`",
                 "/p/a.php",
             ),
             diag(
-                codes::UNDEFINED_FUNCTION,
+                codes::FUNCTION_NOT_FOUND,
                 "unknown function `kept`",
                 "/p/a.php",
             ),
             diag(
-                codes::TYPE_MISMATCH,
+                codes::ARGUMENT_TYPE,
                 "type mismatch in argument `a`",
                 "/p/a.php",
             ),
-            diag(codes::UNDEFINED_CLASS, "unknown class", "/p/legacy/x.php"),
-            diag(codes::UNDEFINED_CLASS, "unknown class", "/p/src/x.php"),
+            diag(codes::CLASS_NOT_FOUND, "unknown class", "/p/legacy/x.php"),
+            diag(codes::CLASS_NOT_FOUND, "unknown class", "/p/src/x.php"),
         ];
         filter_php(&mut diags, &settings);
         let kept: Vec<_> = diags.iter().map(|d| (d.code, d.file.clone())).collect();
         assert_eq!(
             kept,
             [
-                (codes::UNDEFINED_FUNCTION, "/p/a.php".into()),
-                (codes::UNDEFINED_CLASS, "/p/src/x.php".into()),
+                (codes::FUNCTION_NOT_FOUND, "/p/a.php".into()),
+                (codes::CLASS_NOT_FOUND, "/p/src/x.php".into()),
             ]
         );
     }

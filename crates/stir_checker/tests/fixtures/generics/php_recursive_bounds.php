@@ -9,7 +9,7 @@ class Node
     /** @return T */
     public function parent(): mixed
     {
-        return null; // error: SPHP0005
+        return null; // error: return.type
     }
 }
 
@@ -26,5 +26,5 @@ class Right {}
 /** @param Left<Right<null>> $l */
 function uses(Left $l, Node $n): void
 {
-    echo $n->nope(); // error: SPHP0009
+    echo $n->nope(); // error: method.notFound
 }

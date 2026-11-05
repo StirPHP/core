@@ -15,7 +15,7 @@ function php_asserted_false(Failure|string $v): string {
 }
 
 function php_not_narrowed_without_the_call(Failure|string $v): string {
-    return $v; // error: SPHP0005
+    return $v; // error: return.type
 }
 
 function php_conditional_return(string $a): int {
@@ -25,8 +25,8 @@ function php_conditional_return(string $a): int {
 function php_shapes(): void {
     register_thing(["apply" => "strlen", "name" => "a"]);
     register_thing(["name" => "a"]);
-    register_thing(["name" => 1]); // error: SPHP0005
-    register_thing(["apply" => "strlen"]); // error: SPHP0005
+    register_thing(["name" => 1]); // error: argument.type
+    register_thing(["apply" => "strlen"]); // error: argument.type
 }
 
 function php_callable_strings(): void {

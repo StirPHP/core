@@ -16,11 +16,11 @@ function wants_int_box(Box $v): void {}
 
 $b = new Box("a");
 wants_string($b->first());
-wants_int($b->first()); // error: SPHP0005
+wants_int($b->first()); // error: argument.type
 wants_strings($b->all());
-wants_ints($b->all()); // error: SPHP0005
+wants_ints($b->all()); // error: argument.type
 wants_string_box($b->add("c"));
-wants_int_box($b); // error: SPHP0005
+wants_int_box($b); // error: argument.type
 
 $viaFn = \Lib\box(1);
 wants_int_box($viaFn);
