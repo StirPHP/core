@@ -326,7 +326,9 @@ async fn read_lossy(path: &Path) -> std::io::Result<String> {
         .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
 }
 
-/// Reads vendor files concurrently. Unreadable files are skipped with a warning.
+/// Reads vendor files concurrently, keeping their order: which of two declarations of a
+/// name wins depends on it, so results must not vary between runs. Unreadable files are
+/// skipped with a warning.
 async fn read_vendor(paths: Vec<PathBuf>) -> Vec<(PathBuf, String)> {
     futures::stream::iter(paths.into_iter().map(|path| async move {
         match read_lossy(&path).await {
@@ -337,7 +339,7 @@ async fn read_vendor(paths: Vec<PathBuf>) -> Vec<(PathBuf, String)> {
             }
         }
     }))
-    .buffer_unordered(READ_CONCURRENCY)
+    .buffered(READ_CONCURRENCY)
     .filter_map(std::future::ready)
     .collect()
     .await

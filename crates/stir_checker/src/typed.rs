@@ -1,4 +1,4 @@
-//! Type information about a checked file, for the transpiler and the language server.
+//! Type information about a checked file, for the language server.
 
 use std::sync::Arc;
 
@@ -47,12 +47,6 @@ pub enum MemberKind {
 pub struct TypedFile {
     /// Type of every checked expression, by its range.
     pub types: FxHashMap<TextRange, Ty>,
-    /// Names resolved as members of `$this` (`id` → `$this->id`).
-    pub implicit_this: FxHashSet<TextRange>,
-    /// Method calls resolved to extension functions.
-    pub extension_calls: FxHashMap<TextRange, stir_hir::ItemLoc>,
-    /// Types written in `is`/`as`/`when` patterns, by type-node range.
-    pub pattern_types: FxHashMap<TextRange, Ty>,
     /// Function calls and the fully-qualified function they call.
     pub function_calls: FxHashMap<TextRange, SmolStr>,
     /// Resolved names, by the range of the name.
@@ -72,9 +66,6 @@ pub fn typed_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> Arc<TypedFile
     checker.check_root(&root);
     Arc::new(TypedFile {
         types: checker.types,
-        implicit_this: checker.implicit_this,
-        extension_calls: checker.extension_calls,
-        pattern_types: checker.pattern_types,
         function_calls: checker.function_calls,
         defs: checker.defs,
         locals: checker.locals,

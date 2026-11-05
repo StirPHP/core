@@ -86,6 +86,8 @@ impl ClassModel<'_> {
 /// Direct supertypes of a class, in terms of its own type parameters.
 #[derive(Debug, Clone, Default)]
 pub struct Supers {
+    /// A supertype names a class that doesn't exist.
+    pub has_unknown: bool,
     pub parent: Option<Ty>,
     pub interfaces: Vec<Ty>,
     pub traits: Vec<Ty>,
@@ -390,6 +392,12 @@ impl<'db> Ctx<'db> {
                 s.interfaces.push(Ty::class("BackedEnum", Vec::new()));
             }
         }
+        s.has_unknown = s
+            .parent
+            .iter()
+            .chain(&s.interfaces)
+            .chain(&s.traits)
+            .any(Ty::is_error);
         let s = Rc::new(s);
         self.in_progress.borrow_mut().remove(&c.key);
         self.supers.borrow_mut().insert(c.key.clone(), s.clone());
@@ -422,6 +430,16 @@ impl<'db> Ctx<'db> {
             }
         }
         out
+    }
+
+    /// Are `ty` and all its ancestors known?
+    pub fn hierarchy_known(&self, ty: &Ty) -> bool {
+        self.ancestors(ty).iter().all(|a| match a.kind() {
+            TyKind::Class { name, .. } => self
+                .class(name)
+                .is_some_and(|c| !self.supers(&c).has_unknown),
+            _ => true,
+        })
     }
 
     pub fn subst_map(&self, c: &ClassModel<'_>, args: &[Ty]) -> FxHashMap<ParamId, Ty> {

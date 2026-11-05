@@ -5328,11 +5328,10 @@ impl<'a, 'db> Checker<'a, 'db> {
         self.ctx.find_method(ty, name).is_some()
     }
 
+    /// Are `ty` and all its ancestors known? A member can come from an unknown ancestor, so
+    /// a missing one isn't an error: the unknown class is reported where it's named.
     fn class_known(&self, ty: &Ty) -> bool {
-        match ty.kind() {
-            TyKind::Class { name, .. } => self.ctx.class(name).is_some(),
-            _ => false,
-        }
+        matches!(ty.kind(), TyKind::Class { .. }) && self.ctx.hierarchy_known(ty)
     }
 
     fn visible(&self, owner: &Rc<ClassModel<'db>>, vis: Visibility) -> bool {
@@ -5498,11 +5497,14 @@ impl<'a, 'db> Checker<'a, 'db> {
                 Ty::any_platform()
             };
         }
-        self.error(
-            range,
-            codes::UNDEFINED_MEMBER,
-            format!("`{recv}` has no method `{name}`"),
-        );
+        let cls = class_of(recv);
+        if self.class_known(&cls) || !matches!(cls.kind(), TyKind::Class { .. }) {
+            self.error(
+                range,
+                codes::UNDEFINED_MEMBER,
+                format!("`{recv}` has no method `{name}`"),
+            );
+        }
         self.check_args_untyped(node);
         Ty::error()
     }
@@ -5799,11 +5801,13 @@ impl<'a, 'db> Checker<'a, 'db> {
                 p.ty
             }
             None => {
-                self.error(
-                    var.text_range(),
-                    codes::UNDEFINED_MEMBER,
-                    format!("`{cls}` has no static property `${name}`"),
-                );
+                if self.class_known(&cls) {
+                    self.error(
+                        var.text_range(),
+                        codes::UNDEFINED_MEMBER,
+                        format!("`{cls}` has no static property `${name}`"),
+                    );
+                }
                 Ty::error()
             }
         }
