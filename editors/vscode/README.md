@@ -54,6 +54,22 @@ the next start uses it anyway.
 To use your own `stirphp` instead (a local build, say), set `stirphp.server.path`. If the download fails and there's no
 earlier build, the extension falls back to `stirphp` on the `PATH`.
 
+## Custom rules and workspace trust
+
+A project can configure scripts in `parameters.stirphp.rules` (see the
+[main README](https://github.com/StirPHP/core#custom-rules)). Those are code in the repository, so nothing runs them when
+you open it:
+
+- In a workspace VS Code doesn't trust (`Workspaces: Manage Workspace Trust`), they never run, and you aren't asked. The
+  server restarts when you trust the workspace.
+- In a trusted one, the first time you open it you're asked: **Run the N custom rules this workspace configures?**
+  Allow or Don't allow. Until you answer they don't run.
+- Your answer is kept for that folder and those exact scripts, in `trusted-rules.json` under your config directory
+  (`~/.config/stirphp` on Linux). When a script changes they stop and you're asked again.
+
+Scripts have no access to files, the network or other programs, can't tell the time, and are stopped when they take too
+long. `stirphp check` on the command line runs them without asking, since running it in a project is your choice.
+
 ## Settings
 
 | Setting | Default | |

@@ -18,6 +18,13 @@
   "activationEvents": [
     "onLanguage:php"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "In an untrusted workspace, custom rules never run, and `stirphp.server.path` from the workspace is ignored.",
+      "restrictedConfigurations": ["stirphp.server.path"]
+    }
+  },
   "contributes": {
     "configuration": {
       "title": "StirPHP",

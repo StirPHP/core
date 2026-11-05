@@ -121,7 +121,7 @@ fn wrong(class: &str, what: &str) -> ScriptError {
 }
 
 /// One of the maps in the answer.
-fn entries<'a>(class: &str, map: &'a Map, key: &str) -> Result<Option<Map>, ScriptError> {
+fn entries(class: &str, map: &Map, key: &str) -> Result<Option<Map>, ScriptError> {
     let Some(value) = map.get(key) else {
         return Ok(None);
     };

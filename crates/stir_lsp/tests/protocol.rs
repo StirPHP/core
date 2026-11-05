@@ -4,6 +4,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{Value, json};
+use stir_lsp::server::TrustOptions;
+use stir_lsp::trust::TrustStore;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, DuplexStream};
 use tokio::sync::mpsc;
 use tower_lsp_server::ls_types::Uri;
@@ -38,10 +40,21 @@ async fn read_message(r: &mut BufReader<tokio::io::ReadHalf<DuplexStream>>) -> O
 }
 
 impl Client {
+    /// With a store of answers of its own, not the user's.
     fn start() -> Client {
+        let store = tempfile::TempDir::new().unwrap();
+        let path = store.keep().join("trust.json");
+        Client::start_with(TrustOptions {
+            store: TrustStore::at(path),
+            answer_wait: Duration::from_secs(60),
+        })
+    }
+
+    fn start_with(trust: TrustOptions) -> Client {
         let (client_side, server_side) = tokio::io::duplex(1 << 20);
         let (sr, sw) = tokio::io::split(server_side);
-        let (service, socket) = LspService::new(stir_lsp::server::Server::new);
+        let (service, socket) =
+            LspService::new(move |client| stir_lsp::server::Server::with_trust(client, trust));
         tokio::spawn(Server::new(sr, sw, socket).serve(service));
         let (cr, cw) = tokio::io::split(client_side);
         let (tx, rx) = mpsc::unbounded_channel();
@@ -94,6 +107,26 @@ impl Client {
             }
             self.backlog.push(msg);
         }
+    }
+
+    /// The next message with this method, from what came in meanwhile first.
+    async fn message(&mut self, method: &str) -> Value {
+        if let Some(i) = self.backlog.iter().position(|m| m["method"] == method) {
+            return self.backlog.remove(i);
+        }
+        loop {
+            let m = self.next().await;
+            if m["method"] == method {
+                return m;
+            }
+            self.backlog.push(m);
+        }
+    }
+
+    /// Answers a request from the server.
+    async fn respond(&mut self, request: &Value, result: Value) {
+        self.send(json!({"jsonrpc": "2.0", "id": request["id"], "result": result}))
+            .await;
     }
 
     /// The next `publishDiagnostics` for `uri`.
@@ -476,4 +509,377 @@ async fn baselines_and_ignore_rules_apply_as_in_the_cli() {
     );
 
     let _ = c.request("shutdown", Value::Null).await;
+}
+
+const NO_ECHO: &str = r#"fn visit_echo(node, ctx) { ctx.error("no echo", "app.noEcho"); }"#;
+
+/// Whether a question is out, or the server's said something else about the rules: what's come in
+/// so far shows, and the next `publishDiagnostics` for `uri` has `count` diagnostics.
+async fn diagnostics_settle(c: &mut Client, uri: &str, code: &str, count: usize) -> Vec<Value> {
+    for _ in 0..20 {
+        let diags = c.diagnostics(uri).await;
+        let found = diags.iter().filter(|d| d["code"] == code).count();
+        if found == count {
+            return diags;
+        }
+    }
+    panic!("never got {count} of {code} for {uri}");
+}
+
+/// A project with the rule `NO_ECHO`, opened in a new server. Returns the file with an `echo`.
+async fn open_with_rules(
+    root: &Path,
+    trust: TrustOptions,
+    capabilities: Value,
+    options: Value,
+) -> (Client, String) {
+    write(
+        &root.join("stirphp.neon"),
+        "parameters:\n    stirphp:\n        rules:\n            - rules/no_echo.rhai\n",
+    );
+    if !root.join("rules/no_echo.rhai").is_file() {
+        write(&root.join("rules/no_echo.rhai"), NO_ECHO);
+    }
+    let main = root.join("main.php");
+    let text = "<?php\necho 1;\n";
+    write(&main, text);
+    let main_uri = uri(&main);
+    let mut c = Client::start_with(trust);
+    c.request(
+        "initialize",
+        json!({"processId": null, "rootUri": uri(root), "capabilities": capabilities, "initializationOptions": options}),
+    )
+    .await;
+    c.notify("initialized", json!({})).await;
+    c.notify(
+        "textDocument/didOpen",
+        json!({"textDocument": {"uri": main_uri, "languageId": "php", "version": 1, "text": text}}),
+    )
+    .await;
+    (c, main_uri)
+}
+
+fn asking_client() -> Value {
+    json!({"window": {"showMessage": {}}})
+}
+
+fn trust_options(store: &Path) -> TrustOptions {
+    TrustOptions {
+        store: TrustStore::at(store),
+        answer_wait: Duration::from_secs(60),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rules_wait_for_an_answer_and_it_is_remembered() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap().join("project");
+    std::fs::create_dir_all(&root).unwrap();
+    let store = tmp.path().join("config/trust.json");
+
+    let (mut c, main) =
+        open_with_rules(&root, trust_options(&store), asking_client(), json!({})).await;
+    // nothing runs before the answer
+    let question = c.message("window/showMessageRequest").await;
+    let text = question["params"]["message"].as_str().unwrap();
+    assert!(
+        text.contains("custom rule") && text.contains("Run"),
+        "{text}"
+    );
+    let titles: Vec<&str> = question["params"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, ["Allow", "Don't allow"]);
+    assert!(c.diagnostics(&main).await.is_empty());
+
+    c.respond(&question, json!({"title": "Allow"})).await;
+    let diags = diagnostics_settle(&mut c, &main, "app.noEcho", 1).await;
+    assert_eq!(diags[0]["message"], "no echo");
+    assert_eq!(diags[0]["range"]["start"]["line"], 1);
+
+    // a new session doesn't ask again
+    let (mut c, main) =
+        open_with_rules(&root, trust_options(&store), asking_client(), json!({})).await;
+    diagnostics_settle(&mut c, &main, "app.noEcho", 1).await;
+    assert!(
+        !c.backlog
+            .iter()
+            .any(|m| m["method"] == "window/showMessageRequest"),
+        "{:?}",
+        c.backlog
+    );
+
+    // changed scripts are other scripts: they stop, and it asks again
+    write(
+        &root.join("rules/no_echo.rhai"),
+        &NO_ECHO.replace("no echo", "not this"),
+    );
+    c.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes": [{"uri": uri(&root.join("rules/no_echo.rhai")), "type": 2}]}),
+    )
+    .await;
+    let question = c.message("window/showMessageRequest").await;
+    diagnostics_settle(&mut c, &main, "app.noEcho", 0).await;
+    c.respond(&question, json!({"title": "Allow"})).await;
+    let diags = diagnostics_settle(&mut c, &main, "app.noEcho", 1).await;
+    assert_eq!(diags[0]["message"], "not this");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rules_stay_off_when_refused_and_it_is_remembered() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap().join("project");
+    std::fs::create_dir_all(&root).unwrap();
+    let store = tmp.path().join("trust.json");
+
+    let (mut c, main) =
+        open_with_rules(&root, trust_options(&store), asking_client(), json!({})).await;
+    let question = c.message("window/showMessageRequest").await;
+    c.respond(&question, json!({"title": "Don't allow"})).await;
+    assert!(c.diagnostics(&main).await.is_empty());
+
+    // the answer has been kept by the next session, which has nothing to ask
+    for _ in 0..100 {
+        if store.is_file() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let (mut c, main) =
+        open_with_rules(&root, trust_options(&store), asking_client(), json!({})).await;
+    assert!(c.diagnostics(&main).await.is_empty());
+    let hover = c
+        .request(
+            "textDocument/hover",
+            json!({"textDocument": {"uri": main}, "position": {"line": 0, "character": 0}}),
+        )
+        .await;
+    assert!(hover.is_null());
+    assert!(
+        !c.backlog
+            .iter()
+            .any(|m| m["method"] == "window/showMessageRequest"),
+        "{:?}",
+        c.backlog
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rules_never_run_in_a_workspace_the_editor_does_not_trust() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap().join("project");
+    std::fs::create_dir_all(&root).unwrap();
+    let store = tmp.path().join("trust.json");
+    // even with an answer on file
+    let hash = trust_hash(&root);
+    TrustStore::at(&store).remember(&root, &hash, true).unwrap();
+
+    let (mut c, main) = open_with_rules(
+        &root,
+        trust_options(&store),
+        asking_client(),
+        json!({"workspaceTrusted": false}),
+    )
+    .await;
+    assert!(c.diagnostics(&main).await.is_empty());
+    assert!(
+        !c.backlog
+            .iter()
+            .any(|m| m["method"] == "window/showMessageRequest"),
+        "{:?}",
+        c.backlog
+    );
+    // a trusted workspace with that answer runs them
+    let (mut c, main) = open_with_rules(
+        &root,
+        trust_options(&store),
+        asking_client(),
+        json!({"workspaceTrusted": true}),
+    )
+    .await;
+    diagnostics_settle(&mut c, &main, "app.noEcho", 1).await;
+}
+
+fn trust_hash(root: &Path) -> String {
+    let script = root.join("rules/no_echo.rhai");
+    write(&script, NO_ECHO);
+    stir_lsp::trust::scripts_hash(root, &[(script.as_path(), Ok(NO_ECHO))])
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rules_stay_off_with_one_notice_when_nobody_can_answer() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap().join("project");
+    std::fs::create_dir_all(&root).unwrap();
+    let store = tmp.path().join("trust.json");
+
+    // a client that can't show questions
+    let (mut c, main) = open_with_rules(&root, trust_options(&store), json!({}), json!({})).await;
+    let notice = c.message("window/showMessage").await;
+    assert!(
+        notice["params"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("aren't running")
+    );
+    assert!(c.diagnostics(&main).await.is_empty());
+
+    // a reload doesn't say it again
+    c.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes": [{"uri": uri(&root.join("stirphp.neon")), "type": 2}]}),
+    )
+    .await;
+    c.request(
+        "textDocument/hover",
+        json!({"textDocument": {"uri": main}, "position": {"line": 0, "character": 0}}),
+    )
+    .await;
+    assert!(
+        !c.backlog
+            .iter()
+            .any(|m| m["method"] == "window/showMessage"),
+        "{:?}",
+        c.backlog
+    );
+
+    // a client that says it can, and doesn't answer
+    let quick = TrustOptions {
+        store: TrustStore::at(&store),
+        answer_wait: Duration::from_millis(100),
+    };
+    let (mut c, main) = open_with_rules(&root, quick, asking_client(), json!({})).await;
+    let question = c.message("window/showMessageRequest").await;
+    let notice = c.message("window/showMessage").await;
+    assert!(
+        notice["params"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("aren't running")
+    );
+    assert!(c.diagnostics(&main).await.is_empty());
+    // a late answer still counts
+    c.respond(&question, json!({"title": "Allow"})).await;
+    diagnostics_settle(&mut c, &main, "app.noEcho", 1).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn what_is_wrong_with_a_script_is_said_at_the_script() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap().join("project");
+    std::fs::create_dir_all(&root).unwrap();
+    write(
+        &root.join("rules/no_echo.rhai"),
+        "fn visit_echo(node, ctx) { loop {} }",
+    );
+    let store = tmp.path().join("trust.json");
+    let (mut c, _) =
+        open_with_rules(&root, trust_options(&store), asking_client(), json!({})).await;
+    let question = c.message("window/showMessageRequest").await;
+    c.respond(&question, json!({"title": "Allow"})).await;
+    let script = uri(&root.join("rules/no_echo.rhai"));
+    let diags = c.diagnostics(&script).await;
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0]["code"], "SPHP0070");
+    assert!(
+        diags[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("no_echo.rhai")
+    );
+    // and it's gone when the script's fixed, and allowed
+    write(&root.join("rules/no_echo.rhai"), NO_ECHO);
+    c.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes": [{"uri": script, "type": 2}]}),
+    )
+    .await;
+    let question = c.message("window/showMessageRequest").await;
+    c.respond(&question, json!({"title": "Allow"})).await;
+    assert!(c.diagnostics(&script).await.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hooks_and_magic_members_reach_hover_and_completion() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap().join("project");
+    std::fs::create_dir_all(&root).unwrap();
+    write(
+        &root.join("rules/no_echo.rhai"),
+        r#"
+        fn return_type_targets() { #{ methods: ["Container::get"] } }
+        fn return_type_of_method(node, ctx) { ctx.get_type(node.arguments[0]).class_string }
+        fn magic_members(class_name) {
+            if class_name == "Model" {
+                #{ properties: #{ title: "string" }, methods: #{ publish: "bool" } }
+            }
+        }
+        "#,
+    );
+    let store = tmp.path().join("trust.json");
+    let (mut c, _) =
+        open_with_rules(&root, trust_options(&store), asking_client(), json!({})).await;
+    let question = c.message("window/showMessageRequest").await;
+    let main = root.join("main.php");
+    let text = "<?php\nclass Model {}\nclass Post extends Model {}\nclass Container { public function get(string $id): mixed { return null; } }\n$post = (new Container())->get(Post::class);\n$post->title;\n$post->publish();\n$post->\n";
+    let main_uri = uri(&main);
+    c.notify(
+        "textDocument/didChange",
+        json!({"textDocument": {"uri": main_uri, "version": 2}, "contentChanges": [{"text": text}]}),
+    )
+    .await;
+    let hover = |line: u32, character: u32| json!({"textDocument": {"uri": main_uri}, "position": {"line": line, "character": character}});
+    let complete_at =
+        json!({"textDocument": {"uri": main_uri}, "position": {"line": 7, "character": 7}});
+
+    // without the answer, they aren't there
+    let got = c.request("textDocument/hover", hover(5, 1)).await;
+    let shown = got["contents"]["value"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(!shown.contains("Post"), "{shown}");
+
+    c.respond(&question, json!({"title": "Allow"})).await;
+    let mut shown = String::new();
+    for _ in 0..200 {
+        let got = c.request("textDocument/hover", hover(5, 1)).await;
+        shown = got["contents"]["value"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        if shown.contains("Post") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(shown.contains("Post"), "{shown}");
+
+    // a return type hook, then members
+    let got = c.request("textDocument/hover", hover(5, 8)).await;
+    let shown = got["contents"]["value"].as_str().unwrap().to_owned();
+    assert!(
+        shown.contains("string") && shown.contains("title"),
+        "{shown}"
+    );
+    let got = c.request("textDocument/hover", hover(6, 8)).await;
+    let shown = got["contents"]["value"].as_str().unwrap().to_owned();
+    assert!(
+        shown.contains("bool") && shown.contains("publish"),
+        "{shown}"
+    );
+
+    let got = c.request("textDocument/completion", complete_at).await;
+    let items = got["items"]
+        .as_array()
+        .cloned()
+        .or(got.as_array().cloned())
+        .unwrap();
+    let labels: Vec<&str> = items.iter().map(|i| i["label"].as_str().unwrap()).collect();
+    assert!(labels.contains(&"title"), "{labels:?}");
+    assert!(labels.contains(&"publish"), "{labels:?}");
 }

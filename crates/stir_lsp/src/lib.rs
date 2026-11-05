@@ -14,6 +14,8 @@ pub mod render;
 pub mod server;
 pub mod symbols;
 pub mod tokens;
+#[cfg(feature = "server")]
+pub mod trust;
 
 /// Serves the language server over stdin/stdout until the client exits.
 #[cfg(feature = "server")]

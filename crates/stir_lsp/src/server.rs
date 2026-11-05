@@ -4,6 +4,7 @@
 //! edit cancels outstanding snapshots, whose requests then fail with
 //! `ContentModified` and are retried by the client.
 
+use std::collections::BTreeMap;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -12,7 +13,7 @@ use std::time::Duration;
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Setter as _;
 use stir_db::{
-    Db, Diagnostic, FileOrigin, RootDatabase, Settings, Severity, SourceFile, Workspace,
+    Db, Diagnostic, FileOrigin, RootDatabase, ScriptFile, Settings, Severity, SourceFile, Workspace,
 };
 use stir_project::Project;
 use stir_project::workspace::{LoadOptions, builtin_files, load_workspace};
@@ -23,10 +24,14 @@ use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer};
 
 use crate::convert::{Encoding, LineMap};
+use crate::trust::{self, TrustStore};
 use crate::{complete, hints, hover, nav, symbols, tokens};
 
 /// Delay between an edit and the diagnostics run it triggers.
 const DIAGNOSTICS_DELAY: Duration = Duration::from_millis(150);
+/// How long a question about a workspace's scripts goes unanswered before the person is told, for
+/// a client that shows no such questions.
+const TRUST_ANSWER_WAIT: Duration = Duration::from_secs(30);
 
 struct State {
     db: RootDatabase,
@@ -40,6 +45,9 @@ struct State {
     /// Directories whose files are not project sources (generated output,
     /// `vendor/`): opened files there are dependencies, never checked.
     foreign: Vec<PathBuf>,
+    /// The project's scripts, whether they're allowed to run or not. Those that are in the
+    /// workspace's `scripts`, and those alone, run.
+    rules: Vec<ScriptFile>,
 }
 
 impl State {
@@ -62,6 +70,36 @@ impl State {
             open: FxHashMap::default(),
             foreign: vendor.into_iter().collect(),
             root,
+            rules: Vec::new(),
+        }
+    }
+
+    /// What identifies the project's scripts as they are now.
+    fn rules_hash(&self) -> String {
+        let root = self.root.clone().unwrap_or_default();
+        let scripts: Vec<_> = self
+            .rules
+            .iter()
+            .map(|s| {
+                let text = s.text(&self.db).as_ref();
+                (
+                    s.path(&self.db).as_path(),
+                    text.map(String::as_str).map_err(String::as_str),
+                )
+            })
+            .collect();
+        trust::scripts_hash(&root, &scripts)
+    }
+
+    /// Lets the project's scripts run, or stops them.
+    fn set_rules_running(&mut self, running: bool) {
+        let scripts = if running {
+            self.rules.clone()
+        } else {
+            Vec::new()
+        };
+        if self.ws.scripts(&self.db) != &scripts {
+            self.ws.set_scripts(&mut self.db).to(scripts);
         }
     }
 
@@ -217,10 +255,46 @@ pub struct Server {
     watch_dynamic: Mutex<bool>,
     /// What the user was last told about the project, so that a reload doesn't repeat it.
     notices: Mutex<Vec<String>>,
+    rules: RulesTrust,
+}
+
+/// What it takes to decide whether a workspace's scripts run. See [`trust`].
+#[derive(Clone)]
+struct RulesTrust {
+    store: TrustStore,
+    /// The client said this workspace isn't trusted (`workspaceTrusted`): scripts never run.
+    never: Arc<Mutex<bool>>,
+    /// Can the client show a question at all?
+    can_ask: Arc<Mutex<bool>>,
+    /// The scripts a question is out about.
+    asking: Arc<Mutex<Option<String>>>,
+    /// Told the person they're off, for lack of an answer: once is enough.
+    told: Arc<std::sync::atomic::AtomicBool>,
+    answer_wait: Duration,
+}
+
+/// How a server decides about scripts: in tests, not the user's own answers.
+#[derive(Debug, Clone)]
+pub struct TrustOptions {
+    pub store: TrustStore,
+    pub answer_wait: Duration,
+}
+
+impl Default for TrustOptions {
+    fn default() -> Self {
+        TrustOptions {
+            store: TrustStore::in_config_dir(),
+            answer_wait: TRUST_ANSWER_WAIT,
+        }
+    }
 }
 
 impl Server {
     pub fn new(client: Client) -> Self {
+        Server::with_trust(client, TrustOptions::default())
+    }
+
+    pub fn with_trust(client: Client, trust: TrustOptions) -> Self {
         let server = Server {
             client,
             state: Arc::new(Mutex::new(State::empty())),
@@ -230,6 +304,14 @@ impl Server {
             workspace_folder: Mutex::new(None),
             watch_dynamic: Mutex::new(false),
             notices: Mutex::new(Vec::new()),
+            rules: RulesTrust {
+                store: trust.store,
+                never: Arc::default(),
+                can_ask: Arc::default(),
+                asking: Arc::default(),
+                told: Arc::default(),
+                answer_wait: trust.answer_wait,
+            },
         };
         tokio::spawn(diagnostics_loop(
             server.client.clone(),
@@ -318,6 +400,7 @@ impl Server {
             None => None,
         };
         let notices = loaded.as_ref().map_or_else(Vec::new, |l| l.notices.clone());
+        let rules = loaded.as_ref().map(|l| l.rules.clone()).unwrap_or_default();
         {
             let mut s = self.state.lock().unwrap();
             // documents opened meanwhile keep their editor text
@@ -342,11 +425,76 @@ impl Server {
                 state.set_text(&path, text);
                 state.open.insert(path, version);
             }
+            state.rules = rules;
             *s = state;
         }
+        self.decide_rules();
         self.ready.send_replace(true);
         self.diagnostics.notify_one();
         self.show_notices(notices).await;
+    }
+
+    /// Runs the project's scripts if that's been allowed, and asks if it hasn't been asked.
+    fn decide_rules(&self) {
+        let (root, hash, count) = {
+            let s = self.state.lock().unwrap();
+            let root = s.root.clone().unwrap_or_default();
+            (root, s.rules_hash(), s.rules.len())
+        };
+        let trust = &self.rules;
+        let allowed = count > 0
+            && !*trust.never.lock().unwrap()
+            && trust.store.decision(&root, &hash) == Some(true);
+        self.state.lock().unwrap().set_rules_running(allowed);
+        if count == 0 || allowed || *trust.never.lock().unwrap() {
+            return;
+        }
+        if trust.store.decision(&root, &hash).is_some() {
+            return;
+        }
+        {
+            let mut asking = trust.asking.lock().unwrap();
+            if asking.as_ref() == Some(&hash) {
+                return;
+            }
+            *asking = Some(hash.clone());
+        }
+        tokio::spawn(ask_about_rules(
+            self.client.clone(),
+            trust.clone(),
+            self.state.clone(),
+            self.diagnostics.clone(),
+            root,
+            hash,
+            count,
+        ));
+    }
+
+    /// Reads the project's scripts again, after one of them changed.
+    async fn reload_rules(&self) {
+        let scripts: Vec<(ScriptFile, PathBuf)> = {
+            let s = self.state.lock().unwrap();
+            s.rules
+                .iter()
+                .map(|r| (*r, r.path(&s.db).clone()))
+                .collect()
+        };
+        let mut texts = Vec::new();
+        for (script, path) in scripts {
+            let text = tokio::fs::read_to_string(&path)
+                .await
+                .map_err(|e| format!("it can't be read: {e}"));
+            texts.push((script, text));
+        }
+        self.write(|s| {
+            for (script, text) in texts {
+                if script.text(&s.db) != &text {
+                    let _ = script.set_text(&mut s.db).to(text);
+                }
+            }
+        });
+        self.decide_rules();
+        self.diagnostics.notify_one();
     }
 
     /// Tells the user what's new among `notices`.
@@ -367,6 +515,86 @@ impl Server {
     }
 }
 
+/// Asks whether a workspace's scripts may run, and acts on the answer. Until there is one they
+/// don't run. A client that doesn't answer gets told that, once.
+async fn ask_about_rules(
+    client: Client,
+    trust: RulesTrust,
+    state: Arc<Mutex<State>>,
+    diagnostics: Arc<Notify>,
+    root: PathBuf,
+    hash: String,
+    count: usize,
+) {
+    use std::sync::atomic::Ordering;
+
+    const ALLOW: &str = "Allow";
+    const DENY: &str = "Don't allow";
+    let tell = |client: Client, told: Arc<std::sync::atomic::AtomicBool>| async move {
+        if !told.swap(true, Ordering::Relaxed) {
+            let notice = "Custom rules in this workspace (`parameters.stirphp.rules`) aren't running, because nobody was asked whether to allow them. `stirphp check` runs them.";
+            client.show_message(MessageType::INFO, notice).await;
+        }
+    };
+    if !*trust.can_ask.lock().unwrap() {
+        tell(client, trust.told.clone()).await;
+        return;
+    }
+    let actions = vec![
+        MessageActionItem {
+            title: ALLOW.into(),
+            properties: Default::default(),
+        },
+        MessageActionItem {
+            title: DENY.into(),
+            properties: Default::default(),
+        },
+    ];
+    let rules = if count == 1 {
+        "the 1 custom rule".to_owned()
+    } else {
+        format!("the {count} custom rules")
+    };
+    let message = format!(
+        "Run {rules} this workspace configures? Scripts can't touch files or the network, but allow them only if you trust this project."
+    );
+    let question = client.show_message_request(MessageType::WARNING, message, Some(actions));
+    let mut question = std::pin::pin!(question);
+    let answer = tokio::select! {
+        answer = &mut question => answer,
+        _ = tokio::time::sleep(trust.answer_wait) => {
+            tell(client.clone(), trust.told.clone()).await;
+            question.await
+        }
+    };
+    {
+        let mut asking = trust.asking.lock().unwrap();
+        if asking.as_ref() == Some(&hash) {
+            *asking = None;
+        }
+    }
+    let allow = match answer {
+        Ok(Some(action)) => action.title == ALLOW,
+        // put away without an answer: the question comes back next time
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(%error, "no answer about the workspace's rules");
+            tell(client.clone(), trust.told.clone()).await;
+            return;
+        }
+    };
+    if let Err(error) = trust.store.remember(&root, &hash, allow) {
+        tracing::warn!(%error, "can't remember the answer about the workspace's rules");
+    }
+    // only what was asked about: the scripts may have changed, and that's asked separately
+    let mut s = state.lock().unwrap();
+    if s.rules_hash() == hash && s.root.as_deref().unwrap_or(Path::new("")) == root {
+        s.set_rules_running(allow);
+        drop(s);
+        diagnostics.notify_one();
+    }
+}
+
 /// A project read from disk, for [`State`].
 struct LoadedProject {
     db: RootDatabase,
@@ -374,6 +602,7 @@ struct LoadedProject {
     root: PathBuf,
     vendor_dir: PathBuf,
     notices: Vec<String>,
+    rules: Vec<ScriptFile>,
 }
 
 async fn load_project(dir: &Path) -> Option<LoadedProject> {
@@ -391,6 +620,7 @@ async fn load_project(dir: &Path) -> Option<LoadedProject> {
             root: project.root.clone(),
             vendor_dir: l.vendor_dir,
             notices: l.notices,
+            rules: l.rules,
         }),
         Err(error) => {
             tracing::error!(%error, "failed to load the project");
@@ -419,22 +649,39 @@ async fn diagnostics_loop(
         // before awaiting the client (an edit waits for snapshots to go away)
         let result = tokio::task::spawn_blocking(move || {
             salsa::Cancelled::catch(AssertUnwindSafe(|| {
-                sources
+                let to_lsp = |path: &Path, text: &str, diags: &[Diagnostic]| {
+                    Uri::from_file_path(path).map(|uri| {
+                        let map = LineMap::new(text, enc);
+                        let lsp = diags
+                            .iter()
+                            .map(|d| lsp_diagnostic(d, &map, &uri))
+                            .collect();
+                        (uri, lsp)
+                    })
+                };
+                let mut results = sources
                     .iter()
                     .map(|&f| {
                         let path = f.path(&db).clone();
                         let diags = stir_checker::check_file(&db, ws, f).as_ref().clone();
-                        let lsp = Uri::from_file_path(&path).map(|uri| {
-                            let map = LineMap::new(f.text(&db), enc);
-                            let lsp = diags
-                                .iter()
-                                .map(|d| lsp_diagnostic(d, &map, &uri))
-                                .collect();
-                            (uri, lsp)
-                        });
+                        let lsp = to_lsp(&path, f.text(&db), &diags);
                         (path, diags, lsp)
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                // what's wrong with a script is at the script
+                let mut by_script: BTreeMap<PathBuf, Vec<Diagnostic>> = BTreeMap::new();
+                for d in stir_checker::script_diagnostics(&db, ws, &sources) {
+                    by_script.entry(d.file.clone()).or_default().push(d);
+                }
+                for (path, diags) in by_script {
+                    let script = ws.scripts(&db).iter().find(|s| s.path(&db) == &path);
+                    let text = script
+                        .and_then(|s| s.text(&db).as_ref().ok())
+                        .map_or("", String::as_str);
+                    let lsp = to_lsp(&path, text, &diags);
+                    results.push((path, diags, lsp));
+                }
+                results
             }))
         })
         .await;
@@ -559,6 +806,19 @@ impl LanguageServer for Server {
             .or(params.root_uri.clone())
             .and_then(|u| uri_path(&u));
         *self.workspace_folder.lock().unwrap() = folder;
+        // an editor that knows this workspace isn't trusted says so: its scripts don't get asked about
+        let never = params
+            .initialization_options
+            .as_ref()
+            .and_then(|o| o.get("workspaceTrusted"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(false);
+        *self.rules.never.lock().unwrap() = never;
+        *self.rules.can_ask.lock().unwrap() = params
+            .capabilities
+            .window
+            .as_ref()
+            .is_some_and(|w| w.show_message.is_some());
         *self.watch_dynamic.lock().unwrap() = params
             .capabilities
             .workspace
@@ -641,6 +901,7 @@ impl LanguageServer for Server {
                 "**/*.php",
                 // configurations, what they include and baselines, by whatever name
                 "**/*.neon*",
+                "**/*.rhai",
                 "**/composer.json",
                 "**/composer.lock",
                 "**/composer/installed.json",
@@ -730,6 +991,7 @@ impl LanguageServer for Server {
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
         let mut reload = false;
+        let mut rules_changed = false;
         let mut updates = Vec::new();
         for change in params.changes {
             let Some(path) =
@@ -747,6 +1009,11 @@ impl LanguageServer for Server {
                 reload = true;
                 continue;
             }
+            if name.ends_with(".rhai") {
+                let s = self.state.lock().unwrap();
+                rules_changed |= s.rules.iter().any(|r| r.path(&s.db) == &path);
+                continue;
+            }
             if !is_source_path(&path) {
                 continue;
             }
@@ -760,6 +1027,9 @@ impl LanguageServer for Server {
         if reload {
             self.load().await;
             return;
+        }
+        if rules_changed {
+            self.reload_rules().await;
         }
         self.write(|s| {
             for (path, text) in updates {

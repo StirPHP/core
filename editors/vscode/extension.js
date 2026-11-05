@@ -144,6 +144,8 @@ function createClient(command) {
     documentSelector,
     outputChannel: log,
     // the server registers its own file watchers
+    // an untrusted workspace's scripts never run, and the server doesn't ask about them
+    initializationOptions: { workspaceTrusted: vscode.workspace.isTrusted },
   };
   return new LanguageClient('stirphp', 'StirPHP', serverOptions, clientOptions);
 }
@@ -194,6 +196,7 @@ export async function activate(context) {
       }
       await checkForUpdate(true);
     }),
+    vscode.workspace.onDidGrantWorkspaceTrust(restart),
     vscode.workspace.onDidChangeConfiguration(async (e) => {
       if (e.affectsConfiguration('stirphp.server')) {
         await restart();

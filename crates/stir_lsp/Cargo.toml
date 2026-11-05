@@ -11,6 +11,7 @@ ls-types = "0.0.6"
 rustc-hash = "2.1.3"
 salsa = "0.28.5"
 serde_json = { version = "1.0.154", optional = true }
+sha2 = { version = "0.10.9", optional = true }
 smol_str = "0.3.7"
 stir_checker.workspace = true
 stir_db.workspace = true
@@ -27,7 +28,7 @@ tracing = { workspace = true, optional = true }
 default = ["server"]
 # The LSP server over stdio (tokio). Without it, only the editor features
 # (hover, completion, ...) are built, e.g. for WebAssembly.
-server = ["dep:serde_json", "dep:stir_project", "dep:tokio", "dep:tower-lsp-server", "dep:tracing"]
+server = ["dep:serde_json", "dep:sha2", "dep:stir_project", "dep:tokio", "dep:tower-lsp-server", "dep:tracing"]
 
 [lints]
 workspace = true
