@@ -331,14 +331,13 @@ pub fn deprecations(db: &dyn Db, ws: Workspace, file: SourceFile) -> Arc<Vec<Dia
                 let around = token
                     .parent_ancestors()
                     .find(|n| !matches!(n.kind(), NAME | NAME_REF | NAME_EXPR));
-                match around.map(|n| n.kind()) {
-                    Some(NEW_EXPR) => pass.class_name(
+                if around.is_some_and(|n| n.kind() == NEW_EXPR) {
+                    pass.class_name(
                         *range,
                         key,
                         |d| format!("new.{}", lower_first(d)),
                         |what, _| format!("Instantiation of {what}."),
-                    ),
-                    _ => {}
+                    );
                 }
             }
             Def::Local { .. } => {}
