@@ -121,6 +121,20 @@ fn values_can_only_grow_so_far() {
 }
 
 #[test]
+fn variables_and_functions_can_only_be_so_many() {
+    let lets: String = (0..=MAX_VARIABLES)
+        .map(|i| format!("let v{i} = 1;\n"))
+        .collect();
+    let m = message(&format!("fn main() {{ {lets} }}"));
+    assert!(m.contains("variables"), "{m}");
+    let fns: String = (0..=MAX_FUNCTIONS)
+        .map(|i| format!("fn f{i}() {{}}\n"))
+        .collect();
+    let error = run(&format!("{fns} fn main() {{}}")).unwrap_err();
+    assert!(error.message.contains("syntax error"), "{error:?}");
+}
+
+#[test]
 fn nesting_is_limited_when_compiling() {
     let depth = MAX_FN_EXPR_DEPTH + 10;
     let text = format!(

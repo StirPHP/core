@@ -6,7 +6,7 @@ use rustc_hash::FxHashSet;
 use stir_db::{Db, Diagnostic, FileOrigin, ScriptFile, SourceFile, Workspace};
 use stir_script::rhai::Dynamic;
 
-use super::{ENGINE, Node, ScriptCtx, ScriptFailure, compiled_script, node, script_index};
+use super::{ENGINE, Node, ScriptCtx, ScriptFailure, compiled_script, script_index};
 
 /// What rules found in a file.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -38,9 +38,6 @@ fn run_rules(db: &dyn Db, ws: Workspace, file: SourceFile) -> RuleCheck {
         let Some(rules) = index.visits.get(&syntax.kind()) else {
             continue;
         };
-        if node::php_kind(&syntax).is_none() {
-            continue;
-        }
         let Some(visited) = Node::new(parse.green(), file, &syntax) else {
             continue;
         };

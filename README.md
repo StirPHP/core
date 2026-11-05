@@ -100,10 +100,10 @@ parameters:
         exclude: ['vendor/**']      # globs left out
         composer: ../composer.json  # default: composer.json in the project folder
         baseline: stirphp-baseline.neon
+        rules: [rules/no_var_dump.rhai]  # see Custom rules
 ```
 
-An unknown key is an error. `rules` is accepted as well, and `stirphp init` writes an empty one, but nothing runs those
-rules yet.
+An unknown key is an error.
 
 PHPStan's parameters work in `stirphp.neon` too, so a project can keep its settings there and include PHPStan's:
 
@@ -158,9 +158,99 @@ differ from PHPStan's. So:
 The limits:
 
 - PHPStan extensions and custom rules are PHP code, which can't run in this engine. A project that relies on them, such
-  as framework extensions or strict rules, should run PHPStan alongside StirPHP. Until the rules that describe a
-  framework's magic have an equivalent here, expect errors PHPStan's extensions would have explained away.
+  as framework extensions or strict rules, should run PHPStan alongside StirPHP, or write what it needs as
+  [scripts](#custom-rules). Until a framework's magic is described that way, expect errors PHPStan's extensions would
+  have explained away.
 - The checks don't all exist yet, and those that exist don't always agree with PHPStan.
+
+## Custom rules
+
+Rules and framework knowledge are scripts in [Rhai](https://rhai.rs), listed in the configuration. Paths are relative to
+the file that lists them:
+
+```neon
+parameters:
+    stirphp:
+        rules:
+            - examples/rules/no_var_dump.rhai
+```
+
+A rule is a function named after the kind of node it wants to see, and only those nodes are visited:
+
+```rhai
+// Runs on every function call, and on nothing else.
+fn visit_func_call(node, ctx) {
+    if node.name.to_lower() == "var_dump" {
+        ctx.error("Don't leave var_dump in", "app.noVarDump");
+    }
+}
+```
+
+Reports go the way of any other diagnostic, under the identifier you give, so `@phpstan-ignore app.noVarDump`,
+`ignoreErrors` and baselines all apply. A report counts at every level unless it says otherwise, as in
+`ctx.error(message, identifier, #{ level: 6 })`, and `#{ node: other }` reports somewhere else than the node visited.
+`ctx.warning(..)` is the same at a lower severity.
+
+- **Kinds of node:** `func_call`, `method_call`, `static_call`, `new`, `property_fetch`, `static_property_fetch`,
+  `class_const_fetch`, `const_fetch`, `class`, `interface`, `trait`, `enum`, `function`, `method`, `property`, `variable`,
+  `assign`, `binary_op`, `echo`, `return`, `foreach` and so on. A wrong one is an error that lists them all.
+- **Nodes:** `node.kind`, `.name`, `.text`, `.range` (`start`, `end`, `line`, `column`), `.arguments`, `.children`,
+  `.receiver`.
+- **Types:** `ctx.get_type(node)` gives `to_string()`, `is_null()`, `is_nullable()`, `is_unknown()`, `is_string()`,
+  `is_int()`, `is_float()`, `is_bool()`, `is_array()`, `is_object()`, `is_subtype_of("Foo")`, `without_null()`,
+  `class_name`, `class_string`, `literal`, `members()`, `has_method("x")` and `has_property("x")`. Rhai reserves `type_of`
+  and `call`, so that's `get_type`, and a parameter can't be named `call`. Its map keys can't be `static` either.
+
+A hook tells the checker what it can't know from the code. These are PHPStan's dynamic return type extensions, answering
+with a PHPDoc type as a string, such as `"list<App\\User>"`. Names in it are complete, as no file's `use` applies:
+
+```rhai
+// `$container->get(Foo::class)` returns a `Foo`, and a subclass's `get` counts too.
+fn return_type_targets() {
+    #{ methods: ["App\\Container::get"] }
+}
+
+fn return_type_of_method(node, ctx) {
+    // nothing, for anything else: the declared return type stands
+    ctx.get_type(node.arguments[0]).class_string
+}
+```
+
+`return_type_targets()` can also list `static_methods` and `functions`, for `return_type_of_static_method` and
+`return_type_of_function`. `ctx.get_type` knows the receiver and the arguments of the call, and `ctx.declared_return_type`
+is what the signature says.
+
+Magic members are PHPStan's class reflection extensions: lookups, hover and completion see them on a class and its
+subclasses, as if `@property` and `@method` tags said so. Anything PHP itself declares comes first. A property's value is
+a type or `#{ type, read_only }`, a method's a return type or `#{ returns, params, is_static }`:
+
+```rhai
+// What `__get` and `__call` make available on a model and its subclasses.
+fn magic_members(class_name) {
+    if class_name == "App\\Model" {
+        #{
+            properties: #{ id: #{ type: "int", read_only: true } },
+            methods: #{ find: #{ returns: "?static", params: "int $id", is_static: true } },
+        }
+    }
+}
+```
+
+Scripts are sandboxed. They can't reach files, the network or other programs, have no clock, randomness, `import` or
+`eval`, and keep nothing between calls, so only their functions run and the same input gets the same answer. A call that
+takes over 1,000,000 operations, goes deeper than 64 calls or builds huge values fails. So does any other error in one:
+that's one `SPHP0070` at the script, and the script sits out that file while the analysis goes on. A script that can't be
+read or doesn't compile is `SPHP0071`. `print` goes to the log (`STIRPHP_LOG=stirphp::script=debug`), and
+`STIRPHP_LOG=info` says which scripts run.
+
+`stirphp check` runs what's configured, as you chose to run it in that project. An editor asks first: see
+[the extension's README](editors/vscode/README.md#custom-rules-and-workspace-trust). Other editors get the same question
+through `window/showMessageRequest`, and without an answer the scripts stay off. An editor that knows a workspace isn't
+trusted passes `"workspaceTrusted": false` in `initializationOptions`, and then they never run.
+
+On the corpus, one rule on every function call and one return type hook add under 2% to the time of a run, at about 20
+microseconds per call of CPU time. So the editor runs them as part of its diagnostics, per file, without a pass of their
+own.
 
 ## PHP versions
 
@@ -210,7 +300,7 @@ source, each with its own configuration, it reports about 8500, 1300 and 700 pro
 include false alarms, at a rate nobody has measured yet. Reducing them is the current work. If `stirphp check` is wrong
 about your code, please [open an issue](https://github.com/StirPHP/core/issues) with a small example.
 
-Not there yet: formatting, quick fixes and refactoring beyond rename, framework support, and custom rules.
+Not there yet: formatting, quick fixes and refactoring beyond rename, and framework support out of the box.
 
 ## Layout
 
@@ -223,7 +313,8 @@ Not there yet: formatting, quick fixes and refactoring beyond rename, framework 
 | `stir_db` | salsa database: files, parsing, diagnostics, settings |
 | `stir_hir` | declarations, name resolution, and PHPDoc and stub attribute lowering |
 | `stir_stubs` | embedded phpstorm-stubs |
-| `stir_checker` | the type checker |
+| `stir_checker` | the type checker, and what scripts see of a project |
+| `stir_script` | the sandbox scripts run in |
 | `stir_composer` | reads Composer's files |
 | `stir_project` | configuration, discovery, baselines, `init` and workspace loading |
 | `stir_lsp` | the language server |

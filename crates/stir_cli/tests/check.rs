@@ -920,3 +920,91 @@ fn magic_members_are_found_by_the_checker() {
     assert_eq!(found[0].0, "argument.type", "{found:?}");
     assert_eq!(found[1].0, "property.notFound", "{found:?}");
 }
+
+#[test]
+fn the_examples_do_what_the_readme_says() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let readme = fs::read_to_string(root.join("README.md")).unwrap();
+    let rules = root.join("examples/rules").canonicalize().unwrap();
+    let list: Vec<String> = [
+        "no_var_dump",
+        "container_return_type",
+        "model_magic_members",
+    ]
+    .iter()
+    .map(|name| {
+        let path = rules.join(format!("{name}.rhai"));
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            readme.contains(text.trim_end()),
+            "the README has {name} differently"
+        );
+        format!("            - {}\n", path.display())
+    })
+    .collect();
+    let tmp = project();
+    write(
+        &tmp.path().join("stirphp.neon"),
+        &format!(
+            "parameters:\n    stirphp:\n        rules:\n{}",
+            list.concat()
+        ),
+    );
+    write(
+        &tmp.path().join("src/main.php"),
+        r#"<?php
+declare(strict_types=1);
+namespace App;
+class User { public function name(): string { return ''; } }
+class Container { public function get(string $id): mixed { return null; } }
+class Model {}
+class Post extends Model {}
+function run(Container $c): void {
+    var_dump(1);
+    $c->get(User::class)->name();
+    $c->get(User::class)->nope();
+    Post::find(1)?->id;
+    Post::find('x');
+    $post = new Post();
+    $post->id = 2;
+}
+"#,
+    );
+    let out = stirphp()
+        .current_dir(tmp.path())
+        .args(["check", "--format", "json", "--level", "5"])
+        .output()
+        .unwrap();
+    let codes: Vec<String> = codes_of(&out.stdout).into_iter().map(|(c, _)| c).collect();
+    assert_eq!(
+        codes,
+        [
+            "app.noVarDump",
+            "method.notFound",
+            "argument.type",
+            "assign.propertyReadOnly",
+        ]
+    );
+}
+
+#[test]
+fn what_a_script_prints_is_not_output() {
+    let tmp =
+        project_with_rule(r#"fn visit_echo(node, ctx) { print("printed"); debug("debugged"); }"#);
+    stirphp()
+        .current_dir(tmp.path())
+        .arg("check")
+        .assert()
+        .success()
+        .stdout(contains("printed").not().and(contains("debugged").not()))
+        .stderr(contains("printed").not().and(contains("debugged").not()));
+    // it's in the log, for whoever wants it, as is what runs
+    stirphp()
+        .current_dir(tmp.path())
+        .env("STIRPHP_LOG", "info,stirphp::script=debug")
+        .arg("check")
+        .assert()
+        .success()
+        .stdout(contains("printed").not())
+        .stderr(contains("printed").and(contains("rule.rhai")));
+}
