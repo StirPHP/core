@@ -126,6 +126,8 @@ pub struct MemberInfo {
     pub ty: MemberTy,
     pub is_static: bool,
     pub visibility: stir_hir::Visibility,
+    /// It, or its class, is marked deprecated.
+    pub deprecated: bool,
 }
 
 /// Every member of `ty` (a class type), nearest declaration first.
@@ -163,14 +165,19 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
                 ty: MemberTy::Method(sig),
                 is_static: m.mods.is_static,
                 visibility: m.mods.visibility,
+                deprecated: m.deprecated.is_some() || c.def.deprecated.is_some(),
             };
             push(&mut out, member, 0);
         }
-        let props = c
-            .def
-            .properties
-            .iter()
-            .map(|p| (p.name.clone(), p.mods.is_static, p.mods.visibility));
+        let props = c.def.properties.iter().map(|p| {
+            let deprecated = p.deprecated.is_some() || c.def.deprecated.is_some();
+            (
+                p.name.clone(),
+                p.mods.is_static,
+                p.mods.visibility,
+                deprecated,
+            )
+        });
         let promoted = c
             .def
             .methods
@@ -180,9 +187,10 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
             .filter_map(|p| {
                 p.promoted
                     .as_ref()
-                    .map(|pr| (p.name.clone(), false, pr.mods.visibility))
+                    .map(|pr| (p.name.clone(), false, pr.mods.visibility, false))
             });
-        for (pname, is_static, visibility) in props.chain(promoted).collect::<Vec<_>>() {
+        for (pname, is_static, visibility, deprecated) in props.chain(promoted).collect::<Vec<_>>()
+        {
             let Some(p) = ctx.find_property(anc, &pname) else {
                 continue;
             };
@@ -195,6 +203,7 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
                 },
                 is_static,
                 visibility,
+                deprecated,
             };
             push(&mut out, member, 1);
         }
@@ -206,6 +215,7 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
                 ty: MemberTy::Const(ty),
                 is_static: true,
                 visibility: k.mods.visibility,
+                deprecated: k.deprecated.is_some() || c.def.deprecated.is_some(),
             };
             push(&mut out, member, 2);
         }
@@ -216,6 +226,7 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
                 ty: MemberTy::Case,
                 is_static: true,
                 visibility: stir_hir::Visibility::Public,
+                deprecated: k.deprecated.is_some() || c.def.deprecated.is_some(),
             };
             push(&mut out, member, 2);
         }
@@ -239,6 +250,7 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
                         ty: MemberTy::Method(sig),
                         is_static: m.mods.is_static,
                         visibility: m.mods.visibility,
+                        deprecated: false,
                     });
                 }
             }
@@ -255,6 +267,7 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
                         },
                         is_static: false,
                         visibility: p.mods.visibility,
+                        deprecated: false,
                     });
                 }
             }

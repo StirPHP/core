@@ -48,13 +48,32 @@ pub fn hover(
     })
 }
 
-fn with_doc(code: String, owner: Option<&str>, doc: Option<&stir_hir::DocText>) -> String {
+/// A declaration: what it's in, its code, what's up with it, and what its comment says.
+fn with_notes(
+    code: String,
+    owner: Option<&str>,
+    doc: Option<&stir_hir::DocText>,
+    deprecated: Option<&str>,
+    throws: Option<&Ty>,
+) -> String {
     let mut out = String::new();
     if let Some(o) = owner.filter(|o| !o.is_empty()) {
         out.push_str(&render::code(o));
         out.push('\n');
     }
     out.push_str(&render::code(&code));
+    if let Some(reason) = deprecated {
+        out.push_str("\n\n**Deprecated**");
+        if !reason.is_empty() {
+            out.push_str(": ");
+            out.push_str(reason);
+        }
+    }
+    // a comment that has the tag shows it anyway
+    let documented = |tag: &str| doc.is_some_and(|d| d.text.contains(tag));
+    if let Some(ty) = throws.filter(|_| !documented("@throws")) {
+        out.push_str(&format!("\n\n**Throws** `{ty}`"));
+    }
     if let Some(d) = doc {
         let d = render::doc(d);
         if !d.is_empty() {
@@ -109,10 +128,13 @@ pub fn describe(
             let f = ctx.function_def(*loc);
             let sig = model_api::function_info(&ctx, *loc);
             let ns = f.name.namespace();
-            Some(with_doc(
+            let throws = f.sig.throws.as_ref().map(|t| ctx.lower_plain(t));
+            Some(with_notes(
                 render::signature(&sig, "function").label,
                 Some(ns),
                 f.doc.as_ref(),
+                f.deprecated.as_deref(),
+                throws.as_ref(),
             ))
         }
         Def::Const(loc) => {
@@ -126,7 +148,13 @@ pub fn describe(
                 Some(v) => format!("const {} = {v}", c.name.short()),
                 None => format!("const {}", c.name.short()),
             };
-            Some(with_doc(code, Some(c.name.namespace()), None))
+            Some(with_notes(
+                code,
+                Some(c.name.namespace()),
+                None,
+                c.deprecated.as_deref(),
+                None,
+            ))
         }
 
         Def::Class(key) => {
@@ -153,10 +181,12 @@ pub fn describe(
                 code.push_str(keyword);
                 code.push_str(&list.join(", "));
             }
-            Some(with_doc(
+            Some(with_notes(
                 code,
                 Some(model.def.name.namespace()),
                 model.def.doc.as_ref(),
+                model.def.deprecated.as_deref(),
+                None,
             ))
         }
         Def::Member { class, kind, name } => {
@@ -171,10 +201,13 @@ pub fn describe(
                     } else {
                         "function"
                     };
-                    Some(with_doc(
+                    let throws = m.sig.throws.as_ref().map(|t| ctx.lower_plain(t));
+                    Some(with_notes(
                         render::signature(&sig, kw).label,
                         Some(owner),
                         m.doc.as_ref(),
+                        m.deprecated.as_deref(),
+                        throws.as_ref(),
                     ))
                 }
                 MemberKind::Property => {
@@ -182,19 +215,42 @@ pub fn describe(
                     let ty = narrowed.filter(|t| !t.is_error()).unwrap_or(p.ty);
                     let readonly = if p.immutable { "readonly " } else { "" };
                     let code = format!("{} {readonly}{} ${name}", visibility(p.visibility), ty);
-                    let doc = model
-                        .def
-                        .properties
-                        .iter()
-                        .find(|q| &q.name == name)
-                        .and_then(|q| q.doc.as_ref());
-                    Some(with_doc(code, Some(owner), doc))
+                    let def = model.def.properties.iter().find(|q| &q.name == name);
+                    let doc = def.and_then(|q| q.doc.as_ref());
+                    let deprecated = def.and_then(|q| q.deprecated.as_deref());
+                    Some(with_notes(code, Some(owner), doc, deprecated, None))
                 }
                 MemberKind::Const => {
                     let ty = ctx.find_const(&model.self_ty(), name)?;
-                    Some(with_doc(format!("const {} {name}", ty), Some(owner), None))
+                    let deprecated = model
+                        .def
+                        .consts
+                        .iter()
+                        .find(|k| &k.name == name)
+                        .and_then(|k| k.deprecated.as_deref());
+                    Some(with_notes(
+                        format!("const {} {name}", ty),
+                        Some(owner),
+                        None,
+                        deprecated,
+                        None,
+                    ))
                 }
-                MemberKind::Case => Some(with_doc(format!("case {name}"), Some(owner), None)),
+                MemberKind::Case => {
+                    let deprecated = model
+                        .def
+                        .cases
+                        .iter()
+                        .find(|k| &k.name == name)
+                        .and_then(|k| k.deprecated.as_deref());
+                    Some(with_notes(
+                        format!("case {name}"),
+                        Some(owner),
+                        None,
+                        deprecated,
+                        None,
+                    ))
+                }
             }
         }
     }

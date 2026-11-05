@@ -1151,3 +1151,72 @@ fn completion_latency() {
         all[0]
     );
 }
+
+// ------------------------------------------------------------------ deprecated and throws
+
+const OLD: &str = "<?php
+namespace Old;
+/** @deprecated use something else */
+function gone(): void {}
+/**
+ * @deprecated since 2
+ */
+class Box {
+    /** @deprecated no more */
+    public int $n = 0;
+    /** @deprecated */
+    public const X = 1;
+    /** @throws \\RuntimeException */
+    public function risky(): void {}
+    #[\\Deprecated(message: 'stop', since: '1.0')]
+    public function attr(): void {}
+    public function fine(): void {}
+}
+class Now {
+    #[\\Deprecated(message: 'stop', since: '1.0')]
+    public function attr(): void {}
+    public function fine(): void {}
+    /** @throws \\RuntimeException */
+    public function risky(): void {}
+}
+";
+
+#[test]
+fn hover_says_what_is_deprecated_and_what_it_throws() {
+    let f = Fixture::new(&format!("{OLD}go<|>ne();\n"));
+    assert!(
+        f.hover().contains("**Deprecated**: use something else"),
+        "{}",
+        f.hover()
+    );
+    let f = Fixture::new(&format!("{OLD}function t(Now $b) {{ $b->at<|>tr(); }}\n"));
+    assert!(f.hover().contains("**Deprecated**: stop"), "{}", f.hover());
+    let f = Fixture::new(&format!("{OLD}function t(Now $b) {{ $b->fi<|>ne(); }}\n"));
+    assert!(!f.hover().contains("**Deprecated**"), "{}", f.hover());
+    let f = Fixture::new(&format!("{OLD}function t(Now $b) {{ $b->ri<|>sky(); }}\n"));
+    assert!(
+        f.hover().contains("@throws \\RuntimeException"),
+        "{}",
+        f.hover()
+    );
+}
+
+#[test]
+fn completion_says_what_is_deprecated() {
+    let f = Fixture::new(&format!("{OLD}function t(Box $b) {{ $b-><|> }}\n"));
+    let (file, offset) = f.at();
+    let c = complete::complete(&f.db, f.ws, file, offset);
+    let deprecated = |l: &str| c.items.iter().find(|i| i.label == l).unwrap().deprecated;
+    // the class is deprecated, so all of it is
+    assert!(deprecated("fine"));
+    let f = Fixture::new(&format!("{OLD}function t(Now $b) {{ $b-><|> }}\n"));
+    let (file, offset) = f.at();
+    let c = complete::complete(&f.db, f.ws, file, offset);
+    let deprecated = |l: &str| c.items.iter().find(|i| i.label == l).unwrap().deprecated;
+    assert!(deprecated("attr"));
+    assert!(!deprecated("fine"));
+    let f = Fixture::new(&format!("{OLD}gon<|>\n"));
+    let (file, offset) = f.at();
+    let c = complete::complete(&f.db, f.ws, file, offset);
+    assert!(c.items.iter().any(|i| i.label == "gone" && i.deprecated));
+}

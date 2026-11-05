@@ -23,6 +23,7 @@ pub struct Symbol {
     pub kind: SymbolKind,
     pub full_range: TextRange,
     pub focus_range: TextRange,
+    pub deprecated: bool,
     pub children: Vec<Symbol>,
 }
 
@@ -33,6 +34,7 @@ fn leaf(name: &str, kind: SymbolKind, full: TextRange, focus: TextRange) -> Symb
         kind,
         full_range: full.cover(focus),
         focus_range: focus,
+        deprecated: false,
         children: Vec::new(),
     }
 }
@@ -56,20 +58,24 @@ pub fn document_symbols(db: &dyn Db, file: SourceFile) -> Vec<Symbol> {
     };
     let mut out = Vec::new();
     for f in &items.functions {
-        out.push(leaf(
+        let mut symbol = leaf(
             f.name.short(),
             SymbolKind::Function,
             f.ptr.text_range(),
             f.name_range,
-        ));
+        );
+        symbol.deprecated = f.deprecated.is_some();
+        out.push(symbol);
     }
     for c in &items.consts {
-        out.push(leaf(
+        let mut symbol = leaf(
             c.name.short(),
             SymbolKind::Constant,
             c.range,
             name_in(c.range, c.name.short()),
-        ));
+        );
+        symbol.deprecated = c.deprecated.is_some();
+        out.push(symbol);
     }
 
     for c in items.classes.iter().filter(|c| !c.is_anonymous()) {
@@ -79,38 +85,48 @@ pub fn document_symbols(db: &dyn Db, file: SourceFile) -> Vec<Symbol> {
             c.ptr.text_range(),
             c.name_range,
         );
+        s.deprecated = c.deprecated.is_some();
+        let child = |name: &str, kind, full, focus, deprecated: &Option<smol_str::SmolStr>| {
+            let mut symbol = leaf(name, kind, full, focus);
+            symbol.deprecated = deprecated.is_some();
+            symbol
+        };
 
         for p in c.properties.iter().filter(|p| !p.magic) {
-            s.children.push(leaf(
+            s.children.push(child(
                 &p.name,
                 SymbolKind::Property,
                 p.range,
                 name_in(p.range, &p.name),
+                &p.deprecated,
             ));
         }
 
         for k in &c.consts {
-            s.children.push(leaf(
+            s.children.push(child(
                 &k.name,
                 SymbolKind::Constant,
                 k.range,
                 name_in(k.range, &k.name),
+                &k.deprecated,
             ));
         }
         for k in &c.cases {
-            s.children.push(leaf(
+            s.children.push(child(
                 &k.name,
                 SymbolKind::EnumMember,
                 k.range,
                 name_in(k.range, &k.name),
+                &k.deprecated,
             ));
         }
         for m in c.methods.iter().filter(|m| !m.magic) {
-            s.children.push(leaf(
+            s.children.push(child(
                 &m.name,
                 SymbolKind::Method,
                 m.ptr.text_range(),
                 m.name_range,
+                &m.deprecated,
             ));
         }
         s.children.sort_by_key(|c| c.full_range.start());
@@ -128,6 +144,7 @@ pub struct WorkspaceSymbol {
     pub kind: SymbolKind,
     pub file: SourceFile,
     pub range: TextRange,
+    pub deprecated: bool,
 }
 
 /// Declarations of the project and its dependencies whose
@@ -144,7 +161,7 @@ pub fn workspace_symbols(db: &dyn Db, ws: Workspace, query: &str) -> Vec<Workspa
             continue;
         }
         let items = file_items(db, file);
-        let mut push = |name: &stir_hir::name::Fqn, kind, range| {
+        let mut push = |name: &stir_hir::name::Fqn, kind, range, deprecated: bool| {
             if matches(name.short()) {
                 out.push(WorkspaceSymbol {
                     name: name.short().to_owned(),
@@ -152,18 +169,34 @@ pub fn workspace_symbols(db: &dyn Db, ws: Workspace, query: &str) -> Vec<Workspa
                     kind,
                     file,
                     range,
+                    deprecated,
                 });
             }
         };
         for f in &items.functions {
-            push(&f.name, SymbolKind::Function, f.name_range);
+            push(
+                &f.name,
+                SymbolKind::Function,
+                f.name_range,
+                f.deprecated.is_some(),
+            );
         }
         for c in items.classes.iter().filter(|c| !c.is_anonymous()) {
-            push(&c.name, class_kind(c.kind), c.name_range);
+            push(
+                &c.name,
+                class_kind(c.kind),
+                c.name_range,
+                c.deprecated.is_some(),
+            );
         }
 
         for c in &items.consts {
-            push(&c.name, SymbolKind::Constant, c.range);
+            push(
+                &c.name,
+                SymbolKind::Constant,
+                c.range,
+                c.deprecated.is_some(),
+            );
         }
     }
     // project symbols first, then shorter names

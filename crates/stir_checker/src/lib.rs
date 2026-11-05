@@ -15,6 +15,7 @@ use stir_db::{Db, Diagnostic, FileOrigin, IgnoreRule, SourceFile, Workspace};
 
 mod body;
 pub mod codes;
+pub mod deprecations;
 mod infer;
 pub mod levels;
 mod model;
@@ -74,6 +75,9 @@ pub fn checked_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> FileCheck {
         let rules = script::rule_check(db, ws, file);
         diags.extend(rules.diags.iter().cloned());
         script_failures.extend(rules.failures.iter().cloned());
+        if settings.deprecations {
+            diags.extend(deprecations::deprecations(db, ws, file).iter().cloned());
+        }
     }
     levels::filter_php(&mut diags, settings);
     diags.sort_by_key(|d| (d.range.start(), d.range.end()));

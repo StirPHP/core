@@ -1076,3 +1076,33 @@ async fn formatting_a_document_and_a_range() {
         .await;
     assert_eq!(edits, json!(null));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn what_is_deprecated_is_struck_through() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    write(&root.join("composer.json"), "{}");
+    let path = root.join("a.php");
+    let text = "<?php\n/** @deprecated */\nfunction old(): void {}\nold();\n";
+    write(&path, text);
+    let doc = uri(&path);
+
+    let mut c = Client::start();
+    c.request(
+        "initialize",
+        json!({"processId": null, "rootUri": uri(&root), "capabilities": {}}),
+    )
+    .await;
+    c.notify("initialized", json!({})).await;
+    c.notify(
+        "textDocument/didOpen",
+        json!({"textDocument": {"uri": doc, "languageId": "php", "version": 1, "text": text}}),
+    )
+    .await;
+    let diags = c.diagnostics(&doc).await;
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0]["code"], "function.deprecated");
+    assert_eq!(diags[0]["severity"], 4, "a hint");
+    assert_eq!(diags[0]["tags"], json!([2]), "the tag for deprecated");
+    assert_eq!(diags[0]["range"]["start"]["line"], 3);
+}

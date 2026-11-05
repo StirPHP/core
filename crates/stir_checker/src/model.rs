@@ -905,6 +905,11 @@ impl<'db> Ctx<'db> {
 
     // ---------------------------------------------------------------- signatures
 
+    /// `t`, against nothing in particular: for showing.
+    pub fn lower_plain(&self, t: &TypeRef) -> Ty {
+        self.lower(t, &LowerCx::default(), &mut Vec::new())
+    }
+
     pub fn function_sig(&self, loc: ItemLoc) -> Rc<FnSig> {
         if let Some(s) = self.fn_sigs.borrow().get(&(loc.file, loc.index)) {
             return s.clone();

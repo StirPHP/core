@@ -30,8 +30,6 @@ pub struct Config {
     pub indent: Option<FormatIndent>,
     /// Report the use of what's deprecated in `stirphp check` too.
     pub deprecations: bool,
-    /// Report what a function can throw and doesn't say it does.
-    pub checked_exceptions: bool,
 }
 
 impl Default for Config {
@@ -45,7 +43,6 @@ impl Default for Config {
             rules: Vec::new(),
             indent: None,
             deprecations: false,
-            checked_exceptions: false,
         }
     }
 }
@@ -66,7 +63,6 @@ impl Config {
             rules: own.rules,
             indent: own.indent,
             deprecations: own.deprecations,
-            checked_exceptions: own.checked_exceptions,
         })
     }
 }

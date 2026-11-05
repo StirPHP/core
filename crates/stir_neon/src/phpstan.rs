@@ -99,8 +99,6 @@ pub struct StirphpParameters {
     pub indent: Option<FormatIndent>,
     /// `deprecations`: report the use of what's deprecated on the command line too.
     pub deprecations: bool,
-    /// `checkedExceptions`: report what a function can throw and doesn't say it does.
-    pub checked_exceptions: bool,
 }
 
 /// How a level of indentation is written.
@@ -435,7 +433,6 @@ impl PhpstanConfig {
                     });
                 }
                 "deprecations" => out.deprecations = boolean(v, &k)?,
-                "checkedExceptions" => out.checked_exceptions = boolean(v, &k)?,
                 other => return Err(self.invalid(KEY, format!("unknown key `{other}`"))),
             }
         }

@@ -498,7 +498,9 @@ fn member_items(
                 m.name.to_string(),
             ),
         };
-        out.push(Item::new(m.name.to_string(), kind, insert).detail(detail));
+        let mut item = Item::new(m.name.to_string(), kind, insert).detail(detail);
+        item.deprecated = m.deprecated;
+        out.push(item);
     }
 }
 
@@ -691,6 +693,13 @@ fn global_items(
         item.order = order as u32;
         item.qualified = Some(name.as_str().to_owned());
         item.import = import;
+        let items = file_items(db, c.symbol.file);
+        let index = c.symbol.index as usize;
+        item.deprecated = match c.symbol.kind {
+            SymbolKind::Class(_) => items.classes[index].deprecated.is_some(),
+            SymbolKind::Function => items.functions[index].deprecated.is_some(),
+            SymbolKind::Const => items.consts[index].deprecated.is_some(),
+        };
         out.items.push(item);
     }
 }

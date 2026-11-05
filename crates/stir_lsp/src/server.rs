@@ -240,6 +240,8 @@ fn lsp_diagnostic(
         source: Some("stirphp".into()),
         message,
         related_information: related,
+        tags: stir_checker::deprecations::is_deprecation(&d.code)
+            .then(|| vec![DiagnosticTag::DEPRECATED]),
         ..Default::default()
     }
 }
@@ -686,7 +688,17 @@ async fn diagnostics_loop(
                     .iter()
                     .map(|&f| {
                         let path = f.path(&db).clone();
-                        let diags = stir_checker::check_file(&db, ws, f).as_ref().clone();
+                        let mut diags = stir_checker::check_file(&db, ws, f).as_ref().clone();
+                        // whatever the project says of it, what's deprecated gets struck through
+                        if !ws.settings(&db).deprecations {
+                            let marks = stir_checker::deprecations::deprecations(&db, ws, f);
+                            diags.extend(
+                                marks
+                                    .iter()
+                                    .cloned()
+                                    .map(|d| d.with_severity(Severity::Hint)),
+                            );
+                        }
                         let lsp = to_lsp(&path, f.text(&db), &diags);
                         (path, diags, lsp)
                     })
@@ -757,8 +769,8 @@ fn document_symbol(s: symbols::Symbol, map: &LineMap) -> DocumentSymbol {
         name: s.name,
         detail: s.detail,
         kind: symbol_kind(s.kind),
-        tags: None,
-        deprecated: None,
+        tags: s.deprecated.then(|| vec![SymbolTag::DEPRECATED]),
+        deprecated: s.deprecated.then_some(true),
         range: map.range(s.full_range),
         selection_range: map.range(s.focus_range),
         children: Some(
@@ -1600,6 +1612,7 @@ impl LanguageServer for Server {
                     .items
                     .into_iter()
                     .map(|i| CompletionItem {
+                        deprecated: i.deprecated.then_some(true),
                         filter_text: Some(i.label.clone()),
                         sort_text: Some(format!("{}{:04}{}", i.rank, i.order, i.label)),
                         kind: Some(completion_kind(i.kind)),
@@ -1724,8 +1737,8 @@ impl LanguageServer for Server {
                     Some(SymbolInformation {
                         name: s.name,
                         kind: symbol_kind(s.kind),
-                        tags: None,
-                        deprecated: None,
+                        tags: s.deprecated.then(|| vec![SymbolTag::DEPRECATED]),
+                        deprecated: s.deprecated.then_some(true),
                         location: location(db, s.file, s.range, enc)?,
                         container_name: (!s.container.is_empty()).then_some(s.container),
                     })

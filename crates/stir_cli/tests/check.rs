@@ -1121,3 +1121,28 @@ fn stub_files_say_what_declarations_do_not() {
         "{diags}"
     );
 }
+
+#[test]
+fn deprecations_are_reported_when_asked_for() {
+    let tmp = project();
+    write(
+        &tmp.path().join("src/a.php"),
+        "<?php\n/** @deprecated */\nfunction old(): void {}\nold();\n",
+    );
+    stirphp()
+        .current_dir(tmp.path())
+        .arg("check")
+        .assert()
+        .success()
+        .stdout(contains("No problems found"));
+    write(
+        &tmp.path().join("stirphp.neon"),
+        "parameters:\n    stirphp:\n        srcDir: src\n        deprecations: true\n",
+    );
+    stirphp()
+        .current_dir(tmp.path())
+        .args(["check", "--format", "json"])
+        .assert()
+        .stdout(contains("function.deprecated"))
+        .stdout(contains("\"severity\": \"warning\""));
+}

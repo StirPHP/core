@@ -505,6 +505,7 @@ async fn settings_from(
             php.extend(files);
         }
     }
+    settings.deprecations = project.config.deprecations;
     let Some(config) = config else {
         return (settings, ignore_notice(skipped, &php));
     };
