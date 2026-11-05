@@ -192,7 +192,8 @@ fn an_attribute_on_its_own_line_is_a_comment_before_8_0() {
     let file = SourceFile::new(
         &db,
         "/a.php".into(),
-        "<?php\n#[A]\nfunction f() {}\nfunction g(#[B] $x) {}\n#[\n  C\n]\nfunction h() {}\n"
+        "<?php\n#[A]\nfunction f() {}\nfunction g(#[B] $x) {}\n#[\n  C\n]\nfunction h() {}\n\
+         class D implements Countable {\n    #[\\ReturnTypeWillChange]\n    function count() {}\n}\n"
             .to_owned(),
         FileOrigin::Source,
     );

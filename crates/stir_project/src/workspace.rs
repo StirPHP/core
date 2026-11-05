@@ -5,9 +5,11 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::{Autoload, Composer, Project};
+use aho_corasick::AhoCorasick;
 use anyhow::Context as _;
 use futures::{StreamExt as _, TryStreamExt as _};
 use stir_composer::{Exclusions, InstallState};
@@ -76,12 +78,12 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         source_paths.extend(sources_elsewhere(project, composer).await?);
     }
 
-    let source_texts: Vec<(PathBuf, String)> =
+    let source_texts: Vec<(PathBuf, Arc<str>)> =
         futures::stream::iter(source_paths.into_iter().map(|path| async move {
             let text = read_lossy(&path)
                 .await
                 .with_context(|| format!("failed to read `{}`", path.display()))?;
-            anyhow::Ok((path, text))
+            anyhow::Ok((path, Arc::from(text)))
         }))
         .buffered(READ_CONCURRENCY)
         .try_collect()
@@ -96,8 +98,7 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         if vendor_dir.is_dir() && !vendor_dir.join("composer/installed.json").is_file() {
             autoload.classmap_paths.push(vendor_dir.clone());
         }
-        let own: Vec<(PathBuf, String)> = source_texts.clone();
-        let paths = vendor_paths(autoload, own).await?;
+        let paths = vendor_paths(autoload, source_texts.clone()).await?;
         read_vendor(paths).await
     } else {
         Vec::new()
@@ -107,7 +108,7 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
     let mut files = Vec::new();
     let mut sources = Vec::new();
     for (path, text) in source_texts {
-        let file = SourceFile::new(&db, path, text, FileOrigin::Source);
+        let file = SourceFile::new(&db, path, text.to_string(), FileOrigin::Source);
         sources.push(file);
         files.push(file);
     }
@@ -404,7 +405,7 @@ fn settings_from(
 /// leaves out is skipped, unless autoloading would find it as a class the project names.
 async fn vendor_paths(
     autoload: Autoload,
-    own: Vec<(PathBuf, String)>,
+    own: Vec<(PathBuf, Arc<str>)>,
 ) -> anyhow::Result<Vec<PathBuf>> {
     tokio::task::spawn_blocking(move || {
         let exclusions = autoload.exclusions();
@@ -442,19 +443,16 @@ async fn vendor_paths(
             }
         }
 
+        let own_paths: BTreeSet<&Path> = own.iter().map(|(p, _)| p.as_path()).collect();
+        excluded.retain(|p| !own_paths.contains(p.as_path()));
         if !excluded.is_empty() {
             let classes: Vec<(String, &PathBuf)> = excluded
                 .iter()
                 .filter_map(|p| Some((autoload.class_of_file(p)?, p)))
                 .collect();
-            if !classes.is_empty() {
-                let named = names_in(own.iter().map(|(_, text)| text.as_str()));
-                for (class, path) in classes {
-                    if named.contains(class.as_str())
-                        && let Ok(path) = std::fs::canonicalize(path)
-                    {
-                        found.insert(path);
-                    }
+            for path in named_in(&classes, &own) {
+                if let Ok(path) = std::fs::canonicalize(path) {
+                    found.insert(path);
                 }
             }
         }
@@ -469,13 +467,29 @@ async fn vendor_paths(
     .map_err(Into::into)
 }
 
-/// The qualified names in `texts`, without a leading `\`.
-fn names_in<'a>(texts: impl Iterator<Item = &'a str>) -> std::collections::HashSet<&'a str> {
-    let is_name = |c: char| c.is_alphanumeric() || c == '_' || c == '\\';
-    texts
-        .flat_map(|text| text.split(move |c: char| !is_name(c)))
-        .filter(|word| word.contains('\\'))
-        .map(|word| word.trim_start_matches('\\'))
+/// Those of `classes` whose names are in the text of one of the files `own`. All searched at once:
+/// a project's sources can be large.
+fn named_in<'a>(
+    classes: &[(String, &'a PathBuf)],
+    own: &[(PathBuf, Arc<str>)],
+) -> Vec<&'a PathBuf> {
+    if classes.is_empty() {
+        return Vec::new();
+    }
+    let Ok(searcher) = AhoCorasick::new(classes.iter().map(|(class, _)| class)) else {
+        return Vec::new();
+    };
+    let mut found = vec![false; classes.len()];
+    for (_, text) in own {
+        for m in searcher.find_overlapping_iter(&**text) {
+            found[m.pattern().as_usize()] = true;
+        }
+    }
+    classes
+        .iter()
+        .zip(found)
+        .filter(|(_, named)| *named)
+        .map(|((_, path), _)| *path)
         .collect()
 }
 

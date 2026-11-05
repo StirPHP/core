@@ -1340,6 +1340,7 @@ dependencies = [
 name = "stir_project"
 version = "0.1.21"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "futures",
  "globset",

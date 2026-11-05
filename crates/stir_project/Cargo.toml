@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+aho-corasick = "1.1.4"
 anyhow.workspace = true
 futures = "0.3.34"
 globset = "0.4.21"

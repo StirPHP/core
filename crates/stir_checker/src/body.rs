@@ -369,7 +369,16 @@ impl<'a, 'db> Checker<'a, 'db> {
         };
         if !available.covers(versions) {
             let message = crate::php_version::library_message(what, available, versions);
-            self.error(range, codes::PHP_LIBRARY_VERSION, message);
+            // what isn't installed yet may be a polyfill of it
+            self.diags.push(
+                Diagnostic::error(
+                    self.path.clone(),
+                    range,
+                    codes::PHP_LIBRARY_VERSION,
+                    message,
+                )
+                .with_symbol(what.trim_matches('`')),
+            );
         }
     }
 

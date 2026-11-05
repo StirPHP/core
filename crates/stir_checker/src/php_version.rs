@@ -708,12 +708,38 @@ impl SyntaxPass<'_> {
                 && (line_rest.is_empty()
                     || line_rest.starts_with("//")
                     || line_rest.starts_with('#'));
-            if alone {
-                self.warn(range, ATTRIBUTES, "older versions read it as a comment");
-            } else {
+            if !alone {
                 self.report(range, ATTRIBUTES);
+            } else if !self.only_php_attributes(&group) {
+                self.warn(range, ATTRIBUTES, "older versions read it as a comment");
             }
         }
+    }
+
+    /// PHP's own attributes are made to be written for versions that skip them.
+    fn only_php_attributes(&self, group: &SyntaxNode) -> bool {
+        group.children_of(ATTRIBUTE).iter().all(|attr| {
+            self.attribute_name(attr).is_some_and(|name| {
+                matches!(
+                    name.as_str(),
+                    "attribute"
+                        | "allowdynamicproperties"
+                        | "deprecated"
+                        | "nodiscard"
+                        | "override"
+                        | "returntypewillchange"
+                        | "sensitiveparameter"
+                )
+            })
+        })
+    }
+
+    /// The lowercase name an attribute resolves to.
+    fn attribute_name(&self, attr: &SyntaxNode) -> Option<smol_str::SmolStr> {
+        let name = attr.child(NAME_REF)?;
+        let items = stir_hir::file_items(self.db, self.file);
+        let scope = items.scope_at(attr.text_range().start());
+        Some(scope.resolve_class(name.text().to_string().trim()).key())
     }
 
     /// PHP doesn't look at `#[\Override]` before 8.3, so code may use it for newer versions; a
@@ -722,13 +748,7 @@ impl SyntaxPass<'_> {
         if self.versions.min >= OVERRIDE_ATTRIBUTE.since {
             return;
         }
-        let Some(name) = node.child(NAME_REF) else {
-            return;
-        };
-        let items = stir_hir::file_items(self.db, self.file);
-        let scope = items.scope_at(node.text_range().start());
-        let fqn = scope.resolve_class(name.text().to_string().trim());
-        if fqn.key() == "override"
+        if self.attribute_name(node).as_deref() == Some("override")
             && !stir_hir::def_index(self.db, self.ws)
                 .classes
                 .contains_key("override")
