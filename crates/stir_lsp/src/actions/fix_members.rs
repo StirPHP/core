@@ -632,6 +632,7 @@ pub fn insert_property(
         Some(after) if after.kind() == PROPERTY_DECL => {
             let indent = member_indent(cx, body);
             let nl = cx.style.nl;
+            let code = cx.style.block(code, &indent);
             let end = after.text_range().end();
             let line_end = imports::line_end(cx.text, end);
             let rest = cx.slice(TextRange::new(end, line_end));
@@ -640,7 +641,7 @@ pub fn insert_property(
             } else {
                 end
             };
-            cx.insert(at, format!("{nl}{indent}{code}"))
+            cx.insert(at, format!("{nl}{code}"))
         }
         _ => insert_member(cx, body, after, code),
     }

@@ -305,6 +305,7 @@ pub fn doc_type(namer: &mut Namer<'_>, ty: &Ty) -> Option<String> {
         | TyKind::NumericString
         | TyKind::IntRange { .. } => Some(ty.to_string()),
         // what it is now, not all it can be
+        TyKind::Literal(LitValue::Bool(b)) => Some(b.to_string()),
         TyKind::Literal(_) => Some(stir_checker::widen_literals(ty).to_string()),
         TyKind::ClassString(None) => bare("class-string"),
         TyKind::ClassString(Some(of)) => Some(format!("class-string<{}>", doc_type(namer, of)?)),

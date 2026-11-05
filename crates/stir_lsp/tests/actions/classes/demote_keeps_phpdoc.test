@@ -1,0 +1,33 @@
+=== action: Convert promoted parameters to properties
+=== level: 9
+=== input
+<?php
+class A {
+    private int $before = 0;
+
+    /**
+     * @param list<string> $names
+     * @param string|false $label
+     */
+    public function __construct‸(private array $names, private string|false $label)
+    {
+    }
+}
+=== output
+<?php
+class A {
+    private int $before = 0;
+    /** @var list<string> */
+    private array $names;
+    private string|false $label;
+
+    /**
+     * @param list<string> $names
+     * @param string|false $label
+     */
+    public function __construct(array $names, string|false $label)
+    {
+        $this->names = $names;
+        $this->label = $label;
+    }
+}

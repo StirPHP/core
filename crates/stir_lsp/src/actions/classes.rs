@@ -8,7 +8,7 @@ use stir_syntax::{SyntaxKind::*, SyntaxNode, TextRange, TextSize};
 
 use super::fix_members::{insert_member, insert_property, members_of};
 use super::fix_types::{body_indent, is_this_fetch, written_type};
-use super::hierarchy::class_of;
+use super::hierarchy::{class_of, method_of};
 use super::organize::whole_lines;
 use super::types::{Namer, doc_type, has};
 use super::{Change, Cx, FileEdit, Kind, Offer};
@@ -372,6 +372,7 @@ fn demote_offer<'c>(cx: &'c Cx<'c>, ctor: &SyntaxNode, out: &mut Vec<Offer<'c>>)
     let mut edits = Vec::new();
     let mut properties = Vec::new();
     let mut assigns = Vec::new();
+    let mut namer = Namer::new(cx, body.text_range().start());
     for p in &promoted {
         if p.child(ATTRIBUTE_LIST).is_some()
             || p.has_token(AMP)
@@ -389,9 +390,17 @@ fn demote_offer<'c>(cx: &'c Cx<'c>, ctor: &SyntaxNode, out: &mut Vec<Offer<'c>>)
         };
         let ty = written_type(p).map(|t| t.text().to_string().trim().to_owned());
         let name = var.text().to_owned();
+        // the constructor's `@param` said what the property is, and now has to say it of it
+        let doc = method_of(cx, ctor)
+            .and_then(|(_, m)| m.sig.params.iter().find(|q| q.name == name[1..]))
+            .and_then(|q| q.doc_ty.as_ref())
+            .map(|t| cx.ctx().lower_plain(t))
+            .and_then(|t| doc_type(&mut namer, &t))
+            .filter(|d| ty.as_deref().is_none_or(|n| !n.eq_ignore_ascii_case(d)))
+            .map_or_else(String::new, |d| format!("/** @var {d} */\n"));
         properties.push(match ty {
-            Some(t) => format!("{mods} {t} {name};"),
-            None => format!("{mods} {name};"),
+            Some(t) => format!("{doc}{mods} {t} {name};"),
+            None => format!("{doc}{mods} {name};"),
         });
         assigns.push(format!("$this->{} = {name};", &name[1..]));
         // the modifiers, and the space after them
@@ -403,6 +412,7 @@ fn demote_offer<'c>(cx: &'c Cx<'c>, ctor: &SyntaxNode, out: &mut Vec<Offer<'c>>)
         end += TextSize::from((rest.len() - rest.trim_start_matches([' ', '\t']).len()) as u32);
         edits.push(cx.edit(TextRange::new(start, end), ""));
     }
+    edits.extend(namer.edits());
     let members = members_of(&body);
     let last_property = members
         .iter()
