@@ -56,32 +56,6 @@ fn main() {
     }
     code.push_str("];\n");
 
-    // The StirPHP standard library (`stdlib/*.sphp` at the workspace root).
-    let stdlib = manifest.join("../../stdlib");
-    println!("cargo::rerun-if-changed={}", stdlib.display());
-    let mut files: Vec<PathBuf> = std::fs::read_dir(&stdlib)
-        .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).collect())
-        .unwrap_or_default();
-    files.retain(|p| p.extension().is_some_and(|e| e == "sphp"));
-    files.sort();
-    code.push_str("static STDLIB: &[StdlibFile] = &[\n");
-    for file in files {
-        println!("cargo::rerun-if-changed={}", file.display());
-        let name = file
-            .file_name()
-            .unwrap()
-            .to_str()
-            .expect("UTF-8 stdlib path");
-        let abs = file.canonicalize().unwrap();
-        let abs = abs.to_str().expect("UTF-8 stdlib path");
-        writeln!(
-            code,
-            "    StdlibFile {{ path: {name:?}, text: include_str!({abs:?}) }},"
-        )
-        .unwrap();
-    }
-    code.push_str("];\n");
-
     let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR")).join("stubs.rs");
     std::fs::write(out, code).expect("write stubs.rs");
 }

@@ -20,9 +20,6 @@ pub enum Error {
         source: Box<toml::de::Error>,
     },
 
-    #[error("failed to serialize config: {0}")]
-    TomlSerialize(#[from] toml::ser::Error),
-
     #[error("failed to parse `{}`: {source}", .path.display())]
     Json {
         path: PathBuf,

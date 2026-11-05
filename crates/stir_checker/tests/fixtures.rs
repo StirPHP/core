@@ -6,9 +6,7 @@
 //! A directory whose name ends in `.multi` is one fixture: all its files are
 //! loaded into one workspace and each is checked against its own expectations.
 //! Fixture-level settings are comments anywhere in the fixture's files:
-//! `// @level N` (PHPStan level for `.php` files, default: everything) and
-//! `// @check-php false` (`.php` files are then checked only with a
-//! `// @sphp-check` directive; default: all are checked).
+//! `// @level N` (PHPStan level for `.php` files, default: everything).
 
 use std::path::{Path, PathBuf};
 
@@ -24,20 +22,6 @@ fn stubs(db: &RootDatabase) -> Vec<SourceFile> {
                 format!("stubs://{}", s.path).into(),
                 s.text.to_owned(),
                 Dialect::Php,
-                FileOrigin::Stub,
-            )
-        })
-        .collect()
-}
-
-fn stdlib(db: &RootDatabase) -> Vec<SourceFile> {
-    stir_stubs::stdlib_files()
-        .map(|f| {
-            SourceFile::new(
-                db,
-                format!("stdlib://{}", f.path).into(),
-                f.text.to_owned(),
-                Dialect::Stir,
                 FileOrigin::Stub,
             )
         })
@@ -60,20 +44,17 @@ fn expected(text: &str) -> Vec<(usize, String, String)> {
     out
 }
 
-/// Fixture-level settings from `// @level N` / `// @check-php false` comments.
+/// Fixture-level settings from `// @level N` comments.
 fn settings(texts: &[String]) -> Settings {
     let mut settings = Settings {
-        check_php: true,
+        php_level: stir_db::MAX_PHP_LEVEL,
         ..Settings::default()
     };
     for text in texts {
         for line in text.lines() {
             if let Some(pos) = line.find("// @level ") {
                 let v = line[pos + 10..].trim();
-                settings.php_level = Some(if v == "max" { 10 } else { v.parse().unwrap() });
-            }
-            if line.contains("// @check-php false") {
-                settings.check_php = false;
+                settings.php_level = if v == "max" { 10 } else { v.parse().unwrap() };
             }
         }
     }
@@ -101,7 +82,6 @@ fn run(paths: &[PathBuf]) -> Result<(), Failed> {
         .collect();
     let mut files = sources.clone();
     files.extend(stubs(&db));
-    files.extend(stdlib(&db));
     let ws = Workspace::new(&db, files, settings(&texts));
     let mut msg = String::new();
     for ((path, text), file) in paths.iter().zip(&texts).zip(&sources) {

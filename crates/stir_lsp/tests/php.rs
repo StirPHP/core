@@ -118,6 +118,25 @@ fn hover_shows_inferred_local_types() {
 }
 
 #[test]
+fn hover_reads_like_php() {
+    let f = Fixture::new("<?php\n$count = 1;\necho $cou<|>nt;\n");
+    assert_eq!(f.hover(), "```php\nint $count\n```");
+    let f = Fixture::new("<?php\nfunction f(?string $name): void { echo $na<|>me; }\n");
+    assert_eq!(f.hover(), "```php\n?string $name\n```");
+    let f = Fixture::new(&format!("{USER}$u = new User();\necho $u->na<|>me;\n"));
+    assert!(f.hover().contains("public string $name"), "{}", f.hover());
+    let f = Fixture::new(&format!(
+        "{USER}$u = new User();\necho $u->gre<|>et('a');\n"
+    ));
+    assert!(
+        f.hover()
+            .contains("function greet(string $to, int $times = …): string"),
+        "{}",
+        f.hover()
+    );
+}
+
+#[test]
 fn hover_follows_narrowing() {
     let f = Fixture::new(
         "<?php\nfunction f(?string $name): void {\n    if ($name !== null) { echo $na<|>me; }\n}\n",
@@ -336,6 +355,45 @@ fn completes_php_keywords_not_superset_ones() {
     assert!(!has(&items, "val"), "{items:?}");
 }
 
+// ------------------------------------------------------------------ hints
+
+fn hint_labels(text: &str) -> Vec<String> {
+    let f = Fixture::new(text);
+    let file = f.files[0];
+    let all = TextRange::up_to(TextSize::of(file.text(&f.db).as_str()));
+    hints::inlay_hints(&f.db, f.ws, file, all)
+        .into_iter()
+        .map(|h| {
+            let name_end = usize::from(h.offset);
+            let start = file.text(&f.db)[..name_end].rfind('$').unwrap();
+            format!("{}{}", &file.text(&f.db)[start..name_end], h.label)
+        })
+        .collect()
+}
+
+#[test]
+fn inlay_hints_show_inferred_variable_types() {
+    assert_eq!(
+        hint_labels("<?php\n$a = 1;\n$b = 'x';\n$a = 2;\n$c = [1, 2];\n"),
+        ["$a: int", "$b: string", "$c: list<int>"]
+    );
+}
+
+#[test]
+fn inlay_hints_skip_what_is_already_written_or_unknown() {
+    assert_eq!(
+        hint_labels(
+            "<?php\nfunction f(int $typed, $untyped): void {\n    foreach ([1] as $v) { echo $v; }\n}\n"
+        ),
+        ["$v: int"]
+    );
+    assert_eq!(
+        hint_labels("<?php\n/** @param list<int> $xs */\nfunction f($xs): void {}\n"),
+        ["$xs: list<int>"]
+    );
+    assert!(hint_labels("<?php\nfunction f(): void { $m = g(); }\n").is_empty());
+}
+
 // ------------------------------------------------------------------ signature help
 
 #[test]
@@ -399,6 +457,9 @@ fn semantic_tokens_classify_php() {
     };
     assert_eq!(find("function").ty, tokens::TokenType::Keyword);
     assert_eq!(find("$a").ty, tokens::TokenType::Variable);
+    // every PHP variable is mutable, so marking it says nothing
+    assert_eq!(find("$a").modifiers & tokens::modifier::MUTABLE, 0);
+    assert_eq!(find("$b").modifiers & tokens::modifier::MUTABLE, 0);
     assert_eq!(find("1").ty, tokens::TokenType::Number);
 }
 

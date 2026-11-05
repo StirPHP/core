@@ -5,35 +5,15 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use crate::config::Project;
 use crate::error::{Error, Result};
 
-/// Kind of a discovered source file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum FileKind {
-    Sphp,
-    Php,
-}
-
-impl FileKind {
-    /// Classifies a path by its extension.
-    pub fn from_path(path: &Path) -> Option<Self> {
-        match path.extension()?.to_str()? {
-            "sphp" => Some(Self::Sphp),
-            "php" => Some(Self::Php),
-            _ => None,
-        }
-    }
-}
-
 /// A source file belonging to the project.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceFile {
     /// Absolute path (project root joined with the relative location).
     pub path: PathBuf,
-    pub kind: FileKind,
 }
 
-/// Finds all project source files under `srcDir`, honouring `.gitignore`,
-/// `include`/`exclude` and `allowPhp`. The output directory is always skipped.
-/// The result is sorted by path.
+/// Finds all project source files under `srcDir`, honouring `.gitignore` and
+/// `include`/`exclude`. The result is sorted by path.
 pub async fn discover(project: &Project) -> Result<Vec<SourceFile>> {
     let project = project.clone();
     tokio::task::spawn_blocking(move || discover_blocking(&project)).await?
@@ -61,7 +41,6 @@ fn discover_blocking(project: &Project) -> Result<Vec<SourceFile>> {
     let config = &project.config;
     let root = project.root.clone();
     let src_dir = project.src_dir();
-    let out_dir = project.out_dir();
 
     let include = build_set(config.include.iter().map(String::as_str))?;
     let exclude = build_set(config.exclude.iter().map(String::as_str))?;
@@ -84,7 +63,6 @@ fn discover_blocking(project: &Project) -> Result<Vec<SourceFile>> {
             || path.strip_prefix(&root).is_ok_and(|rel| set.is_match(rel))
     };
 
-    let filter_root = out_dir.clone();
     let filter_exclude = exclude.clone();
     let filter_exclude_dirs = exclude_dirs.clone();
     let filter_src = src_dir.clone();
@@ -96,9 +74,6 @@ fn discover_blocking(project: &Project) -> Result<Vec<SourceFile>> {
             let path = entry.path();
             if !entry.file_type().is_some_and(|t| t.is_dir()) || path == filter_src {
                 return true;
-            }
-            if path.starts_with(&filter_root) {
-                return false;
             }
             let matches = |set: &GlobSet| {
                 path.strip_prefix(&filter_src)
@@ -118,10 +93,7 @@ fn discover_blocking(project: &Project) -> Result<Vec<SourceFile>> {
             continue;
         }
         let path = entry.path();
-        let Some(kind) = FileKind::from_path(path) else {
-            continue;
-        };
-        if kind == FileKind::Php && !config.allow_php {
+        if path.extension().is_none_or(|e| e != "php") {
             continue;
         }
         let Ok(rel) = path.strip_prefix(&src_dir) else {
@@ -132,48 +104,8 @@ fn discover_blocking(project: &Project) -> Result<Vec<SourceFile>> {
         }
         files.push(SourceFile {
             path: path.to_path_buf(),
-            kind,
         });
     }
     files.sort();
-    warn_ignored_sphp(
-        &src_dir,
-        &project.out_dir(),
-        |path| excluded(path, &exclude),
-        &files,
-    );
     Ok(files)
-}
-
-/// `.gitignore` allowlists written for `.php` files can hide their `.sphp` ports, and a hidden
-/// file silently vanishes from the build: say so.
-fn warn_ignored_sphp(
-    src_dir: &Path,
-    out_dir: &Path,
-    excluded: impl Fn(&Path) -> bool,
-    found: &[SourceFile],
-) {
-    let out_dir = out_dir.to_path_buf();
-    let walker = ignore::WalkBuilder::new(src_dir)
-        .standard_filters(false)
-        .filter_entry(move |entry| {
-            let name = entry.file_name();
-            !(entry.path().starts_with(&out_dir)
-                || name == "node_modules"
-                || name == "vendor"
-                || name == ".git")
-        })
-        .build();
-    for entry in walker.flatten() {
-        let path = entry.path();
-        if path.extension().is_some_and(|e| e == "sphp")
-            && !excluded(path)
-            && !found.iter().any(|f| f.path == path)
-        {
-            tracing::warn!(
-                "{} is ignored (.gitignore), so it won't be checked or built",
-                path.display()
-            );
-        }
-    }
 }

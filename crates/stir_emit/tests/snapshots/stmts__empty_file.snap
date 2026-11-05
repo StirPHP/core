@@ -1,7 +1,0 @@
----
-source: crates/stir_emit/tests/stmts.rs
-expression: "stir_emit::print_file(&f, &opts())"
----
-<?php
-
-declare(strict_types=1);

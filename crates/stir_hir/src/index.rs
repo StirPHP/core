@@ -3,7 +3,6 @@
 use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
 use stir_db::{FileOrigin, SourceFile};
-use stir_syntax::Dialect;
 
 /// Where a declaration lives: a file and its index in that file's item list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -31,17 +30,13 @@ pub struct DefIndex {
 }
 
 impl DefIndex {
-    /// The precedence of a file's declarations: project `.sphp` sources, then
-    /// the StirPHP stdlib, project `.php` files, vendor files and PHP stubs. The
-    /// stdlib outranks project PHP so that its generated PHP image (the
-    /// runtime) never replaces it.
-    pub fn rank(origin: FileOrigin, dialect: Dialect) -> u8 {
-        match (origin, dialect) {
-            (FileOrigin::Source, Dialect::Stir) => 0,
-            (FileOrigin::Stub, Dialect::Stir) => 1,
-            (FileOrigin::Source, Dialect::Php) => 2,
-            (FileOrigin::Vendor, _) => 3,
-            (FileOrigin::Stub, Dialect::Php) => 4,
+    /// The precedence of a file's declarations: project sources, then vendor
+    /// files and PHP stubs.
+    pub fn rank(origin: FileOrigin) -> u8 {
+        match origin {
+            FileOrigin::Source => 0,
+            FileOrigin::Vendor => 1,
+            FileOrigin::Stub => 2,
         }
     }
 

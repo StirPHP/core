@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::error::{Error, Result};
 
@@ -8,56 +8,28 @@ use crate::error::{Error, Result};
 pub const CONFIG_FILE: &str = "sphp.toml";
 
 /// Contents of `sphp.toml`. All keys are camelCase and optional.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct Config {
-    /// Project name (informational).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
     /// Source directory, relative to the project root.
     pub src_dir: PathBuf,
-    /// Output directory for transpiled PHP, relative to the project root.
-    pub out_dir: PathBuf,
     /// Globs of files to include, relative to `srcDir`.
     pub include: Vec<String>,
     /// Globs of files to exclude, matched relative to both the project root and `srcDir`.
     pub exclude: Vec<String>,
-    /// Whether plain `.php` files are part of the project.
-    pub allow_php: bool,
-    /// Whether plain `.php` files are type-checked.
-    pub check_php: bool,
-    /// Strict mode.
-    pub strict: bool,
-    /// Inline extension function calls instead of emitting helper functions.
-    pub inline_extensions: bool,
-    /// Generate `declare(strict_types=1)`. Turn it off while porting code whose callers rely
-    /// on PHP's scalar coercion.
-    pub strict_types: bool,
-    /// Copy the other files under `srcDir` to `outDir` too, so it's a complete tree.
-    pub copy_assets: bool,
     /// Path to a `phpstan.neon` file, relative to the project root.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub phpstan: Option<PathBuf>,
     /// Path to `composer.json`, relative to the project root. When unset,
     /// `composer.json` in the project root is used if it exists.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub composer: Option<PathBuf>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            name: None,
-            src_dir: PathBuf::from("src"),
-            out_dir: PathBuf::from("build"),
-            include: vec!["**/*.sphp".into(), "**/*.php".into()],
+            src_dir: PathBuf::from("."),
+            include: vec!["**/*.php".into()],
             exclude: vec!["vendor/**".into()],
-            allow_php: true,
-            check_php: false,
-            strict: true,
-            inline_extensions: false,
-            strict_types: true,
-            copy_assets: false,
             phpstan: None,
             composer: None,
         }
@@ -71,11 +43,6 @@ impl Config {
             path: path.to_path_buf(),
             source: Box::new(source),
         })
-    }
-
-    /// Serialises the config to TOML.
-    pub fn to_toml(&self) -> Result<String> {
-        Ok(toml::to_string(self)?)
     }
 }
 
@@ -102,6 +69,26 @@ impl Project {
         Err(Error::ConfigNotFound { start })
     }
 
+    /// Like [`Project::load`], but a project doesn't need a config file: without one the
+    /// root is the nearest ancestor with a `composer.json`, else `start_dir` itself.
+    pub async fn load_or_default(start_dir: impl AsRef<Path>) -> Result<Self> {
+        let start = start_dir.as_ref();
+        match Self::load(start).await {
+            Err(Error::ConfigNotFound { start }) => {
+                let root = start
+                    .ancestors()
+                    .find(|dir| dir.join("composer.json").is_file())
+                    .unwrap_or(&start)
+                    .to_path_buf();
+                Ok(Self {
+                    root,
+                    config: Config::default(),
+                })
+            }
+            other => other,
+        }
+    }
+
     /// Loads `sphp.toml` from exactly `root`, without searching upward.
     pub async fn load_exact(root: impl AsRef<Path>) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
@@ -121,11 +108,6 @@ impl Project {
     /// Absolute source directory.
     pub fn src_dir(&self) -> PathBuf {
         self.root.join(&self.config.src_dir)
-    }
-
-    /// Absolute output directory.
-    pub fn out_dir(&self) -> PathBuf {
-        self.root.join(&self.config.out_dir)
     }
 
     /// Absolute path of `phpstan.neon`, if configured.

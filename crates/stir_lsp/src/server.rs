@@ -60,7 +60,7 @@ impl State {
         }
     }
 
-    /// A workspace with only the builtin stubs and stdlib.
+    /// A workspace with only the builtin stubs.
     fn empty() -> Self {
         let db = RootDatabase::default();
         let files = builtin_files(&db);
@@ -120,15 +120,11 @@ impl State {
 }
 
 fn dialect_of(path: &Path) -> Dialect {
-    if path.extension().is_some_and(|e| e == "php") {
-        Dialect::Php
-    } else {
-        Dialect::Stir
-    }
+    Dialect::from_path(path).unwrap_or(Dialect::Php)
 }
 
 fn is_source_path(path: &Path) -> bool {
-    path.extension().is_some_and(|e| e == "php" || e == "sphp")
+    Dialect::from_path(path).is_some()
 }
 
 /// The canonical path of a `file://` URI.
@@ -150,17 +146,15 @@ fn stub_dir() -> PathBuf {
 fn file_uri(db: &dyn Db, file: SourceFile) -> Option<Uri> {
     let path = file.path(db);
     let s = path.to_string_lossy();
-    for scheme in ["stubs://", "stdlib://"] {
-        if let Some(rest) = s.strip_prefix(scheme) {
-            let target = stub_dir().join(scheme.trim_end_matches("://")).join(rest);
-            let text = file.text(db);
-            let fresh = std::fs::read_to_string(&target).is_ok_and(|t| &t == text);
-            if !fresh {
-                std::fs::create_dir_all(target.parent()?).ok()?;
-                std::fs::write(&target, text).ok()?;
-            }
-            return Uri::from_file_path(target);
+    if let Some(rest) = s.strip_prefix("stubs://") {
+        let target = stub_dir().join("stubs").join(rest);
+        let text = file.text(db);
+        let fresh = std::fs::read_to_string(&target).is_ok_and(|t| &t == text);
+        if !fresh {
+            std::fs::create_dir_all(target.parent()?).ok()?;
+            std::fs::write(&target, text).ok()?;
         }
+        return Uri::from_file_path(target);
     }
     Uri::from_file_path(path)
 }
@@ -333,11 +327,7 @@ impl Server {
                 })
                 .collect();
             let mut state = match loaded {
-                Some((db, ws, root, out_dir)) => {
-                    let mut st = State::new(db, ws, Some(root));
-                    st.foreign.push(out_dir);
-                    st
-                }
+                Some((db, ws, root)) => State::new(db, ws, Some(root)),
                 None => {
                     let mut st = State::empty();
                     st.root = folder.clone();
@@ -355,25 +345,16 @@ impl Server {
     }
 }
 
-async fn load_project(dir: &Path) -> Option<(RootDatabase, Workspace, PathBuf, PathBuf)> {
-    let project = match Project::load(dir).await {
+async fn load_project(dir: &Path) -> Option<(RootDatabase, Workspace, PathBuf)> {
+    let project = match Project::load_or_default(dir).await {
         Ok(p) => p,
         Err(error) => {
-            tracing::info!(%error, "no sphp.toml; using defaults");
-            let root = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_owned());
-            let config = stir_project::Config {
-                src_dir: PathBuf::from("."),
-                ..Default::default()
-            };
-            Project { root, config }
+            tracing::error!(%error, "failed to load the project");
+            return None;
         }
     };
     match load_workspace(&project, LoadOptions::default()).await {
-        Ok(l) => {
-            let out_dir = project.out_dir();
-            let out_dir = std::fs::canonicalize(&out_dir).unwrap_or(out_dir);
-            Some((l.db, l.workspace, project.root.clone(), out_dir))
-        }
+        Ok(l) => Some((l.db, l.workspace, project.root.clone())),
         Err(error) => {
             tracing::error!(%error, "failed to load the project");
             None

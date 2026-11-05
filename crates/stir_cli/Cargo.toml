@@ -10,18 +10,12 @@ anyhow.workspace = true
 ariadne = "0.6.0"
 clap.workspace = true
 futures = "0.3.34"
-inquire = "0.9.4"
-notify-debouncer-full = "0.7.0"
-pathdiff = "0.2.3"
 salsa = "0.28.5"
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
-sourcemap = "9.3.2"
 stir_checker.workspace = true
 stir_db.workspace = true
-stir_emit.workspace = true
 stir_lsp = { workspace = true, features = ["server"] }
 stir_project.workspace = true
-ignore = "0.4.34"
 stir_syntax.workspace = true
 tokio.workspace = true
 tracing.workspace = true

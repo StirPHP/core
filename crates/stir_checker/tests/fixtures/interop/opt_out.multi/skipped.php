@@ -1,5 +1,5 @@
 <?php
-// @check-php false
+// @sphp-nocheck
 namespace Legacy;
 
 undefined_function();

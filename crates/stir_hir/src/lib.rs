@@ -34,9 +34,7 @@ pub fn def_index(db: &dyn Db, ws: Workspace) -> Arc<DefIndex> {
     let mut index = DefIndex::default();
     for &file in ws.files(db) {
         index.origins.insert(file, file.origin(db));
-        index
-            .ranks
-            .insert(file, DefIndex::rank(file.origin(db), file.dialect(db)));
+        index.ranks.insert(file, DefIndex::rank(file.origin(db)));
         let items = file_items(db, file);
         for (i, c) in items.classes.iter().enumerate() {
             index

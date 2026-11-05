@@ -2,8 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use stir_project::{
-    Autoload, CONFIG_FILE, Config, Error, FileKind, InitOptions, Project, SAMPLE_MAIN, discover,
-    init, load_autoload, parse_installed,
+    Autoload, CONFIG_FILE, Config, Error, Project, discover, load_autoload, parse_installed,
 };
 use tempfile::TempDir;
 
@@ -23,11 +22,9 @@ fn canon(dir: &TempDir) -> PathBuf {
 fn config_defaults() {
     let c = Config::parse("", Path::new("sphp.toml")).unwrap();
     assert_eq!(c, Config::default());
-    assert_eq!(c.src_dir, PathBuf::from("src"));
-    assert_eq!(c.out_dir, PathBuf::from("build"));
-    assert_eq!(c.include, ["**/*.sphp", "**/*.php"]);
+    assert_eq!(c.src_dir, PathBuf::from("."));
+    assert_eq!(c.include, ["**/*.php"]);
     assert_eq!(c.exclude, ["vendor/**"]);
-    assert!(c.allow_php && !c.check_php && c.strict && !c.inline_extensions);
     assert_eq!(c.phpstan, None);
     assert_eq!(c.composer, None);
 }
@@ -36,35 +33,17 @@ fn config_defaults() {
 fn config_parses_camel_case_keys() {
     let text = r#"
         srcDir = "lib"
-        outDir = "dist"
-        include = ["**/*.sphp"]
+        include = ["app/**/*.php"]
         exclude = []
-        allowPhp = false
-        checkPhp = true
-        strict = false
-        inlineExtensions = true
         phpstan = "phpstan.neon"
         composer = "app/composer.json"
     "#;
     let c = Config::parse(text, Path::new("sphp.toml")).unwrap();
     assert_eq!(c.src_dir, PathBuf::from("lib"));
-    assert_eq!(c.out_dir, PathBuf::from("dist"));
-    assert_eq!(c.include, ["**/*.sphp"]);
+    assert_eq!(c.include, ["app/**/*.php"]);
     assert!(c.exclude.is_empty());
-    assert!(!c.allow_php && c.check_php && !c.strict && c.inline_extensions);
     assert_eq!(c.phpstan, Some("phpstan.neon".into()));
     assert_eq!(c.composer, Some("app/composer.json".into()));
-}
-
-#[test]
-fn config_round_trips() {
-    let c = Config {
-        name: Some("demo".into()),
-        ..Config::default()
-    };
-    let text = c.to_toml().unwrap();
-    assert!(text.contains("srcDir = \"src\""), "{text}");
-    assert_eq!(Config::parse(&text, Path::new("x")).unwrap(), c);
 }
 
 #[test]
@@ -88,7 +67,6 @@ async fn load_searches_upward() {
     assert_eq!(project.root, root);
     assert_eq!(project.config.src_dir, PathBuf::from("lib"));
     assert_eq!(project.src_dir(), root.join("lib"));
-    assert_eq!(project.out_dir(), root.join("build"));
 }
 
 #[tokio::test]
@@ -96,6 +74,28 @@ async fn load_reports_missing_config() {
     let tmp = TempDir::new().unwrap();
     let err = Project::load(tmp.path()).await.unwrap_err();
     assert!(matches!(err, Error::ConfigNotFound { .. }), "{err}");
+}
+
+#[tokio::test]
+async fn load_or_default_finds_the_composer_root() {
+    let tmp = TempDir::new().unwrap();
+    let root = canon(&tmp);
+    write(root.join("composer.json"), "{}");
+    let nested = root.join("a/b");
+    fs::create_dir_all(&nested).unwrap();
+
+    let project = Project::load_or_default(&nested).await.unwrap();
+    assert_eq!(project.root, root);
+    assert_eq!(project.config, Config::default());
+    assert_eq!(project.src_dir(), root.join("."));
+}
+
+#[tokio::test]
+async fn load_or_default_without_anything_uses_the_start_dir() {
+    let tmp = TempDir::new().unwrap();
+    let root = canon(&tmp);
+    let project = Project::load_or_default(&root).await.unwrap();
+    assert_eq!(project.root, root);
 }
 
 #[tokio::test]
@@ -113,12 +113,12 @@ fn project(root: PathBuf, config: Config) -> Project {
     Project { root, config }
 }
 
-fn rel(project: &Project, files: &[stir_project::SourceFile]) -> Vec<(String, FileKind)> {
+fn rel(project: &Project, files: &[stir_project::SourceFile]) -> Vec<String> {
     files
         .iter()
         .map(|f| {
             let p = f.path.strip_prefix(&project.root).unwrap();
-            (p.to_string_lossy().replace('\\', "/"), f.kind)
+            p.to_string_lossy().replace('\\', "/")
         })
         .collect()
 }
@@ -127,79 +127,52 @@ fn rel(project: &Project, files: &[stir_project::SourceFile]) -> Vec<(String, Fi
 async fn discover_respects_include_exclude_and_gitignore() {
     let tmp = TempDir::new().unwrap();
     let root = canon(&tmp);
-    write(root.join("src/main.sphp"), "");
-    write(root.join("src/b/z.sphp"), "");
-    write(root.join("src/a/legacy.php"), "");
+    write(root.join("src/main.php"), "");
+    write(root.join("src/b/z.php"), "");
     write(root.join("src/a/readme.txt"), "");
-    write(root.join("src/generated/gen.sphp"), "");
-    write(root.join("src/skip/x.sphp"), "");
+    write(root.join("src/generated/gen.php"), "");
+    write(root.join("src/skip/x.php"), "");
     write(root.join("src/.gitignore"), "generated/\n");
     write(root.join("vendor/pkg/lib.php"), "");
 
-    let mut config = Config::default();
+    let mut config = Config {
+        src_dir: "src".into(),
+        ..Config::default()
+    };
     config.exclude.push("skip/**".into());
     let p = project(root.clone(), config);
     let files = discover(&p).await.unwrap();
-    assert_eq!(
-        rel(&p, &files),
-        [
-            ("src/a/legacy.php".to_owned(), FileKind::Php),
-            ("src/b/z.sphp".to_owned(), FileKind::Sphp),
-            ("src/main.sphp".to_owned(), FileKind::Sphp),
-        ]
-    );
+    assert_eq!(rel(&p, &files), ["src/b/z.php", "src/main.php"]);
 }
 
 #[tokio::test]
-async fn discover_without_allow_php_and_src_at_root() {
+async fn discover_at_the_root_skips_vendor_but_not_build() {
     let tmp = TempDir::new().unwrap();
     let root = canon(&tmp);
-    write(root.join("main.sphp"), "");
+    write(root.join("main.php"), "");
     write(root.join("lib/x.php"), "");
-    write(root.join("vendor/pkg/y.sphp"), "");
-    write(root.join("build/main.sphp"), "");
+    write(root.join("vendor/pkg/y.php"), "");
+    write(root.join("build/z.php"), "");
 
-    let config = Config {
-        src_dir: ".".into(),
-        ..Config::default()
-    };
-    let p = project(root.clone(), config.clone());
+    let p = project(root.clone(), Config::default());
     let files = discover(&p).await.unwrap();
-    assert_eq!(
-        rel(&p, &files),
-        [
-            ("lib/x.php".to_owned(), FileKind::Php),
-            ("main.sphp".to_owned(), FileKind::Sphp)
-        ]
-    );
-
-    let p = project(
-        root,
-        Config {
-            allow_php: false,
-            ..config
-        },
-    );
-    let files = discover(&p).await.unwrap();
-    assert_eq!(rel(&p, &files), [("main.sphp".to_owned(), FileKind::Sphp)]);
+    assert_eq!(rel(&p, &files), ["build/z.php", "lib/x.php", "main.php"]);
 }
 
 #[tokio::test]
 async fn discover_include_globs_are_relative_to_src_dir() {
     let tmp = TempDir::new().unwrap();
     let root = canon(&tmp);
-    write(root.join("src/Domain/a.sphp"), "");
-    write(root.join("src/Other/b.sphp"), "");
+    write(root.join("src/Domain/a.php"), "");
+    write(root.join("src/Other/b.php"), "");
     let config = Config {
-        include: vec!["Domain/**/*.sphp".into()],
+        src_dir: "src".into(),
+        include: vec!["Domain/**/*.php".into()],
         ..Config::default()
     };
     let p = project(root, config);
     let files = discover(&p).await.unwrap();
-    assert_eq!(
-        rel(&p, &files),
-        [("src/Domain/a.sphp".to_owned(), FileKind::Sphp)]
-    );
+    assert_eq!(rel(&p, &files), ["src/Domain/a.php"]);
 }
 
 #[tokio::test]
@@ -348,144 +321,3 @@ async fn load_autoload_without_composer_is_empty() {
 }
 
 // ---------- init ----------
-
-#[tokio::test]
-async fn init_creates_files() {
-    let tmp = TempDir::new().unwrap();
-    let root = canon(&tmp);
-    let report = init(
-        &root,
-        InitOptions {
-            name: Some("demo".into()),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(report.config_path, root.join(CONFIG_FILE));
-    assert_eq!(
-        report.created,
-        [
-            root.join(CONFIG_FILE),
-            root.join("src/main.sphp"),
-            root.join(".gitignore")
-        ]
-    );
-    assert!(report.gitignore_updated);
-    assert_eq!(
-        fs::read_to_string(root.join("src/main.sphp")).unwrap(),
-        SAMPLE_MAIN
-    );
-    assert_eq!(
-        fs::read_to_string(root.join(".gitignore")).unwrap(),
-        "/build\n"
-    );
-
-    let project = Project::load(&root).await.unwrap();
-    assert_eq!(project.config.name.as_deref(), Some("demo"));
-    assert_eq!(project.config, report.config);
-    assert_eq!(project.config.composer, None);
-    assert_eq!(project.config.phpstan, None);
-}
-
-#[tokio::test]
-async fn init_detects_composer_and_phpstan_and_custom_dirs() {
-    let tmp = TempDir::new().unwrap();
-    let root = canon(&tmp);
-    write(root.join("composer.json"), "{}");
-    write(root.join("phpstan.neon.dist"), "");
-    write(root.join(".gitignore"), "/vendor");
-    let options = InitOptions {
-        src_dir: "app".into(),
-        out_dir: "dist".into(),
-        allow_php: false,
-        ..Default::default()
-    };
-    let report = init(&root, options).await.unwrap();
-    assert_eq!(report.composer, Some("composer.json".into()));
-    assert_eq!(report.phpstan, Some("phpstan.neon.dist".into()));
-    assert!(!report.created.contains(&root.join(".gitignore")));
-    assert_eq!(
-        fs::read_to_string(root.join(".gitignore")).unwrap(),
-        "/vendor\n/dist\n"
-    );
-    assert!(root.join("app/main.sphp").is_file());
-
-    let config = Project::load(&root).await.unwrap().config;
-    assert_eq!(config.composer, Some("composer.json".into()));
-    assert_eq!(config.phpstan, Some("phpstan.neon.dist".into()));
-    assert!(!config.allow_php);
-    let expected_name = root.file_name().unwrap().to_string_lossy().into_owned();
-    assert_eq!(config.name, Some(expected_name));
-}
-
-#[tokio::test]
-async fn init_does_not_duplicate_gitignore_entry() {
-    let tmp = TempDir::new().unwrap();
-    let root = canon(&tmp);
-    write(root.join(".gitignore"), "build/\n");
-    let report = init(&root, InitOptions::default()).await.unwrap();
-    assert!(!report.gitignore_updated);
-    assert_eq!(
-        fs::read_to_string(root.join(".gitignore")).unwrap(),
-        "build/\n"
-    );
-
-    let report = init(
-        &root,
-        InitOptions {
-            force: true,
-            out_dir: "out".into(),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    assert!(report.gitignore_updated);
-    let report = init(
-        &root,
-        InitOptions {
-            force: true,
-            out_dir: "out".into(),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    assert!(!report.gitignore_updated);
-    assert_eq!(
-        fs::read_to_string(root.join(".gitignore")).unwrap(),
-        "build/\n/out\n"
-    );
-}
-
-#[tokio::test]
-async fn init_refuses_overwrite_without_force() {
-    let tmp = TempDir::new().unwrap();
-    let root = canon(&tmp);
-    write(root.join(CONFIG_FILE), "strict = false\n");
-    let err = init(&root, InitOptions::default()).await.unwrap_err();
-    assert!(matches!(err, Error::AlreadyInitialized { .. }));
-    assert_eq!(
-        fs::read_to_string(root.join(CONFIG_FILE)).unwrap(),
-        "strict = false\n"
-    );
-
-    write(root.join("src/main.sphp"), "custom");
-    let report = init(
-        &root,
-        InitOptions {
-            force: true,
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(report.skipped, [root.join("src/main.sphp")]);
-    assert_eq!(
-        fs::read_to_string(root.join("src/main.sphp")).unwrap(),
-        "custom"
-    );
-    assert!(Project::load(&root).await.unwrap().config.strict);
-}

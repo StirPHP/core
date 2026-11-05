@@ -138,10 +138,7 @@ function createClient(command) {
     run: { command, args: ['lsp'] },
     debug: { command, args: ['lsp'], options: { env: { ...process.env, SPHP_LOG: 'debug' } } },
   };
-  const documentSelector = [{ scheme: 'file', language: 'sphp' }];
-  if (config().get('php.enable', false)) {
-    documentSelector.push({ scheme: 'file', language: 'php' });
-  }
+  const documentSelector = [{ scheme: 'file', language: 'php' }];
   /** @type {import('vscode-languageclient/node').LanguageClientOptions} */
   const clientOptions = {
     documentSelector,

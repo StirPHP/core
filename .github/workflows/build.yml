@@ -59,11 +59,10 @@ jobs:
           "$bin" --version
           "$bin" --version | grep -qF "${{ inputs.version }}"
           mkdir -p smoke/src && cd smoke
-          printf 'srcDir = "src"\n' > sphp.toml
-          printf 'val n: Int = 1 + 2\necho n\n' > src/main.sphp
+          printf '<?php\necho strlen("a");\n' > src/main.php
           "../$bin" check
-          "../$bin" build
-          test -f build/main.php
+          printf '<?php\necho missing_function();\n' > src/bad.php
+          if "../$bin" check; then exit 1; fi
       - name: Package
         shell: bash
         env:

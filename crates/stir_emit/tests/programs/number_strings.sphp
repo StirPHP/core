@@ -1,9 +1,0 @@
-val i: Int = 3
-val f: Float = 1.5
-echo "a" . i . "\n"
-echo f . "b\n"
-var $out: string = "n="
-$out .= i
-$out .= f
-echo $out . "\n"
-echo "sum " . (i + 1) . "\n"

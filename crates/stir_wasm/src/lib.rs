@@ -1,5 +1,4 @@
-//! StirPHP in the browser: checks, compiles, hovers and completes one `.sphp`
-//! file, for the documentation's playground.
+//! StirPHP in the browser: checks, hovers and completes one PHP file.
 //!
 //! The database lives as long as the [`Playground`], so each call after an
 //! edit only recomputes what the edit affected. Positions are 1-based lines
@@ -31,12 +30,6 @@ struct Diagnostic {
 }
 
 #[derive(Serialize)]
-struct Compiled {
-    php: String,
-    errors: usize,
-}
-
-#[derive(Serialize)]
 struct Hover {
     #[serde(flatten)]
     span: Span,
@@ -59,7 +52,7 @@ struct Completions {
     items: Vec<Completion>,
 }
 
-/// A single-file StirPHP workspace.
+/// A single-file workspace.
 #[wasm_bindgen]
 pub struct Playground {
     db: RootDatabase,
@@ -80,9 +73,9 @@ impl Playground {
         let db = RootDatabase::default();
         let file = SourceFile::new(
             &db,
-            "/playground/main.sphp".into(),
+            "/playground/main.php".into(),
             String::new(),
-            Dialect::Stir,
+            Dialect::Php,
             FileOrigin::Source,
         );
         let mut files = vec![file];
@@ -92,15 +85,6 @@ impl Playground {
                 format!("stubs://{}", s.path).into(),
                 s.text.to_owned(),
                 Dialect::Php,
-                FileOrigin::Stub,
-            )
-        }));
-        files.extend(stir_stubs::stdlib_files().map(|s| {
-            SourceFile::new(
-                &db,
-                format!("stdlib://{}", s.path).into(),
-                s.text.to_owned(),
-                Dialect::Stir,
                 FileOrigin::Stub,
             )
         }));
@@ -126,22 +110,6 @@ impl Playground {
             })
             .collect();
         json(&diags)
-    }
-
-    /// `source` transpiled to PHP (also when it has errors), and its error count.
-    pub fn compile(&mut self, source: &str, inline_extensions: bool) -> String {
-        self.set(source);
-        let errors = stir_checker::check_file(&self.db, self.ws, self.file)
-            .iter()
-            .filter(|d| d.severity == Severity::Error)
-            .count();
-        let opts = stir_emit::EmitOptions {
-            inline_extensions,
-            runtime_require: Some("__DIR__ . '/stir-runtime.php'".into()),
-            ..Default::default()
-        };
-        let php = stir_emit::transpile(&self.db, self.ws, self.file, &opts).code;
-        json(&Compiled { php, errors })
     }
 
     /// Hover at a position: markdown and the range it is about, or "null".
@@ -239,35 +207,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn checks_compiles_hovers_and_completes() {
+    fn checks_hovers_and_completes() {
         let mut p = Playground::new();
-        let bad = "val n: Int = \"x\"\n";
+        let bad = "<?php\necho missing();\n";
         let diags: serde_json::Value = serde_json::from_str(&p.check(bad)).unwrap();
-        assert_eq!(diags[0]["code"], "SPHP0005");
-        assert_eq!(diags[0]["startLine"], 1);
-        assert_eq!(diags[0]["startColumn"], 14);
+        assert_eq!(diags[0]["code"], "SPHP0007");
+        assert_eq!(diags[0]["startLine"], 2);
+        assert_eq!(diags[0]["startColumn"], 6);
 
-        let ok = "val s = \"abc\"->uppercase()\necho s\n";
-        let out: serde_json::Value = serde_json::from_str(&p.compile(ok, true)).unwrap();
-        assert_eq!(out["errors"], 0);
-        assert!(out["php"].as_str().unwrap().contains("mb_strtoupper"));
-
-        let hover: serde_json::Value = serde_json::from_str(&p.hover(ok, 2, 7)).unwrap();
+        let ok = "<?php\n$s = strlen('abc');\necho $s;\n";
+        let hover: serde_json::Value = serde_json::from_str(&p.hover(ok, 3, 7)).unwrap();
         assert!(
-            hover["markdown"]
-                .as_str()
-                .unwrap()
-                .contains("val s: String")
+            hover["markdown"].as_str().unwrap().contains("int"),
+            "{hover}"
         );
 
-        let partial = "val s = \"abc\"\necho s->\n";
-        let done: serde_json::Value = serde_json::from_str(&p.complete(partial, 2, 9)).unwrap();
+        let partial =
+            "<?php\nclass Box { public function open(): void {} }\n$b = new Box();\n$b->\n";
+        let done: serde_json::Value = serde_json::from_str(&p.complete(partial, 4, 5)).unwrap();
         let labels: Vec<&str> = done["items"]
             .as_array()
             .unwrap()
             .iter()
             .map(|i| i["label"].as_str().unwrap())
             .collect();
-        assert!(labels.contains(&"uppercase"), "{labels:?}");
+        assert!(labels.contains(&"open"), "{labels:?}");
     }
 }

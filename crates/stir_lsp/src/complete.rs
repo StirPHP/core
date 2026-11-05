@@ -340,11 +340,8 @@ fn member_items(
                 m.name.to_string(),
             ),
             MemberTy::Property { ty, immutable } => {
-                let label = if *immutable {
-                    format!("val {}: {ty}", m.name)
-                } else {
-                    format!("var ${}: {ty}", m.name)
-                };
+                let readonly = if *immutable { "readonly " } else { "" };
+                let label = format!("{readonly}{} ${}", render::ty(ty), m.name);
                 let insert = if statics {
                     format!("${}", m.name)
                 } else {
@@ -354,12 +351,12 @@ fn member_items(
             }
             MemberTy::Field(t) => (
                 ItemKind::Field,
-                format!("{}: {t}", m.name),
+                format!("{} {}", render::ty(t), m.name),
                 m.name.to_string(),
             ),
             MemberTy::Const(t) => (
                 ItemKind::Const,
-                format!("const {}: {t}", m.name),
+                format!("const {} {}", render::ty(t), m.name),
                 m.name.to_string(),
             ),
             MemberTy::Case => (
@@ -477,7 +474,7 @@ fn local_items(
             } else {
                 ItemKind::Local
             },
-            detail: Some(local_label(&name, *kind, ty)),
+            detail: Some(local_label(&name, ty)),
             rank: 0,
         });
     }

@@ -1,9 +1,9 @@
 //! Hover: declarations and expression types.
 
 use stir_checker::model_api::{self, MemberTy};
-use stir_checker::{Ctx, Def, LocalKind, MemberKind, typed_file};
+use stir_checker::{Ctx, Def, MemberKind, typed_file};
 use stir_db::{Db, SourceFile, Workspace};
-use stir_hir::{Binding, ClassKind, file_items};
+use stir_hir::{ClassKind, Visibility, file_items};
 use stir_syntax::{TextRange, TextSize};
 use stir_types::Ty;
 
@@ -16,19 +16,6 @@ pub struct HoverResult {
 }
 
 pub fn hover(
-    db: &dyn Db,
-    ws: Workspace,
-    file: SourceFile,
-    offset: TextSize,
-) -> Option<HoverResult> {
-    let mut result = hover_in_php_terms(db, ws, file, offset)?;
-    if file.dialect(db) == stir_syntax::Dialect::Stir {
-        result.markdown = stir_checker::stir_type_names(&result.markdown);
-    }
-    Some(result)
-}
-
-fn hover_in_php_terms(
     db: &dyn Db,
     ws: Workspace,
     file: SourceFile,
@@ -57,7 +44,7 @@ fn hover_in_php_terms(
     }
     Some(HoverResult {
         range: *range,
-        markdown: render::code(&ty.to_string()),
+        markdown: render::code(&render::ty(ty)),
     })
 }
 
@@ -78,17 +65,17 @@ fn with_doc(code: String, owner: Option<&str>, doc: Option<&stir_hir::DocText>) 
     out
 }
 
-/// A local binding as it is declared: `val x: Int`, `var $x: Int`, `mut x: Int`.
-pub fn local_label(name: &str, kind: LocalKind, ty: &Ty) -> String {
+/// A local variable: `int $x`.
+pub fn local_label(name: &str, ty: &Ty) -> String {
     let name = name.trim_start_matches('$');
-    match kind {
-        LocalKind::Val => format!("val {name}: {ty}"),
-        LocalKind::Var => format!("var ${name}: {ty}"),
-        LocalKind::Param(Binding::Val) => format!("{name}: {ty}"),
-        LocalKind::Param(Binding::Mut) => format!("mut {name}: {ty}"),
-        LocalKind::Param(Binding::Php) | LocalKind::Php | LocalKind::Loop | LocalKind::This => {
-            format!("${name}: {ty}")
-        }
+    format!("{} ${name}", render::ty(ty))
+}
+
+fn visibility(v: Visibility) -> &'static str {
+    match v {
+        Visibility::Public => "public",
+        Visibility::Protected => "protected",
+        Visibility::Private => "private",
     }
 }
 
@@ -110,14 +97,13 @@ pub fn describe(
     match def {
         Def::Local { decl } => {
             let typed = typed_file(db, ws, file);
-            let (declared, kind) = typed.locals.get(decl)?.clone();
+            let (declared, _) = typed.locals.get(decl)?.clone();
             let name = text_at(db, file, *decl);
-            // a val keeps its literal type internally; show the declared one
             let ty = narrowed
                 .filter(|t| !t.is_error())
                 .map(|t| stir_checker::widen_literals(&t))
                 .unwrap_or(declared);
-            Some(render::code(&local_label(&name, kind, &ty)))
+            Some(render::code(&local_label(&name, &ty)))
         }
         Def::Function(loc) => {
             let f = ctx.function_def(*loc);
@@ -179,15 +165,20 @@ pub fn describe(
                 .collect();
                 code.push_str(&format!(" {{ {} }}", fields.join("; ")));
             } else {
-                let supers: Vec<String> = view
-                    .parent
-                    .iter()
-                    .chain(view.interfaces.iter())
-                    .map(|s| s.rsplit('\\').next().unwrap_or(s).to_owned())
-                    .collect();
-                if !supers.is_empty() {
-                    code.push_str(" : ");
-                    code.push_str(&supers.join(", "));
+                let short = |s: &str| s.rsplit('\\').next().unwrap_or(s).to_owned();
+                if let Some(parent) = &view.parent {
+                    code.push_str(" extends ");
+                    code.push_str(&short(parent));
+                }
+                if !view.interfaces.is_empty() {
+                    let keyword = if model.kind() == ClassKind::Interface {
+                        " extends "
+                    } else {
+                        " implements "
+                    };
+                    let list: Vec<String> = view.interfaces.iter().map(|i| short(i)).collect();
+                    code.push_str(keyword);
+                    code.push_str(&list.join(", "));
                 }
             }
             Some(with_doc(
@@ -221,11 +212,12 @@ pub fn describe(
                 MemberKind::Property => {
                     let p = ctx.find_property(&model.self_ty(), name)?;
                     let ty = narrowed.filter(|t| !t.is_error()).unwrap_or(p.ty);
-                    let code = if p.immutable {
-                        format!("val {name}: {ty}")
-                    } else {
-                        format!("var ${name}: {ty}")
-                    };
+                    let readonly = if p.immutable { "readonly " } else { "" };
+                    let code = format!(
+                        "{} {readonly}{} ${name}",
+                        visibility(p.visibility),
+                        render::ty(&ty)
+                    );
                     let doc = model
                         .def
                         .properties
@@ -236,7 +228,11 @@ pub fn describe(
                 }
                 MemberKind::Const => {
                     let ty = ctx.find_const(&model.self_ty(), name)?;
-                    Some(with_doc(format!("const {name}: {ty}"), Some(owner), None))
+                    Some(with_doc(
+                        format!("const {} {name}", render::ty(&ty)),
+                        Some(owner),
+                        None,
+                    ))
                 }
                 MemberKind::Case => Some(with_doc(format!("case {name}"), Some(owner), None)),
                 MemberKind::Field => {
@@ -250,7 +246,11 @@ pub fn describe(
                             _ => None,
                         })?;
                     let ty = narrowed.filter(|t| !t.is_error()).unwrap_or(ty);
-                    Some(with_doc(format!("{name}: {ty}"), Some(owner), None))
+                    Some(with_doc(
+                        format!("{} {name}", render::ty(&ty)),
+                        Some(owner),
+                        None,
+                    ))
                 }
             }
         }

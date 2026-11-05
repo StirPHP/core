@@ -1,5 +1,0 @@
-namespace App
-
-// `.sphp` files are always checked in full
-val s: String = \Legacy\typed(1)
-val bad: Int = \Legacy\typed(1) // error: SPHP0005

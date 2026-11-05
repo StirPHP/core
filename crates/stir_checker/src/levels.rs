@@ -1,6 +1,6 @@
 //! PHPStan-style rule levels for diagnostics in `.php` files, plus
-//! `ignoreErrors` and the per-file `// @sphp-check` / `// @sphp-nocheck`
-//! directives. `.sphp` files are always fully checked.
+//! `ignoreErrors` and the per-file `// @sphp-nocheck` directive. `.sphp` files
+//! are always fully checked.
 //!
 //! | level | what is reported |
 //! |-------|------------------|
@@ -51,9 +51,9 @@ pub fn min_level(d: &Diagnostic) -> u8 {
     }
 }
 
-/// A leading `// @sphp-check` (`Some(true)`) or `// @sphp-nocheck` (`Some(false)`)
-/// comment: only the comments before the first statement count.
-pub fn directive(text: &str) -> Option<bool> {
+/// A leading `// @sphp-nocheck` comment opts a file out of checking: only the
+/// comments before the first statement count.
+pub fn is_nocheck(text: &str) -> bool {
     let mut in_block = false;
     for line in text.lines() {
         let l = line.trim();
@@ -78,20 +78,14 @@ pub fn directive(text: &str) -> Option<bool> {
         } else {
             None
         };
-        let c = comment?;
+        let Some(c) = comment else {
+            return false;
+        };
         if c.contains("@sphp-nocheck") {
-            return Some(false);
-        }
-        if c.contains("@sphp-check") {
-            return Some(true);
+            return true;
         }
     }
-    None
-}
-
-/// Is a project `.php` file checked under `settings`?
-pub fn php_checked(text: &str, settings: &Settings) -> bool {
-    directive(text).unwrap_or(settings.check_php)
+    false
 }
 
 /// Drops `.php` diagnostics above the configured level, matched by `ignoreErrors`
@@ -261,15 +255,11 @@ mod tests {
     }
 
     #[test]
-    fn directives() {
-        assert_eq!(directive("<?php\n// @sphp-check\nfoo();"), Some(true));
-        assert_eq!(directive("<?php // @sphp-nocheck\n"), Some(false));
-        assert_eq!(
-            directive("<?php\n/**\n * header\n * @sphp-check\n */\n"),
-            Some(true)
-        );
-        assert_eq!(directive("<?php\nfoo(); // @sphp-check\n"), None);
-        assert_eq!(directive("<?php\n\nnamespace A;\n"), None);
+    fn nocheck_directive() {
+        assert!(is_nocheck("<?php // @sphp-nocheck\n"));
+        assert!(is_nocheck("<?php\n/**\n * header\n * @sphp-nocheck\n */\n"));
+        assert!(!is_nocheck("<?php\nfoo(); // @sphp-nocheck\n"));
+        assert!(!is_nocheck("<?php\n\nnamespace A;\n"));
     }
 
     #[test]
@@ -297,7 +287,7 @@ mod tests {
         );
 
         let settings = Settings {
-            php_level: Some(4),
+            php_level: 4,
             ignore_errors: vec![
                 IgnoreRule {
                     patterns: vec!["#^unknown function `ig.*`$#i".into()],

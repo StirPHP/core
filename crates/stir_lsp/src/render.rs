@@ -1,26 +1,36 @@
 //! Text shown to the user: signatures, declarations and doc comments.
 
 use stir_checker::model_api::{ParamInfo, SigInfo};
-use stir_hir::{Binding, ClassKind, DocText};
+use stir_hir::{ClassKind, DocText};
 use stir_types::Ty;
 
-/// `name: T`, `mut name: T`, `$name: T` (PHP), with `...`/` = …` decorations.
+/// A type as PHPDoc writes it, with class names as PHP's errors print them: no
+/// leading backslash.
+pub fn ty(ty: &Ty) -> String {
+    let doc = stir_types::to_phpdoc(ty);
+    let mut out = String::with_capacity(doc.len());
+    let mut in_name = false;
+    for c in doc.chars() {
+        if c != '\\' || in_name {
+            out.push(c);
+        }
+        in_name = c.is_alphanumeric() || c == '_' || c == '\\';
+    }
+    out
+}
+
+/// `int $name`, with `&`, `...` and ` = …` decorations.
 pub fn param(p: &ParamInfo) -> String {
-    let mut s = String::new();
+    let mut s = ty(&p.ty);
+    s.push(' ');
+    if p.by_ref {
+        s.push('&');
+    }
     if p.variadic {
         s.push_str("...");
     }
-    match p.binding {
-        Binding::Val => {}
-        Binding::Mut => s.push_str("mut "),
-        Binding::Php => s.push('$'),
-    }
-    if p.by_ref {
-        s.insert(0, '&');
-    }
+    s.push('$');
     s.push_str(&p.name);
-    s.push_str(": ");
-    s.push_str(&p.ty.to_string());
     if p.optional {
         s.push_str(" = …");
     }
@@ -35,7 +45,7 @@ pub fn type_params(params: &[(smol_str::SmolStr, Option<Ty>)]) -> String {
     let list: Vec<String> = params
         .iter()
         .map(|(n, b)| match b {
-            Some(b) => format!("{n} of {b}"),
+            Some(b) => format!("{n} of {}", ty(b)),
             None => n.to_string(),
         })
         .collect();
@@ -48,23 +58,15 @@ pub struct SigLabel {
     pub params: Vec<(u32, u32)>,
 }
 
-/// `function <T> Recv.name(a: Int, b: String): Ret`
+/// `function name<T>(int $a, string $b): int`
 pub fn signature(sig: &SigInfo, keyword: &str) -> SigLabel {
     let mut label = String::new();
     if !keyword.is_empty() {
         label.push_str(keyword);
         label.push(' ');
     }
-    let tps = type_params(&sig.type_params);
-    if !tps.is_empty() {
-        label.push_str(&tps);
-        label.push(' ');
-    }
-    if let Some(r) = &sig.receiver {
-        label.push_str(&r.to_string());
-        label.push('.');
-    }
     label.push_str(sig.name.rsplit('\\').next().unwrap_or(&sig.name));
+    label.push_str(&type_params(&sig.type_params));
     label.push('(');
     let mut params = Vec::new();
     for (i, p) in sig.params.iter().enumerate() {
@@ -78,7 +80,7 @@ pub fn signature(sig: &SigInfo, keyword: &str) -> SigLabel {
     label.push(')');
     if sig.ret_declared || !sig.ret.is_error() {
         label.push_str(": ");
-        label.push_str(&sig.ret.to_string());
+        label.push_str(&ty(&sig.ret));
     }
     SigLabel { label, params }
 }
@@ -93,13 +95,9 @@ pub fn class_keyword(kind: ClassKind, mods: &stir_hir::ClassMods) -> String {
     };
     let mut s = String::new();
     for (on, m) in [
-        (mods.is_sealed, "sealed "),
-        (
-            mods.is_abstract && !mods.is_sealed && kind == ClassKind::Class,
-            "abstract ",
-        ),
-        (mods.is_open, "open "),
-        (mods.is_data, "data "),
+        (mods.is_final, "final "),
+        (mods.is_abstract && kind == ClassKind::Class, "abstract "),
+        (mods.is_readonly, "readonly "),
     ] {
         if on {
             s.push_str(m);
@@ -138,7 +136,7 @@ pub fn doc(doc: &DocText) -> String {
     lines.join("\n")
 }
 
-/// A fenced StirPHP code block.
+/// A fenced PHP code block.
 pub fn code(text: &str) -> String {
-    format!("```sphp\n{text}\n```")
+    format!("```php\n{text}\n```")
 }

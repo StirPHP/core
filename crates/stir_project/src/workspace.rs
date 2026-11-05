@@ -1,13 +1,13 @@
 //! Building the salsa database for a project: project sources, builtin stubs and
 //! vendor PHP files reachable through Composer autoload rules.
 //!
-//! Shared by `sphp check`, `sphp build` and the language server.
+//! Shared by `sphp check` and the language server.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::{Autoload, FileKind, Project};
+use crate::{Autoload, Project};
 use anyhow::Context as _;
 use futures::{StreamExt as _, TryStreamExt as _};
 use stir_db::{FileOrigin, IgnoreRule, RootDatabase, Settings, SourceFile, Workspace};
@@ -21,11 +21,16 @@ const READ_CONCURRENCY: usize = 64;
 pub struct LoadOptions {
     /// Load vendor PHP files reachable through Composer autoload rules.
     pub vendor: bool,
+    /// The rule level, over the one in the PHPStan config.
+    pub level: Option<u8>,
 }
 
 impl Default for LoadOptions {
     fn default() -> Self {
-        Self { vendor: true }
+        Self {
+            vendor: true,
+            level: None,
+        }
     }
 }
 
@@ -45,12 +50,12 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
     let start = Instant::now();
     let discovered = crate::discover(project).await?;
 
-    let source_texts: Vec<(PathBuf, FileKind, String)> =
+    let source_texts: Vec<(PathBuf, String)> =
         futures::stream::iter(discovered.into_iter().map(|file| async move {
             let text = read_lossy(&file.path)
                 .await
                 .with_context(|| format!("failed to read `{}`", file.path.display()))?;
-            anyhow::Ok((file.path, file.kind, text))
+            anyhow::Ok((file.path, text))
         }))
         .buffered(READ_CONCURRENCY)
         .try_collect()
@@ -58,8 +63,8 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
 
     let vendor_texts = if options.vendor {
         let autoload = crate::load_autoload(project).await?;
-        let own: Vec<PathBuf> = source_texts.iter().map(|(p, ..)| p.clone()).collect();
-        let paths = vendor_paths(autoload, own, project.out_dir()).await?;
+        let own: Vec<PathBuf> = source_texts.iter().map(|(p, _)| p.clone()).collect();
+        let paths = vendor_paths(autoload, own).await?;
         read_vendor(paths).await
     } else {
         Vec::new()
@@ -68,12 +73,8 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
     let db = RootDatabase::default();
     let mut files = Vec::new();
     let mut sources = Vec::new();
-    for (path, kind, text) in source_texts {
-        let dialect = match kind {
-            FileKind::Sphp => Dialect::Stir,
-            FileKind::Php => Dialect::Php,
-        };
-        let file = SourceFile::new(&db, path, text, dialect, FileOrigin::Source);
+    for (path, text) in source_texts {
+        let file = SourceFile::new(&db, path, text, Dialect::Php, FileOrigin::Source);
         sources.push(file);
         files.push(file);
     }
@@ -112,7 +113,10 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
             ));
         }
     }
-    let settings = settings_from(project, config);
+    let mut settings = settings_from(config);
+    if let Some(level) = options.level {
+        settings.php_level = level;
+    }
     let workspace = Workspace::new(&db, files, settings);
     tracing::debug!(
         sources = sources.len(),
@@ -130,34 +134,26 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
     })
 }
 
-/// The builtin PHP stubs (`stubs://...`) and the StirPHP stdlib (`stdlib://...`).
+/// The builtin PHP stubs (`stubs://...`).
 pub fn builtin_files(db: &RootDatabase) -> Vec<SourceFile> {
-    let stubs = stir_stubs::stub_files().map(|stub| {
-        SourceFile::new(
-            db,
-            PathBuf::from(format!("stubs://{}", stub.path)),
-            stub.text.to_owned(),
-            Dialect::Php,
-            FileOrigin::Stub,
-        )
-    });
-    let stdlib = stir_stubs::stdlib_files().map(|lib| {
-        SourceFile::new(
-            db,
-            PathBuf::from(format!("stdlib://{}", lib.path)),
-            lib.text.to_owned(),
-            Dialect::Stir,
-            FileOrigin::Stub,
-        )
-    });
-    stubs.chain(stdlib).collect()
+    stir_stubs::stub_files()
+        .map(|stub| {
+            SourceFile::new(
+                db,
+                PathBuf::from(format!("stubs://{}", stub.path)),
+                stub.text.to_owned(),
+                Dialect::Php,
+                FileOrigin::Stub,
+            )
+        })
+        .collect()
 }
 
-/// Check settings: `checkPhp` from `sphp.toml`, plus the rule level and
-/// `ignoreErrors` of the PHPStan config (the `phpstan` key of `sphp.toml`, else
+/// Check settings: the rule level and `ignoreErrors` of the PHPStan config (the
+/// `phpstan` key of `sphp.toml`, else
 /// `phpstan.neon` or `phpstan.neon.dist` at the project root).
 pub async fn load_settings(project: &Project) -> anyhow::Result<Settings> {
-    Ok(settings_from(project, load_phpstan_config(project).await?))
+    Ok(settings_from(load_phpstan_config(project).await?))
 }
 
 async fn load_phpstan_config(
@@ -228,11 +224,8 @@ async fn scanned_paths(
     .context("failed to list the PHPStan scan paths")
 }
 
-fn settings_from(project: &Project, config: Option<stir_neon::phpstan::PhpstanConfig>) -> Settings {
-    let mut settings = Settings {
-        check_php: project.config.check_php,
-        ..Settings::default()
-    };
+fn settings_from(config: Option<stir_neon::phpstan::PhpstanConfig>) -> Settings {
+    let mut settings = Settings::default();
     let Some(config) = config else {
         return settings;
     };
@@ -244,10 +237,12 @@ fn settings_from(project: &Project, config: Option<stir_neon::phpstan::PhpstanCo
         .chain(&config.exclude_paths.analyse_and_scan)
         .cloned()
         .collect();
-    settings.php_level = config.level.map(|l| match l {
-        stir_neon::phpstan::Level::Level(n) => n.min(stir_db::MAX_PHP_LEVEL),
-        stir_neon::phpstan::Level::Max => stir_db::MAX_PHP_LEVEL,
-    });
+    if let Some(level) = config.level {
+        settings.php_level = match level {
+            stir_neon::phpstan::Level::Level(n) => n.min(stir_db::MAX_PHP_LEVEL),
+            stir_neon::phpstan::Level::Max => stir_db::MAX_PHP_LEVEL,
+        };
+    }
     settings.ignore_errors = config
         .ignore_errors
         .into_iter()
@@ -270,12 +265,8 @@ fn settings_from(project: &Project, config: Option<stir_neon::phpstan::PhpstanCo
 }
 
 /// Collects every `.php` file reachable from the autoload rules, canonicalised and
-/// deduplicated, excluding the project's own sources and its output directory.
-async fn vendor_paths(
-    autoload: Autoload,
-    own: Vec<PathBuf>,
-    out_dir: PathBuf,
-) -> anyhow::Result<Vec<PathBuf>> {
+/// deduplicated, excluding the project's own sources.
+async fn vendor_paths(autoload: Autoload, own: Vec<PathBuf>) -> anyhow::Result<Vec<PathBuf>> {
     tokio::task::spawn_blocking(move || {
         let roots = autoload
             .psr4
@@ -288,18 +279,13 @@ async fn vendor_paths(
             .iter()
             .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
             .collect();
-        let out_dir = std::fs::canonicalize(&out_dir).ok();
 
         let mut seen_dirs = BTreeSet::new();
         let mut found = BTreeSet::new();
         for root in roots {
             walk_php(&root, &mut seen_dirs, &mut found);
         }
-        found
-            .into_iter()
-            .filter(|p| !own.contains(p))
-            .filter(|p| out_dir.as_ref().is_none_or(|out| !p.starts_with(out)))
-            .collect()
+        found.into_iter().filter(|p| !own.contains(p)).collect()
     })
     .await
     .map_err(Into::into)
@@ -371,7 +357,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path();
         write(&root.join("sphp.toml"), "srcDir = \"src\"\n");
-        write(&root.join("src/main.sphp"), "val x = 1\n");
+        write(&root.join("src/main.php"), "<?php\n$x = 1;\n");
         write(&root.join("src/Legacy.php"), "<?php\nclass Legacy {}\n");
         write(
             &root.join("composer.json"),
@@ -410,24 +396,24 @@ mod tests {
         // source, so it is not loaded twice.
         assert_eq!(count(FileOrigin::Vendor), 3);
         assert_eq!(loaded.vendor_count, 3);
-        assert_eq!(
-            count(FileOrigin::Stub),
-            loaded.stub_count + stir_stubs::stdlib_files().count()
-        );
+        assert_eq!(count(FileOrigin::Stub), loaded.stub_count);
         assert!(loaded.stub_count > 0);
         assert!(
             files
                 .iter()
                 .filter(|f| f.origin(db) == FileOrigin::Stub)
-                .all(|f| {
-                    let p = f.path(db).to_string_lossy();
-                    p.starts_with("stubs://") || p.starts_with("stdlib://")
-                })
+                .all(|f| f.path(db).to_string_lossy().starts_with("stubs://"))
         );
 
-        let without = load_workspace(&project, LoadOptions { vendor: false })
-            .await
-            .unwrap();
+        let without = load_workspace(
+            &project,
+            LoadOptions {
+                vendor: false,
+                ..LoadOptions::default()
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(without.vendor_count, 0);
     }
 
@@ -440,9 +426,15 @@ mod tests {
         std::fs::write(root.join("src/latin1.php"), b"<?php\n// caf\xe9\n").unwrap();
 
         let project = Project::load(root).await.unwrap();
-        let loaded = load_workspace(&project, LoadOptions { vendor: false })
-            .await
-            .unwrap();
+        let loaded = load_workspace(
+            &project,
+            LoadOptions {
+                vendor: false,
+                ..LoadOptions::default()
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(loaded.sources.len(), 1);
         assert!(loaded.sources[0].text(&loaded.db).contains("caf\u{fffd}"));
     }
@@ -451,18 +443,14 @@ mod tests {
     async fn reads_phpstan_settings() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path();
-        write(
-            &root.join("sphp.toml"),
-            "srcDir = \"src\"\ncheckPhp = true\n",
-        );
+        write(&root.join("sphp.toml"), "srcDir = \"src\"\n");
         write(
             &root.join("phpstan.neon.dist"),
             "parameters:\n    level: 5\n    ignoreErrors:\n        - '#^unknown function#'\n        -\n            identifier: SPHP0007\n            path: src/legacy.php\n",
         );
         let project = Project::load(root).await.unwrap();
         let settings = load_settings(&project).await.unwrap();
-        assert!(settings.check_php);
-        assert_eq!(settings.php_level, Some(5));
+        assert_eq!(settings.php_level, 5);
         assert_eq!(settings.ignore_errors.len(), 2);
         assert_eq!(settings.ignore_errors[0].patterns, ["#^unknown function#"]);
         assert_eq!(settings.ignore_errors[1].identifiers, ["SPHP0007"]);
@@ -478,8 +466,7 @@ mod tests {
         );
         let project = Project::load(root).await.unwrap();
         let settings = load_settings(&project).await.unwrap();
-        assert!(!settings.check_php);
-        assert_eq!(settings.php_level, Some(stir_db::MAX_PHP_LEVEL));
+        assert_eq!(settings.php_level, stir_db::MAX_PHP_LEVEL);
     }
 
     #[tokio::test]
@@ -497,9 +484,15 @@ mod tests {
             "parameters:\n    paths:\n        - src\n    excludePaths:\n        analyse:\n            - src/gen\n    bootstrapFiles:\n        - tools/boot.php\n    scanFiles:\n        - src/a.php\n",
         );
         let project = Project::load(&root).await.unwrap();
-        let loaded = load_workspace(&project, LoadOptions { vendor: false })
-            .await
-            .unwrap();
+        let loaded = load_workspace(
+            &project,
+            LoadOptions {
+                vendor: false,
+                ..LoadOptions::default()
+            },
+        )
+        .await
+        .unwrap();
         let settings = loaded.workspace.settings(&loaded.db);
         assert_eq!(settings.php_paths, [root.join("src")]);
         assert_eq!(settings.php_excludes, [root.join("src/gen")]);

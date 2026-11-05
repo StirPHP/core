@@ -63,16 +63,15 @@ pub const DEFAULT_PHP_VERSION: (u8, u8) = (8, 4);
 
 /// The highest PHPStan rule level (`max`).
 pub const MAX_PHP_LEVEL: u8 = 10;
+/// The rule level without a configured one: argument types and everything below.
+pub const DEFAULT_PHP_LEVEL: u8 = 5;
 
 /// How a workspace is checked (from `sphp.toml` and `phpstan.neon`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Settings {
-    /// Check project `.php` files (`checkPhp`); a file can opt in or out with a
-    /// leading `// @sphp-check` / `// @sphp-nocheck` comment.
-    pub check_php: bool,
-    /// PHPStan rule level (0..=10) `.php` files are checked at; `None` reports
-    /// everything (like `max`). `.sphp` files are always fully checked.
-    pub php_level: Option<u8>,
+    /// PHPStan rule level (0..=10) `.php` files are checked at. `.sphp` files are
+    /// always fully checked.
+    pub php_level: u8,
     /// Target PHP version `(major, minor)`.
     pub php_version: (u8, u8),
     /// PHPStan `ignoreErrors`, applied to diagnostics in `.php` files only.
@@ -86,8 +85,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            check_php: false,
-            php_level: None,
+            php_level: DEFAULT_PHP_LEVEL,
             php_version: DEFAULT_PHP_VERSION,
             ignore_errors: Vec::new(),
             php_paths: Vec::new(),
@@ -99,7 +97,7 @@ impl Default for Settings {
 impl Settings {
     /// The effective level for `.php` files.
     pub fn level(&self) -> u8 {
-        self.php_level.unwrap_or(MAX_PHP_LEVEL).min(MAX_PHP_LEVEL)
+        self.php_level.min(MAX_PHP_LEVEL)
     }
 }
 

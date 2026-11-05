@@ -3,7 +3,7 @@
 # writes one summary per project to .corpus-results/<label>/, for comparing
 # diagnostic counts and timing between revisions.
 #   git submodule update --init --depth 1
-#   scripts/check-corpus.sh <label> [project...]
+#   [LEVEL=n] scripts/check-corpus.sh <label> [project...]
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 label="${1:?usage: check-corpus.sh <label> [project...]}"
@@ -18,10 +18,6 @@ bin="$root/target/release/sphp"
 out="$root/.corpus-results/$label"
 mkdir -p "$out"
 
-config=""
-cleanup() { if [ -n "$config" ]; then rm -f "$config"; fi; }
-trap cleanup EXIT
-
 for name in "${projects[@]}"; do
   dir="$root/corpus/$name"
   if [ ! -d "$dir/vendor" ]; then
@@ -30,14 +26,10 @@ for name in "${projects[@]}"; do
       --no-progress --ignore-platform-reqs)
   fi
 
-  config="$dir/sphp.toml"
-  printf 'srcDir = "."\noutDir = ".sphp-out"\ncheckPhp = true\n' > "$config"
   start=$(date +%s.%N)
   status=0
-  (cd "$dir" && "$bin" check --format json) > "$out/$name.json" 2> "$out/$name.stderr" || status=$?
+  (cd "$dir" && "$bin" check --format json ${LEVEL:+--level "$LEVEL"}) > "$out/$name.json" 2> "$out/$name.stderr" || status=$?
   end=$(date +%s.%N)
-  rm -f "$config"
-  config=""
 
   {
     echo "project: $name"

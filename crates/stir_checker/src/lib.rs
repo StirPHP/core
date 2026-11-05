@@ -3,12 +3,9 @@
 //! Entry point: [`check_file`], a salsa query returning every diagnostic of a
 //! file (syntax errors included).
 //!
-//! Project `.php` files are checked only when the workspace [`Settings`] enable
-//! `check_php` or the file opts in with a leading `// @sphp-check` comment
-//! (`// @sphp-nocheck` opts out); their diagnostics are filtered by the PHPStan
+//! Project `.php` files are checked unless they opt out with a leading
+//! `// @sphp-nocheck` comment; their diagnostics are filtered by the PHPStan
 //! rule level and `ignoreErrors` (see [`levels`]).
-//!
-//! [`Settings`]: stir_db::Settings
 
 #![allow(clippy::nonminimal_bool)]
 
@@ -35,8 +32,7 @@ pub use typed::{Def, MemberKind, TypedFile, typed_file};
 pub fn check_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> Arc<Vec<Diagnostic>> {
     let php = file.dialect(db) == Dialect::Php;
     let settings = ws.settings(db);
-    if php && file.origin(db) == FileOrigin::Source && !levels::php_checked(file.text(db), settings)
-    {
+    if php && file.origin(db) == FileOrigin::Source && levels::is_nocheck(file.text(db)) {
         return Arc::new(Vec::new());
     }
     let mut diags = stir_db::syntax_diagnostics(db, file).as_ref().clone();

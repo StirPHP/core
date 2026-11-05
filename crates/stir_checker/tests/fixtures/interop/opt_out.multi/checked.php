@@ -1,5 +1,4 @@
 <?php
-// @sphp-check
 namespace Legacy;
 
 undefined_function(); // error: SPHP0007

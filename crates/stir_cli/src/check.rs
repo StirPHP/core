@@ -11,7 +11,7 @@ use clap::{Args, ValueEnum};
 use futures::{StreamExt as _, TryStreamExt as _};
 use stir_db::{Diagnostic, Severity, SourceFile};
 use stir_project::Project;
-use stir_syntax::{Dialect, TextRange};
+use stir_syntax::TextRange;
 
 use stir_project::workspace::{LoadOptions, Loaded, load_workspace};
 
@@ -25,6 +25,9 @@ pub struct CheckArgs {
     /// Do not load vendor files from Composer autoload rules.
     #[arg(long)]
     pub no_vendor: bool,
+    /// The rule level, 0 to 10, over the one in the PHPStan config.
+    #[arg(short, long, value_parser = clap::value_parser!(u8).range(0..=10))]
+    pub level: Option<u8>,
     /// Show at most N diagnostics (all are still counted).
     #[arg(long, value_name = "N")]
     pub max_errors: Option<usize>,
@@ -38,13 +41,14 @@ pub enum Format {
 
 pub async fn run(args: CheckArgs) -> anyhow::Result<ExitCode> {
     let cwd = std::env::current_dir()?;
-    let project = load_project(&cwd).await?;
+    let project = Project::load_or_default(&cwd).await?;
 
     let filters = canonical_filters(&cwd, &args.paths).await?;
     let loaded = load_workspace(
         &project,
         LoadOptions {
             vendor: !args.no_vendor,
+            level: args.level,
         },
     )
     .await?;
@@ -55,7 +59,7 @@ pub async fn run(args: CheckArgs) -> anyhow::Result<ExitCode> {
         vendor = loaded.vendor_count,
         "loaded files"
     );
-    let (diagnostics, checked) = collect_diagnostics(&project, &loaded, &filters).await?;
+    let (diagnostics, checked) = collect_diagnostics(&loaded, &filters).await?;
     let texts = source_texts(&loaded);
     let shown = &diagnostics[..args.max_errors.unwrap_or(usize::MAX).min(diagnostics.len())];
 
@@ -82,38 +86,18 @@ pub async fn run(args: CheckArgs) -> anyhow::Result<ExitCode> {
     })
 }
 
-/// Loads the project whose `sphp.toml` is in `cwd` or one of its ancestors.
-pub(crate) async fn load_project(cwd: &Path) -> anyhow::Result<Project> {
-    match Project::load(cwd).await {
-        Ok(project) => Ok(project),
-        Err(stir_project::Error::ConfigNotFound { start }) => anyhow::bail!(
-            "no `{}` found in `{}` or any parent directory\n\nhint: run `sphp init` to create a StirPHP project here",
-            stir_project::CONFIG_FILE,
-            start.display()
-        ),
-        Err(e) => Err(e.into()),
-    }
-}
-
-/// Type-checks the project's sources (`.php` ones only with `checkPhp` or a
-/// `// @sphp-check` comment), limited to
-/// files under `filters` when non-empty. Returns the sorted diagnostics and the
+/// Type-checks the project's sources, except `.php` ones with a `// @sphp-nocheck`
+/// comment, limited to files under `filters` when non-empty. Returns the sorted diagnostics and the
 /// number of files checked.
-pub(crate) async fn collect_diagnostics(
-    project: &Project,
+async fn collect_diagnostics(
     loaded: &Loaded,
     filters: &[PathBuf],
 ) -> anyhow::Result<(Vec<Diagnostic>, usize)> {
-    let check_php = project.config.check_php;
     let targets: Vec<SourceFile> = loaded
         .sources
         .iter()
         .copied()
-        .filter(|f| {
-            // `// @sphp-check` / `// @sphp-nocheck` override `checkPhp` per file.
-            f.dialect(&loaded.db) != Dialect::Php
-                || stir_checker::levels::directive(f.text(&loaded.db)).unwrap_or(check_php)
-        })
+        .filter(|f| !stir_checker::levels::is_nocheck(f.text(&loaded.db)))
         .filter(|f| filters.is_empty() || filters.iter().any(|p| f.path(&loaded.db).starts_with(p)))
         .collect();
 
@@ -133,7 +117,7 @@ pub(crate) async fn collect_diagnostics(
 }
 
 /// Path → text of every project source, for rendering diagnostics.
-pub(crate) fn source_texts(loaded: &Loaded) -> HashMap<&Path, &str> {
+fn source_texts(loaded: &Loaded) -> HashMap<&Path, &str> {
     loaded
         .sources
         .iter()
@@ -143,7 +127,7 @@ pub(crate) fn source_texts(loaded: &Loaded) -> HashMap<&Path, &str> {
 
 /// Renders diagnostics for humans (coloured when stdout is a terminal), showing at
 /// most `max_errors` of them.
-pub(crate) fn print_human(
+fn print_human(
     out: &mut impl std::io::Write,
     diagnostics: &[Diagnostic],
     texts: &HashMap<&Path, &str>,
@@ -195,15 +179,15 @@ fn use_color(is_tty: bool) -> bool {
     is_tty && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
 }
 
-pub(crate) struct Summary {
-    pub(crate) errors: usize,
+struct Summary {
+    errors: usize,
     warnings: usize,
     files_with_problems: usize,
     checked: usize,
 }
 
 impl Summary {
-    pub(crate) fn new(diagnostics: &[Diagnostic], checked: usize) -> Self {
+    fn new(diagnostics: &[Diagnostic], checked: usize) -> Self {
         let count = |s| diagnostics.iter().filter(|d| d.severity == s).count();
         let mut files: Vec<&Path> = diagnostics.iter().map(|d| d.file.as_path()).collect();
         files.dedup();
@@ -266,7 +250,7 @@ impl<'a> LineMap<'a> {
     }
 }
 
-pub(crate) fn display_path(path: &Path, cwd: &Path) -> String {
+fn display_path(path: &Path, cwd: &Path) -> String {
     path.strip_prefix(cwd).unwrap_or(path).display().to_string()
 }
 

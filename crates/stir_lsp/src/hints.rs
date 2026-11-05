@@ -3,7 +3,7 @@
 use stir_checker::model_api::{self, SigInfo};
 use stir_checker::{Ctx, Def, LocalKind, MemberKind, typed_file};
 use stir_db::{Db, SourceFile, Workspace};
-use stir_syntax::{SyntaxKind::*, SyntaxNode, TextRange, TextSize};
+use stir_syntax::{Dialect, SyntaxKind::*, SyntaxNode, TextRange, TextSize};
 
 use crate::nav;
 use crate::render;
@@ -15,7 +15,8 @@ pub struct TypeHint {
     pub label: String,
 }
 
-/// `: T` after bindings declared without a type: `val`/`var` and lambda parameters.
+/// `: T` after bindings declared without a type: PHP variables and untyped parameters,
+/// `val`/`var` and lambda parameters.
 pub fn inlay_hints(
     db: &dyn Db,
     ws: Workspace,
@@ -24,6 +25,7 @@ pub fn inlay_hints(
 ) -> Vec<TypeHint> {
     let root = stir_db::parse(db, file).syntax();
     let typed = typed_file(db, ws, file);
+    let php = file.dialect(db) == Dialect::Php;
     let mut out = Vec::new();
     for (decl, (ty, kind)) in typed.locals.iter() {
         if !range.contains_range(*decl) || ty.is_error() || ty.contains_error() {
@@ -32,6 +34,26 @@ pub fn inlay_hints(
         let Some(token) = root.covering_element(*decl).into_token() else {
             continue;
         };
+        if php {
+            let ty = stir_checker::widen_literals(&stir_checker::strip_platform(ty));
+            let wanted = match kind {
+                LocalKind::Php | LocalKind::Loop => true,
+                // a parameter's type is only news if it isn't written next to it
+                LocalKind::Param(_) => token
+                    .parent()
+                    .and_then(|n| n.ancestors().find(|a| a.kind() == PARAM))
+                    .is_some_and(|p| stir_hir::first_type(&p).is_none()),
+                _ => false,
+            };
+            let label = render::ty(&ty);
+            if wanted && label != "mixed" {
+                out.push(TypeHint {
+                    offset: decl.end(),
+                    label: format!(": {label}"),
+                });
+            }
+            continue;
+        }
         let Some(holder) = token.parent().and_then(|n| {
             n.ancestors().find(|a| {
                 matches!(

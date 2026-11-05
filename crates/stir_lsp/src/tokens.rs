@@ -4,7 +4,7 @@
 use stir_checker::{Def, LocalKind, MemberKind, typed_file};
 use stir_db::{Db, FileOrigin, SourceFile, Workspace};
 use stir_hir::{Binding, ClassKind, file_items};
-use stir_syntax::{SyntaxKind, SyntaxKind::*, TextRange};
+use stir_syntax::{Dialect, SyntaxKind, SyntaxKind::*, TextRange};
 
 use crate::nav;
 
@@ -128,6 +128,14 @@ fn resolved(db: &dyn Db, ws: Workspace, file: SourceFile, def: &Def) -> Option<(
     Some(match def {
         Def::Local { decl } => {
             let (_, kind) = typed_file(db, ws, file).locals.get(decl)?.clone();
+            // every PHP variable is mutable, so marking it says nothing
+            if file.dialect(db) == Dialect::Php {
+                let ty = match kind {
+                    LocalKind::Param(_) => TokenType::Parameter,
+                    _ => TokenType::Variable,
+                };
+                return Some((ty, 0));
+            }
             match kind {
                 LocalKind::Val => (TokenType::Variable, modifier::READONLY),
                 LocalKind::Param(Binding::Val) => (TokenType::Parameter, modifier::READONLY),

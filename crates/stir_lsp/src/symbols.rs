@@ -162,7 +162,7 @@ pub struct WorkspaceSymbol {
     pub range: TextRange,
 }
 
-/// Declarations of the project, its dependencies and the StirPHP stdlib whose
+/// Declarations of the project and its dependencies whose
 /// name fuzzily matches `query`.
 pub fn workspace_symbols(db: &dyn Db, ws: Workspace, query: &str) -> Vec<WorkspaceSymbol> {
     let q = query.to_ascii_lowercase();
@@ -172,8 +172,7 @@ pub fn workspace_symbols(db: &dyn Db, ws: Workspace, query: &str) -> Vec<Workspa
     };
     let mut out = Vec::new();
     for &file in ws.files(db) {
-        let stdlib = file.path(db).to_string_lossy().starts_with("stdlib://");
-        if file.origin(db) == FileOrigin::Stub && !stdlib {
+        if file.origin(db) == FileOrigin::Stub {
             continue;
         }
         let items = file_items(db, file);
