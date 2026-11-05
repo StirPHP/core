@@ -7,7 +7,9 @@ mod discover;
 mod error;
 pub mod workspace;
 
-pub use composer::{Autoload, InstalledPackage, load_autoload, parse_installed};
+pub use composer::{
+    Autoload, Composer, InstalledPackage, load_autoload, load_composer, parse_installed,
+};
 pub use config::{CONFIG_FILE, Config, Project};
 pub use discover::{SourceFile, discover};
 pub use error::{Error, Result};

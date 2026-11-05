@@ -204,7 +204,9 @@ async fn composer_root_autoload() {
     let tmp = TempDir::new().unwrap();
     let root = canon(&tmp);
     write(root.join("composer.json"), ROOT_COMPOSER);
-    let a = Autoload::load(&root.join("composer.json")).await.unwrap();
+    let a = load_autoload(&project(root.clone(), Config::default()))
+        .await
+        .unwrap();
 
     assert!(a.psr4.contains(&("App\\".into(), root.join("src"))));
     assert!(a.psr4.contains(&("App\\Lib\\".into(), root.join("lib"))));
@@ -261,7 +263,9 @@ async fn composer_installed_json_v2_format() {
             "dev": true
         }"#,
     );
-    let a = Autoload::load(&root.join("composer.json")).await.unwrap();
+    let a = load_autoload(&project(root.clone(), Config::default()))
+        .await
+        .unwrap();
     assert!(
         a.psr4
             .contains(&("Psr\\Log\\".into(), root.join("vendor/psr/log/src")))

@@ -363,8 +363,12 @@ fn global_items(
     };
     let ctx = Ctx::new(db, ws);
     let mut seen = FxHashSet::default();
+    let offered = |file: SourceFile| extension_is_offered(db, ws, file);
     for locs in index.functions.values() {
         let Some(&loc) = locs.first() else { continue };
+        if !offered(loc.file) {
+            continue;
+        }
         let f = &file_items(db, loc.file).functions[loc.index as usize];
         let short = f.name.short();
         if !fuzzy(short, prefix) || !seen.insert((0, short.to_ascii_lowercase())) {
@@ -390,6 +394,9 @@ fn global_items(
     }
     for locs in index.classes.values() {
         let Some(&loc) = locs.first() else { continue };
+        if !offered(loc.file) {
+            continue;
+        }
         let c = &file_items(db, loc.file).classes[loc.index as usize];
         if c.is_anonymous() {
             continue;
@@ -422,6 +429,9 @@ fn global_items(
     }
     for locs in index.consts.values() {
         let Some(&loc) = locs.first() else { continue };
+        if !offered(loc.file) {
+            continue;
+        }
         let c = &file_items(db, loc.file).consts[loc.index as usize];
         let short = c.name.short();
         if !fuzzy(short, prefix) {
@@ -451,4 +461,21 @@ fn global_items(
         out.items.truncate(LIMIT);
         out.incomplete = true;
     }
+}
+
+/// A stub of an extension that isn't PHP's own is only offered if Composer's files mention the
+/// extension, or there aren't any. It's still known to the checker: code can test for it.
+fn extension_is_offered(db: &dyn Db, ws: Workspace, file: SourceFile) -> bool {
+    let Some(declared) = &ws.settings(db).declared_extensions else {
+        return true;
+    };
+    if file.origin(db) != stir_db::FileOrigin::Stub {
+        return true;
+    }
+    let path = file.path(db).to_string_lossy();
+    let path = path.strip_prefix("stubs://").unwrap_or(&path);
+    let extension = path.split('/').next().unwrap_or_default();
+    stir_stubs::ships_with_php(extension)
+        || extension == "override"
+        || declared.iter().any(|d| d.eq_ignore_ascii_case(extension))
 }

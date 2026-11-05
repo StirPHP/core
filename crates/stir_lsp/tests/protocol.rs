@@ -246,3 +246,180 @@ async fn editing_a_php_file() {
 
     let _ = c.request("shutdown", Value::Null).await;
 }
+
+impl Client {
+    /// The `window/showMessage` notifications seen so far, without waiting for more.
+    fn shown_messages(&self) -> Vec<String> {
+        self.backlog
+            .iter()
+            .filter(|m| m["method"] == "window/showMessage")
+            .map(|m| m["params"]["message"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    /// Everything until a round trip, which the server answers after it's done loading.
+    async fn drain(&mut self, uri: &str) {
+        let _ = self
+            .request(
+                "textDocument/documentSymbol",
+                json!({"textDocument": {"uri": uri}}),
+            )
+            .await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn composer_install_state() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    write(
+        &root.join("composer.json"),
+        r#"{"require": {"acme/lib": "^1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+    );
+    let main = root.join("src/main.php");
+    let main_text = "<?php\nnamespace App;\n\nuse Acme\\Foo;\n\nnew Foo();\nnew Missing();\n";
+    write(&main, main_text);
+    let main_uri = uri(&main);
+
+    let mut c = Client::start();
+    c.request(
+        "initialize",
+        json!({"processId": null, "rootUri": uri(&root), "capabilities": {
+            "workspace": {"didChangeWatchedFiles": {"dynamicRegistration": true}}
+        }}),
+    )
+    .await;
+    c.notify("initialized", json!({})).await;
+
+    // the server asks to watch what says whether packages are installed
+    let registration = loop {
+        let m = c.next().await;
+        if m["method"] == "client/registerCapability" {
+            break m;
+        }
+        c.backlog.push(m);
+    };
+    let globs =
+        registration["params"]["registrations"][0]["registerOptions"]["watchers"].to_string();
+    assert!(globs.contains("composer.lock"), "{globs}");
+    assert!(globs.contains("composer/installed.json"), "{globs}");
+    c.send(json!({"jsonrpc": "2.0", "id": registration["id"], "result": null}))
+        .await;
+
+    // one notice, and no error about the package's class
+    let diags = c.diagnostics(&main_uri).await;
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0]["code"], "SPHP0008");
+    assert_eq!(diags[0]["range"]["start"]["line"], 6);
+    c.drain(&main_uri).await;
+    let shown = c.shown_messages();
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert!(shown[0].contains("composer install"), "{shown:?}");
+
+    // once it's installed, what the package doesn't declare is an error
+    write(
+        &root.join("vendor/composer/installed.json"),
+        r#"{"packages": [{"name": "acme/lib", "version": "1.0.0", "install-path": "../acme/lib",
+            "autoload": {"psr-4": {"Acme\\": "src/"}}}], "dev": true}"#,
+    );
+    write(
+        &root.join("vendor/acme/lib/src/Other.php"),
+        "<?php\nnamespace Acme;\nclass Other {}\n",
+    );
+    c.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes": [{"uri": uri(&root.join("vendor/composer/installed.json")), "type": 1}]}),
+    )
+    .await;
+    let diags = c.diagnostics(&main_uri).await;
+    assert_eq!(diags.len(), 2, "{diags:?}");
+    c.drain(&main_uri).await;
+    assert_eq!(c.shown_messages().len(), 1);
+
+    // a lock that disagrees says so, once more
+    write(
+        &root.join("composer.lock"),
+        r#"{"packages": [{"name": "acme/lib", "version": "1.1.0"}]}"#,
+    );
+    c.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes": [{"uri": uri(&root.join("composer.lock")), "type": 1}]}),
+    )
+    .await;
+    let diags = c.diagnostics(&main_uri).await;
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    c.drain(&main_uri).await;
+    let shown = c.shown_messages();
+    assert_eq!(shown.len(), 2, "{shown:?}");
+    assert!(shown[1].contains("1.1.0"), "{shown:?}");
+
+    let _ = c.request("shutdown", Value::Null).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_editor_follows_the_php_version() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    write(
+        &root.join("composer.json"),
+        r#"{"require": {"php": "^8.0"}}"#,
+    );
+    let main = root.join("main.php");
+    let main_text = "<?php\necho str_contains('a', 'b');\necho array_is_list([]);\n";
+    write(&main, main_text);
+    let main_uri = uri(&main);
+
+    let mut c = Client::start();
+    c.request(
+        "initialize",
+        json!({"processId": null, "rootUri": uri(&root), "capabilities": {}}),
+    )
+    .await;
+    c.notify("initialized", json!({})).await;
+    let diags = c.diagnostics(&main_uri).await;
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0]["code"], "SPHP0061");
+    assert!(diags[0]["message"].as_str().unwrap().contains("PHP 8.1"));
+
+    let hover = c
+        .request(
+            "textDocument/hover",
+            json!({"textDocument": {"uri": main_uri}, "position": {"line": 1, "character": 8}}),
+        )
+        .await;
+    assert!(
+        hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("str_contains")
+    );
+    let hover = c
+        .request(
+            "textDocument/hover",
+            json!({"textDocument": {"uri": main_uri}, "position": {"line": 2, "character": 8}}),
+        )
+        .await;
+    assert!(hover.is_null(), "{hover}");
+
+    c.notify(
+        "textDocument/didOpen",
+        json!({"textDocument": {"uri": main_uri, "languageId": "php", "version": 1,
+                                "text": "<?php\necho array_is\n"}}),
+    )
+    .await;
+    let items = c
+        .request(
+            "textDocument/completion",
+            json!({"textDocument": {"uri": main_uri}, "position": {"line": 1, "character": 13}}),
+        )
+        .await;
+    let labels: Vec<&str> = items["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["label"].as_str().unwrap())
+        .collect();
+    assert!(!labels.contains(&"array_is_list"), "{labels:?}");
+
+    let _ = c.request("shutdown", Value::Null).await;
+}

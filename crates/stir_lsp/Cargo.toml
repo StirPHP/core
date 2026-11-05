@@ -16,6 +16,7 @@ stir_checker.workspace = true
 stir_db.workspace = true
 stir_hir.workspace = true
 stir_project = { workspace = true, optional = true }
+stir_stubs.workspace = true
 stir_syntax.workspace = true
 stir_types.workspace = true
 tokio = { workspace = true, optional = true }

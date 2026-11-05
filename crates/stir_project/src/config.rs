@@ -107,7 +107,7 @@ impl Project {
 
     /// Absolute source directory.
     pub fn src_dir(&self) -> PathBuf {
-        self.root.join(&self.config.src_dir)
+        stir_composer::normalize(&self.root.join(&self.config.src_dir))
     }
 
     /// Absolute path of `phpstan.neon`, if configured.

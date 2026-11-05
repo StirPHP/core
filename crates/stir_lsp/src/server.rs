@@ -43,7 +43,12 @@ struct State {
 }
 
 impl State {
-    fn new(db: RootDatabase, ws: Workspace, root: Option<PathBuf>) -> Self {
+    fn new(
+        db: RootDatabase,
+        ws: Workspace,
+        root: Option<PathBuf>,
+        vendor: Option<PathBuf>,
+    ) -> Self {
         let files = ws
             .files(&db)
             .iter()
@@ -55,7 +60,7 @@ impl State {
             ws,
             files,
             open: FxHashMap::default(),
-            foreign: root.iter().map(|r| r.join("vendor")).collect(),
+            foreign: vendor.into_iter().collect(),
             root,
         }
     }
@@ -65,7 +70,7 @@ impl State {
         let db = RootDatabase::default();
         let files = builtin_files(&db);
         let ws = Workspace::new(&db, files, Settings::default());
-        State::new(db, ws, None)
+        State::new(db, ws, None, None)
     }
 
     /// Sets the text of `path`, adding it as a project source if it is new.
@@ -210,6 +215,8 @@ pub struct Server {
     diagnostics: Arc<Notify>,
     workspace_folder: Mutex<Option<PathBuf>>,
     watch_dynamic: Mutex<bool>,
+    /// What the user was last told about the project, so that a reload doesn't repeat it.
+    notices: Mutex<Vec<String>>,
 }
 
 impl Server {
@@ -222,6 +229,7 @@ impl Server {
             diagnostics: Arc::new(Notify::new()),
             workspace_folder: Mutex::new(None),
             watch_dynamic: Mutex::new(false),
+            notices: Mutex::new(Vec::new()),
         };
         tokio::spawn(diagnostics_loop(
             server.client.clone(),
@@ -309,6 +317,7 @@ impl Server {
             Some(dir) => load_project(dir).await,
             None => None,
         };
+        let notices = loaded.as_ref().map_or_else(Vec::new, |l| l.notices.clone());
         {
             let mut s = self.state.lock().unwrap();
             // documents opened meanwhile keep their editor text
@@ -322,7 +331,7 @@ impl Server {
                 })
                 .collect();
             let mut state = match loaded {
-                Some((db, ws, root)) => State::new(db, ws, Some(root)),
+                Some(l) => State::new(l.db, l.ws, Some(l.root), Some(l.vendor_dir)),
                 None => {
                     let mut st = State::empty();
                     st.root = folder.clone();
@@ -337,10 +346,37 @@ impl Server {
         }
         self.ready.send_replace(true);
         self.diagnostics.notify_one();
+        self.show_notices(notices).await;
+    }
+
+    /// Tells the user what's new among `notices`.
+    async fn show_notices(&self, notices: Vec<String>) {
+        let fresh: Vec<String> = {
+            let mut shown = self.notices.lock().unwrap();
+            let fresh = notices
+                .iter()
+                .filter(|n| !shown.contains(n))
+                .cloned()
+                .collect();
+            *shown = notices;
+            fresh
+        };
+        for notice in fresh {
+            self.client.show_message(MessageType::WARNING, notice).await;
+        }
     }
 }
 
-async fn load_project(dir: &Path) -> Option<(RootDatabase, Workspace, PathBuf)> {
+/// A project read from disk, for [`State`].
+struct LoadedProject {
+    db: RootDatabase,
+    ws: Workspace,
+    root: PathBuf,
+    vendor_dir: PathBuf,
+    notices: Vec<String>,
+}
+
+async fn load_project(dir: &Path) -> Option<LoadedProject> {
     let project = match Project::load_or_default(dir).await {
         Ok(p) => p,
         Err(error) => {
@@ -349,7 +385,13 @@ async fn load_project(dir: &Path) -> Option<(RootDatabase, Workspace, PathBuf)> 
         }
     };
     match load_workspace(&project, LoadOptions::default()).await {
-        Ok(l) => Some((l.db, l.workspace, project.root.clone())),
+        Ok(l) => Some(LoadedProject {
+            db: l.db,
+            ws: l.workspace,
+            root: project.root.clone(),
+            vendor_dir: l.vendor_dir,
+            notices: l.notices,
+        }),
         Err(error) => {
             tracing::error!(%error, "failed to load the project");
             None
@@ -600,6 +642,8 @@ impl LanguageServer for Server {
                 "**/sphp.toml",
                 "**/phpstan.neon*",
                 "**/composer.json",
+                "**/composer.lock",
+                "**/composer/installed.json",
             ]
             .into_iter()
             .map(|g| FileSystemWatcher {
@@ -697,7 +741,11 @@ impl LanguageServer for Server {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or_default();
-            if name == "sphp.toml" || name.starts_with("phpstan.neon") || name == "composer.json" {
+            if matches!(
+                name,
+                "sphp.toml" | "composer.json" | "composer.lock" | "installed.json"
+            ) || name.starts_with("phpstan.neon")
+            {
                 reload = true;
                 continue;
             }

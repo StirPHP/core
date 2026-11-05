@@ -53,5 +53,25 @@ pub fn check_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> Arc<Vec<Diagn
     Arc::new(diags)
 }
 
+/// How many errors about unknown names [`check_file`] leaves out of `file`, because Composer's
+/// packages aren't installed as declared.
+pub fn held_back_count(db: &dyn Db, ws: Workspace, file: SourceFile) -> usize {
+    let settings = ws.settings(db);
+    if settings.pending_install.is_none() || file.origin(db) != FileOrigin::Source {
+        return 0;
+    }
+    if !stir_db::syntax_diagnostics(db, file).is_empty()
+        || levels::is_nocheck(file.text(db))
+        || !levels::is_analysed(file.path(db), settings)
+    {
+        return 0;
+    }
+    typed_file(db, ws, file)
+        .diags
+        .iter()
+        .filter(|d| levels::is_held_back(d, settings) && levels::min_level(d) <= settings.level())
+        .count()
+}
+
 #[cfg(test)]
 mod interop_tests;

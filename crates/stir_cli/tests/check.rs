@@ -152,3 +152,83 @@ fn max_errors_truncates() {
         .stdout(contains("1 more not shown"))
         .stdout(contains("2 errors, 0 warnings in 2 files"));
 }
+
+#[test]
+fn missing_composer_packages_are_one_notice_not_a_flood() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path();
+    write(
+        &root.join("composer.json"),
+        r#"{"require": {"monolog/monolog": "^3"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+    );
+    write(
+        &root.join("src/Service.php"),
+        "<?php\nnamespace App;\nuse Monolog\\Logger;\nuse Monolog\\Handler\\StreamHandler;\n\
+         class Service extends Logger {\n    public function __construct(private Logger $log) {\n\
+         $this->log->pushHandler(new StreamHandler('php://stdout'));\n        $this->anything();\n\
+         \\Monolog\\Registry::getInstance('x');\n        helper_from_a_package();\n    }\n}\n",
+    );
+    sphp()
+        .current_dir(root)
+        .args(["check", "--no-vendor"])
+        .assert()
+        .success()
+        .stderr(contains("Run `composer install`"))
+        .stderr(contains("Held back so far: 5."))
+        .stdout(contains("No problems found"));
+
+    // what's the project's own is still wrong
+    write(
+        &root.join("src/Own.php"),
+        "<?php\nnamespace App;\nnew Missing();\n",
+    );
+    sphp()
+        .current_dir(root)
+        .arg("check")
+        .assert()
+        .code(1)
+        .stdout(contains("SPHP0008"))
+        .stdout(contains("Own.php"));
+}
+
+#[test]
+fn notices_stay_out_of_the_json() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path();
+    write(&root.join("composer.json"), r#"{"require": {"a/b": "*"}}"#);
+    write(&root.join("a.php"), "<?php\nnew \\A\\B();\n");
+    let output = sphp()
+        .current_dir(root)
+        .args(["check", "--format", "json"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json, serde_json::json!([]));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(stderr.matches("notice:").count(), 1, "{stderr}");
+}
+
+#[test]
+fn newer_syntax_than_composer_declares() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path();
+    write(
+        &root.join("composer.json"),
+        r#"{"require": {"php": "^8.0"}}"#,
+    );
+    write(&root.join("a.php"), "<?php\nenum E {}\n");
+    sphp()
+        .current_dir(root)
+        .arg("check")
+        .assert()
+        .code(1)
+        .stdout(contains("SPHP0060"))
+        .stdout(contains(
+            "PHP 8.1 added enums, but this project targets PHP 8.0",
+        ));
+    write(
+        &root.join("composer.json"),
+        r#"{"require": {"php": "^8.1"}}"#,
+    );
+    sphp().current_dir(root).arg("check").assert().success();
+}

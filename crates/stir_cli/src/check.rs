@@ -60,6 +60,7 @@ pub async fn run(args: CheckArgs) -> anyhow::Result<ExitCode> {
         "loaded files"
     );
     let (diagnostics, checked) = collect_diagnostics(&loaded, &filters).await?;
+    print_notices(&loaded, &filters);
     let texts = source_texts(&loaded);
     let shown = &diagnostics[..args.max_errors.unwrap_or(usize::MAX).min(diagnostics.len())];
 
@@ -84,6 +85,23 @@ pub async fn run(args: CheckArgs) -> anyhow::Result<ExitCode> {
     } else {
         ExitCode::SUCCESS
     })
+}
+
+/// What the user should know about the project, on stderr so that it stays out of the JSON.
+fn print_notices(loaded: &Loaded, filters: &[PathBuf]) {
+    let held_back: usize = loaded
+        .sources
+        .iter()
+        .filter(|f| filters.is_empty() || filters.iter().any(|p| f.path(&loaded.db).starts_with(p)))
+        .map(|&f| stir_checker::held_back_count(&loaded.db, loaded.workspace, f))
+        .sum();
+    for notice in &loaded.notices {
+        if held_back > 0 {
+            eprintln!("notice: {notice} Held back so far: {held_back}.");
+        } else {
+            eprintln!("notice: {notice}");
+        }
+    }
 }
 
 /// Type-checks the project's sources, except `.php` ones with a `// @sphp-nocheck`

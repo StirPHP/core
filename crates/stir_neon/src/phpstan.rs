@@ -82,6 +82,9 @@ pub struct LoadOptions {
     /// Known `%name%` parameters (e.g. `currentWorkingDirectory`, `rootDir`).
     /// `currentWorkingDirectory` defaults to the process working directory.
     pub params: IndexMap<String, String>,
+    /// Configs merged in before the root file's includes, so that everything overrides them:
+    /// the ones PHPStan's extension installer would add.
+    pub extensions: Vec<PathBuf>,
 }
 
 impl LoadOptions {
@@ -91,6 +94,11 @@ impl LoadOptions {
 
     pub fn param(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.params.insert(name.into(), value.into());
+        self
+    }
+
+    pub fn extensions(mut self, paths: Vec<PathBuf>) -> Self {
+        self.extensions = paths;
         self
     }
 }
@@ -116,6 +124,8 @@ pub struct PhpstanConfig {
     pub scan_files: Vec<PathBuf>,
     pub scan_directories: Vec<PathBuf>,
     pub treat_phpdoc_types_as_certain: Option<bool>,
+    /// `phpVersion`, as `PHP_VERSION_ID`-style numbers: `(min, max)`, the same for a single one.
+    pub php_version: Option<(u32, u32)>,
     /// The full merged `parameters` mapping (after path resolution and expansion).
     pub parameters: IndexMap<Key, Value>,
     /// The whole merged config (all sections, `includes` removed).
@@ -190,6 +200,7 @@ impl PhpstanConfig {
             scan_files: Vec::new(),
             scan_directories: Vec::new(),
             treat_phpdoc_types_as_certain: None,
+            php_version: None,
             parameters,
             raw: Value::Null,
         };
@@ -219,6 +230,27 @@ impl PhpstanConfig {
         }
     }
 
+    /// `phpVersion: 80100` or `phpVersion: {min: 80100, max: 80399}`.
+    fn php_version(&self) -> Result<Option<(u32, u32)>, ConfigError> {
+        let number = |v: &Value| match v {
+            Value::Int(i) => u32::try_from(*i).ok(),
+            Value::String(s) => s.parse().ok(),
+            _ => None,
+        };
+        let wrong = || self.invalid("phpVersion", "expected a version id, or min and max");
+        match self.param("phpVersion") {
+            None => Ok(None),
+            Some(Value::Mapping(m)) => {
+                let bound = |name: &str| m.get(&Key::from(name)).and_then(number);
+                match (bound("min"), bound("max")) {
+                    (Some(min), Some(max)) => Ok(Some((min, max))),
+                    _ => Err(wrong()),
+                }
+            }
+            Some(v) => number(v).map(|id| Some((id, id))).ok_or_else(wrong),
+        }
+    }
+
     fn extract(&mut self) -> Result<(), ConfigError> {
         self.level = match self.param("level") {
             None => None,
@@ -237,6 +269,7 @@ impl PhpstanConfig {
         }
         self.scan_files = self.path_list("scanFiles")?;
         self.scan_directories = self.path_list("scanDirectories")?;
+        self.php_version = self.php_version()?;
 
         let mut ex = ExcludePaths::default();
         match self.param("excludePaths") {
@@ -423,8 +456,17 @@ impl Loader<'_> {
         };
         let dir = canon.parent().map(Path::to_path_buf).unwrap_or_default();
 
+        let is_root = self.stack.is_empty();
         self.stack.push(canon);
         let mut res = Value::Mapping(IndexMap::new());
+        if is_root {
+            let extensions = self.opts.extensions.clone();
+            for path in extensions.iter().filter(|p| p.is_file()) {
+                self.included.push(path.clone());
+                let sub = self.load_file(path)?;
+                res = merge(sub, res);
+            }
+        }
         if let Some(includes) = data.shift_remove(&Key::from("includes"))
             && !includes.is_null()
         {

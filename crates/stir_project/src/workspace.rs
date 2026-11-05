@@ -1,5 +1,5 @@
 //! Building the salsa database for a project: project sources, builtin stubs and
-//! vendor PHP files reachable through Composer autoload rules.
+//! vendor PHP files reachable through Composer autoload rules. Composer itself is never run.
 //!
 //! Shared by `sphp check` and the language server.
 
@@ -7,10 +7,13 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::{Autoload, Project};
+use crate::{Autoload, Composer, Project};
 use anyhow::Context as _;
 use futures::{StreamExt as _, TryStreamExt as _};
-use stir_db::{FileOrigin, IgnoreRule, RootDatabase, Settings, SourceFile, Workspace};
+use stir_composer::{Exclusions, InstallState};
+use stir_db::{
+    FileOrigin, IgnoreRule, PhpVersion, PhpVersions, RootDatabase, Settings, SourceFile, Workspace,
+};
 
 /// Maximum number of files read concurrently.
 const READ_CONCURRENCY: usize = 64;
@@ -41,28 +44,59 @@ pub struct Loaded {
     pub sources: Vec<SourceFile>,
     pub stub_count: usize,
     pub vendor_count: usize,
+    /// What Composer's files say, if the project has any.
+    pub composer: Option<Composer>,
+    /// Where dependencies live: files there are never the project's own.
+    pub vendor_dir: PathBuf,
+    /// What a person should be told about the project, once.
+    pub notices: Vec<String>,
 }
 
 /// Builds the database for `project`: discovered sources, all builtin stubs and
 /// (unless disabled) vendor files from the root `composer.json` autoload rules.
 pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::Result<Loaded> {
     let start = Instant::now();
-    let discovered = crate::discover(project).await?;
+    let mut notices = Vec::new();
+    // a `composer.json` that's being edited shouldn't take the rest of the project down
+    let composer = match crate::load_composer(project).await {
+        Ok(composer) => composer,
+        Err(error) => {
+            notices.push(error.to_string());
+            None
+        }
+    };
+    let vendor_dir = composer
+        .as_ref()
+        .map_or_else(|| project.root.join("vendor"), |c| c.vendor_dir.clone());
+    notices.extend(composer.as_ref().and_then(Composer::install_notice));
+
+    let discovered = crate::discover(&with_vendor_excluded(project, &vendor_dir)).await?;
+    let mut source_paths: Vec<PathBuf> = discovered.into_iter().map(|f| f.path).collect();
+    if let Some(composer) = &composer {
+        source_paths.extend(sources_elsewhere(project, composer).await?);
+    }
 
     let source_texts: Vec<(PathBuf, String)> =
-        futures::stream::iter(discovered.into_iter().map(|file| async move {
-            let text = read_lossy(&file.path)
+        futures::stream::iter(source_paths.into_iter().map(|path| async move {
+            let text = read_lossy(&path)
                 .await
-                .with_context(|| format!("failed to read `{}`", file.path.display()))?;
-            anyhow::Ok((file.path, text))
+                .with_context(|| format!("failed to read `{}`", path.display()))?;
+            anyhow::Ok((path, text))
         }))
         .buffered(READ_CONCURRENCY)
         .try_collect()
         .await?;
 
     let vendor_texts = if options.vendor {
-        let autoload = crate::load_autoload(project).await?;
-        let own: Vec<PathBuf> = source_texts.iter().map(|(p, _)| p.clone()).collect();
+        let mut autoload = composer
+            .as_ref()
+            .map(Composer::autoload)
+            .unwrap_or_default();
+        // a `vendor/` nothing describes: all of it
+        if vendor_dir.is_dir() && !vendor_dir.join("composer/installed.json").is_file() {
+            autoload.classmap_paths.push(vendor_dir.clone());
+        }
+        let own: Vec<(PathBuf, String)> = source_texts.clone();
         let paths = vendor_paths(autoload, own).await?;
         read_vendor(paths).await
     } else {
@@ -85,7 +119,7 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         .count();
     files.extend(builtins);
 
-    if project.root.join("vendor/phpstan/phpstan").is_dir() {
+    if vendor_dir.join("phpstan/phpstan").is_dir() {
         files.push(SourceFile::new(
             &db,
             PathBuf::from("stubs://phpstan/helpers.php"),
@@ -99,7 +133,7 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         files.push(SourceFile::new(&db, path, text, FileOrigin::Vendor));
     }
 
-    let config = load_phpstan_config(project).await?;
+    let config = load_phpstan_config(project, composer.as_ref()).await?;
     if let Some(config) = &config {
         let own: BTreeSet<PathBuf> = sources
             .iter()
@@ -109,7 +143,7 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
             files.push(SourceFile::new(&db, path, text, FileOrigin::Vendor));
         }
     }
-    let mut settings = settings_from(config);
+    let mut settings = settings_from(config, composer.as_ref());
     if let Some(level) = options.level {
         settings.php_level = level;
     }
@@ -127,7 +161,75 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         sources,
         stub_count,
         vendor_count,
+        composer,
+        vendor_dir,
+        notices,
     })
+}
+
+/// `project`, with a custom `vendor-dir` left out of its sources like `vendor/` is.
+fn with_vendor_excluded(project: &Project, vendor_dir: &Path) -> Project {
+    let mut project = project.clone();
+    if let Ok(rel) = vendor_dir.strip_prefix(&project.root) {
+        let glob = format!("{}/**", globset::escape(&rel.to_string_lossy()));
+        if !project.config.exclude.contains(&glob) {
+            project.config.exclude.push(glob);
+        }
+    }
+    project
+}
+
+/// What the root package's autoload rules name that walking the project folder doesn't find:
+/// directories outside it, and files listed by name whatever their extension. With a source
+/// directory set in the config, that's what the sources are.
+async fn sources_elsewhere(project: &Project, composer: &Composer) -> anyhow::Result<Vec<PathBuf>> {
+    if project.config.src_dir != Path::new(".") {
+        return Ok(Vec::new());
+    }
+    let root = project.root.clone();
+    let autoload = composer.root_autoload.clone();
+    let vendor_dir = composer.vendor_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        let is_outside = |p: &Path| !p.starts_with(&root);
+        let mut found = BTreeSet::new();
+        let mut seen = BTreeSet::new();
+        for (_, dir) in autoload.psr4.iter().chain(&autoload.psr0) {
+            if is_outside(dir) {
+                walk(
+                    dir,
+                    Extensions::Psr,
+                    None,
+                    &mut seen,
+                    &mut found,
+                    &mut Vec::new(),
+                );
+            }
+        }
+        for path in &autoload.classmap_paths {
+            if is_outside(path) {
+                walk(
+                    path,
+                    Extensions::Classmap,
+                    None,
+                    &mut seen,
+                    &mut found,
+                    &mut Vec::new(),
+                );
+            }
+        }
+        for file in &autoload.files {
+            let php = file.extension().is_some_and(|e| e == "php");
+            if (is_outside(file) || !php) && file.is_file() {
+                found.insert(file.clone());
+            }
+        }
+        found
+            .into_iter()
+            .filter(|p| !p.starts_with(&vendor_dir))
+            .collect()
+    })
+    .await
+    .context("failed to list the Composer source roots")
 }
 
 /// The builtin PHP stubs (`stubs://...`).
@@ -148,11 +250,14 @@ pub fn builtin_files(db: &RootDatabase) -> Vec<SourceFile> {
 /// `phpstan` key of `sphp.toml`, else
 /// `phpstan.neon`, `phpstan.neon.dist` or `phpstan.dist.neon` at the project root).
 pub async fn load_settings(project: &Project) -> anyhow::Result<Settings> {
-    Ok(settings_from(load_phpstan_config(project).await?))
+    let composer = crate::load_composer(project).await.ok().flatten();
+    let config = load_phpstan_config(project, composer.as_ref()).await?;
+    Ok(settings_from(config, composer.as_ref()))
 }
 
 async fn load_phpstan_config(
     project: &Project,
+    composer: Option<&Composer>,
 ) -> anyhow::Result<Option<stir_neon::phpstan::PhpstanConfig>> {
     let path = match project.phpstan_path() {
         Some(p) => Some(p),
@@ -165,10 +270,16 @@ async fn load_phpstan_config(
         return Ok(None);
     };
     let root = project.root.clone();
+    let extensions = composer.map(Composer::phpstan_includes).unwrap_or_default();
     let config = tokio::task::spawn_blocking(move || {
         let opts = stir_neon::phpstan::LoadOptions::new()
             .param("currentWorkingDirectory", root.to_string_lossy());
-        stir_neon::phpstan::PhpstanConfig::load_with(&path, &opts)
+        let with_extensions = opts.clone().extensions(extensions);
+        // an extension's config that can't be read isn't the project's problem
+        stir_neon::phpstan::PhpstanConfig::load_with(&path, &with_extensions).or_else(|error| {
+            tracing::warn!(%error, "ignoring the configs of PHPStan extensions");
+            stir_neon::phpstan::PhpstanConfig::load_with(&path, &opts)
+        })
     })
     .await?
     .context("failed to load the PHPStan configuration")?;
@@ -219,8 +330,37 @@ async fn scanned_paths(
     .context("failed to list the PHPStan scan paths")
 }
 
-fn settings_from(config: Option<stir_neon::phpstan::PhpstanConfig>) -> Settings {
-    let mut settings = Settings::default();
+/// PHPStan's `phpVersion`, then what Composer's files say, then the latest.
+fn php_versions(
+    config: Option<&stir_neon::phpstan::PhpstanConfig>,
+    composer: Option<&Composer>,
+) -> PhpVersions {
+    if let Some((min, max)) = config.and_then(|c| c.php_version) {
+        return PhpVersions {
+            min: PhpVersion::from_id(min),
+            max: PhpVersion::from_id(max),
+        };
+    }
+    composer
+        .and_then(|c| c.php_version)
+        .map(PhpVersions::exactly)
+        .unwrap_or_default()
+}
+
+fn settings_from(
+    config: Option<stir_neon::phpstan::PhpstanConfig>,
+    composer: Option<&Composer>,
+) -> Settings {
+    let mut settings = Settings {
+        php_version: php_versions(config.as_ref(), composer),
+        ..Settings::default()
+    };
+    if let Some(composer) = composer {
+        settings.declared_extensions = Some(composer.extensions.iter().cloned().collect());
+        if composer.install != InstallState::Installed {
+            settings.pending_install = Some(composer.own_namespaces());
+        }
+    }
     let Some(config) = config else {
         return settings;
     };
@@ -259,56 +399,154 @@ fn settings_from(config: Option<stir_neon::phpstan::PhpstanConfig>) -> Settings 
     settings
 }
 
-/// Collects every `.php` file reachable from the autoload rules, canonicalised and
-/// deduplicated, excluding the project's own sources.
-async fn vendor_paths(autoload: Autoload, own: Vec<PathBuf>) -> anyhow::Result<Vec<PathBuf>> {
+/// Collects every file reachable from the autoload rules, canonicalised and deduplicated,
+/// excluding the project's own sources (`own`, with their text). What `exclude-from-classmap`
+/// leaves out is skipped, unless autoloading would find it as a class the project names.
+async fn vendor_paths(
+    autoload: Autoload,
+    own: Vec<(PathBuf, String)>,
+) -> anyhow::Result<Vec<PathBuf>> {
     tokio::task::spawn_blocking(move || {
-        let roots = autoload
-            .psr4
-            .into_iter()
-            .map(|(_, dir)| dir)
-            .chain(autoload.psr0.into_iter().map(|(_, dir)| dir))
-            .chain(autoload.classmap_paths)
-            .chain(autoload.files);
+        let exclusions = autoload.exclusions();
+        let mut found = BTreeSet::new();
+        let mut excluded = Vec::new();
+        // the two look at different files, so each has to see a directory they share
+        let mut seen_dirs = BTreeSet::new();
+        for (_, dir) in autoload.psr4.iter().chain(&autoload.psr0) {
+            walk(
+                dir,
+                Extensions::Psr,
+                exclusions.as_ref(),
+                &mut seen_dirs,
+                &mut found,
+                &mut excluded,
+            );
+        }
+        let mut seen_dirs = BTreeSet::new();
+        for path in &autoload.classmap_paths {
+            walk(
+                path,
+                Extensions::Classmap,
+                exclusions.as_ref(),
+                &mut seen_dirs,
+                &mut found,
+                &mut excluded,
+            );
+        }
+        // listed by name: whatever the extension, and PHP includes it however it's excluded
+        for file in &autoload.files {
+            if let Ok(path) = std::fs::canonicalize(file)
+                && path.is_file()
+            {
+                found.insert(path);
+            }
+        }
+
+        if !excluded.is_empty() {
+            let classes: Vec<(String, &PathBuf)> = excluded
+                .iter()
+                .filter_map(|p| Some((autoload.class_of_file(p)?, p)))
+                .collect();
+            if !classes.is_empty() {
+                let named = names_in(own.iter().map(|(_, text)| text.as_str()));
+                for (class, path) in classes {
+                    if named.contains(class.as_str())
+                        && let Ok(path) = std::fs::canonicalize(path)
+                    {
+                        found.insert(path);
+                    }
+                }
+            }
+        }
+
         let own: BTreeSet<PathBuf> = own
             .iter()
-            .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
+            .map(|(p, _)| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
             .collect();
-
-        let mut seen_dirs = BTreeSet::new();
-        let mut found = BTreeSet::new();
-        for root in roots {
-            walk_php(&root, &mut seen_dirs, &mut found);
-        }
         found.into_iter().filter(|p| !own.contains(p)).collect()
     })
     .await
     .map_err(Into::into)
 }
 
-/// Adds `root` (a `.php` file) or every `.php` file below `root` (a directory) to `found`.
-/// Missing paths are ignored; directories are visited once (by canonical path).
-fn walk_php(root: &Path, seen_dirs: &mut BTreeSet<PathBuf>, found: &mut BTreeSet<PathBuf>) {
+/// The qualified names in `texts`, without a leading `\`.
+fn names_in<'a>(texts: impl Iterator<Item = &'a str>) -> std::collections::HashSet<&'a str> {
+    let is_name = |c: char| c.is_alphanumeric() || c == '_' || c == '\\';
+    texts
+        .flat_map(|text| text.split(move |c: char| !is_name(c)))
+        .filter(|word| word.contains('\\'))
+        .map(|word| word.trim_start_matches('\\'))
+        .collect()
+}
+
+/// Which files in a directory a kind of autoload rule looks at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Extensions {
+    /// PSR-0 and PSR-4 only ever map to `.php`.
+    Psr,
+    /// What Composer's classmap generator scans.
+    Classmap,
+}
+
+impl Extensions {
+    fn matches(self, path: &Path) -> bool {
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            return false;
+        };
+        match self {
+            Extensions::Psr => ext == "php",
+            Extensions::Classmap => matches!(ext, "php" | "inc" | "hh"),
+        }
+    }
+}
+
+/// Adds `root`, or the files below it that `extensions` covers, to `found`, canonicalised. A
+/// file named directly is added whatever its extension. Missing paths are ignored; directories
+/// are visited once (by canonical path). Files matched by `exclusions` go into `excluded`, under
+/// their path as the rules spell it.
+fn walk(
+    root: &Path,
+    extensions: Extensions,
+    exclusions: Option<&Exclusions>,
+    seen_dirs: &mut BTreeSet<PathBuf>,
+    found: &mut BTreeSet<PathBuf>,
+    excluded: &mut Vec<PathBuf>,
+) {
+    if root.is_file() {
+        if exclusions.is_some_and(|e| e.contains(root)) {
+            excluded.push(root.to_path_buf());
+        } else if let Ok(path) = std::fs::canonicalize(root) {
+            found.insert(path);
+        }
+        return;
+    }
     let mut stack = vec![root.to_path_buf()];
     while let Some(path) = stack.pop() {
-        let Ok(path) = std::fs::canonicalize(&path) else {
+        let Ok(canonical) = std::fs::canonicalize(&path) else {
             continue;
         };
-        let Ok(meta) = std::fs::metadata(&path) else {
+        let Ok(meta) = std::fs::metadata(&canonical) else {
             continue;
         };
+        let is_excluded = exclusions.is_some_and(|e| e.contains(&path));
         if meta.is_file() {
-            if path.extension().is_some_and(|e| e == "php") {
-                found.insert(path);
+            if extensions.matches(&path) {
+                if is_excluded {
+                    excluded.push(path);
+                } else {
+                    found.insert(canonical);
+                }
             }
             continue;
         }
-        if !meta.is_dir() || !seen_dirs.insert(path.clone()) {
+        if !meta.is_dir() || !seen_dirs.insert(canonical.clone()) {
             continue;
         }
-        match std::fs::read_dir(&path) {
-            Ok(entries) => stack.extend(entries.flatten().map(|e| e.path())),
-            Err(error) => tracing::warn!(path = %path.display(), %error, "cannot read directory"),
+        match std::fs::read_dir(&canonical) {
+            Ok(entries) => stack.extend(entries.flatten().map(|e| path.join(e.file_name()))),
+            Err(error) => {
+                tracing::warn!(path = %canonical.display(), %error, "cannot read directory");
+            }
         }
     }
 }
@@ -342,6 +580,8 @@ async fn read_vendor(paths: Vec<PathBuf>) -> Vec<(PathBuf, String)> {
 
 #[cfg(test)]
 mod tests {
+    use stir_db::PhpVersion;
+
     use super::*;
 
     fn write(path: &Path, text: &str) {
@@ -547,5 +787,327 @@ mod tests {
             1
         );
         assert_eq!(paths.iter().filter(|p| p.ends_with("src/a.php")).count(), 1);
+    }
+
+    /// The paths of `loaded`'s files of an origin, relative to `root`.
+    fn paths_of(loaded: &Loaded, root: &Path, origin: FileOrigin) -> Vec<String> {
+        let db = &loaded.db;
+        let mut out: Vec<String> = loaded
+            .workspace
+            .files(db)
+            .iter()
+            .filter(|f| f.origin(db) == origin)
+            .map(|f| {
+                let path = f.path(db);
+                path.strip_prefix(root)
+                    .map_or_else(|_| path.display().to_string(), |p| p.display().to_string())
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[tokio::test]
+    async fn source_paths_are_plain() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        write(&root.join("a.php"), "<?php\n");
+        let loaded = load(&root).await;
+        // an editor gets this as a URI: `/./` in it is another file
+        let path = loaded.sources[0].path(&loaded.db);
+        assert_eq!(path.to_string_lossy(), root.join("a.php").to_string_lossy());
+    }
+
+    async fn load(root: &Path) -> Loaded {
+        let project = Project::load_or_default(root).await.unwrap();
+        load_workspace(&project, LoadOptions::default())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn without_composer_the_folder_is_the_source_root() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        write(&root.join("a.php"), "<?php\n");
+        write(&root.join("routes/web.php"), "<?php\n");
+        let loaded = load(&root).await;
+        assert_eq!(
+            paths_of(&loaded, &root, FileOrigin::Source),
+            ["a.php", "routes/web.php"]
+        );
+        assert!(paths_of(&loaded, &root, FileOrigin::Vendor).is_empty());
+        assert!(loaded.composer.is_none());
+        assert!(loaded.notices.is_empty());
+
+        // `vendor/` is scanned if it's there, and stays vendor
+        write(&root.join("vendor/acme/lib.php"), "<?php\nclass Lib {}\n");
+        let loaded = load(&root).await;
+        assert_eq!(
+            paths_of(&loaded, &root, FileOrigin::Source),
+            ["a.php", "routes/web.php"]
+        );
+        assert_eq!(
+            paths_of(&loaded, &root, FileOrigin::Vendor),
+            ["vendor/acme/lib.php"]
+        );
+        assert!(loaded.notices.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sources_with_composer_are_more_than_its_autoload_paths() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let project_dir = root.join("app");
+        write(
+            &project_dir.join("composer.json"),
+            r#"{"autoload": {
+                "psr-4": {"App\\": "src/", "Shared\\": "../shared/src/"},
+                "classmap": ["../legacy/"],
+                "files": ["helpers.inc"]
+            }}"#,
+        );
+        write(&project_dir.join("src/A.php"), "<?php\n");
+        write(&project_dir.join("routes/web.php"), "<?php\n");
+        write(
+            &project_dir.join("helpers.inc"),
+            "<?php\nfunction helper() {}\n",
+        );
+        write(&root.join("shared/src/S.php"), "<?php\n");
+        write(&root.join("legacy/L.inc"), "<?php\n");
+        write(&root.join("legacy/notes.txt"), "not php");
+        let loaded = load(&project_dir).await;
+        assert_eq!(
+            paths_of(&loaded, &project_dir, FileOrigin::Source),
+            [
+                root.join("legacy/L.inc").display().to_string(),
+                root.join("shared/src/S.php").display().to_string(),
+                "helpers.inc".to_owned(),
+                "routes/web.php".to_owned(),
+                "src/A.php".to_owned(),
+            ]
+        );
+        assert!(paths_of(&loaded, &project_dir, FileOrigin::Vendor).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_custom_vendor_dir_is_vendor() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        write(
+            &root.join("composer.json"),
+            r#"{"config": {"vendor-dir": "lib/deps"}, "require": {"acme/lib": "*"}}"#,
+        );
+        write(&root.join("a.php"), "<?php\n");
+        write(
+            &root.join("lib/deps/composer/installed.json"),
+            r#"{"packages": [{"name": "acme/lib", "install-path": "../acme/lib",
+                "autoload": {"psr-4": {"Acme\\": "src/"}}}]}"#,
+        );
+        write(&root.join("lib/deps/acme/lib/src/Foo.php"), "<?php\n");
+        write(&root.join("lib/deps/phpstan/phpstan/x"), "");
+        let loaded = load(&root).await;
+        assert_eq!(paths_of(&loaded, &root, FileOrigin::Source), ["a.php"]);
+        assert_eq!(
+            paths_of(&loaded, &root, FileOrigin::Vendor),
+            ["lib/deps/acme/lib/src/Foo.php"]
+        );
+        assert_eq!(loaded.vendor_dir, root.join("lib/deps"));
+        assert!(loaded.notices.is_empty(), "{:?}", loaded.notices);
+        assert!(
+            loaded
+                .workspace
+                .files(&loaded.db)
+                .iter()
+                .any(|f| f.path(&loaded.db).ends_with("phpstan/helpers.php"))
+        );
+    }
+
+    #[tokio::test]
+    async fn autoload_accuracy() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        write(
+            &root.join("composer.json"),
+            r#"{"require": {"acme/lib": "*"}}"#,
+        );
+        // the project names a class in an excluded directory: autoloading would find it
+        write(&root.join("a.php"), "<?php\nnew \\Acme\\Tests\\Used();\n");
+        write(
+            &root.join("vendor/composer/installed.json"),
+            r#"{"packages": [{"name": "acme/lib", "install-path": "../acme/lib", "autoload": {
+                "psr-4": {"Acme\\": ""},
+                "classmap": ["maps/", "single.phtml"],
+                "files": ["functions.inc", "gone.php"],
+                "exclude-from-classmap": ["/Tests/", "maps/skipped/", "src/data/"]
+            }}]}"#,
+        );
+        let lib = root.join("vendor/acme/lib");
+        write(&lib.join("Foo.php"), "<?php\n");
+        write(&lib.join("README.md"), "not php");
+        write(&lib.join("Tests/Used.php"), "<?php\n");
+        write(&lib.join("Tests/Unused.php"), "<?php\n");
+        write(&lib.join("src/data/a-b.json.php"), "<?php\n");
+        write(&lib.join("maps/Old.inc"), "<?php\n");
+        write(&lib.join("maps/notes.txt"), "not php");
+        write(&lib.join("maps/skipped/Skipped.php"), "<?php\n");
+        write(&lib.join("single.phtml"), "<?php\n");
+        write(&lib.join("functions.inc"), "<?php\n");
+        let loaded = load(&root).await;
+        assert_eq!(
+            paths_of(&loaded, &root, FileOrigin::Vendor),
+            [
+                "vendor/acme/lib/Foo.php",
+                "vendor/acme/lib/Tests/Used.php",
+                "vendor/acme/lib/functions.inc",
+                "vendor/acme/lib/maps/Old.inc",
+                "vendor/acme/lib/single.phtml",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_php_version_comes_from_phpstan_then_composer() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        write(&root.join("a.php"), "<?php\n");
+        let versions = || async {
+            let project = Project::load_or_default(&root).await.unwrap();
+            load_settings(&project)
+                .await
+                .unwrap()
+                .php_version
+                .to_string()
+        };
+        assert_eq!(versions().await, PhpVersion::LATEST.to_string());
+
+        write(
+            &root.join("composer.json"),
+            r#"{"require": {"php": ">=8.1 <8.4"}}"#,
+        );
+        assert_eq!(versions().await, "8.1");
+
+        write(
+            &root.join("composer.json"),
+            r#"{"require": {"php": "^8.1"}, "config": {"platform": {"php": "8.3.5"}}}"#,
+        );
+        assert_eq!(versions().await, "8.3");
+
+        write(
+            &root.join("phpstan.neon"),
+            "parameters:\n    phpVersion: 80200\n",
+        );
+        assert_eq!(versions().await, "8.2");
+
+        write(
+            &root.join("phpstan.neon"),
+            "parameters:\n    phpVersion:\n        min: 80100\n        max: 80399\n",
+        );
+        assert_eq!(versions().await, "8.1 to 8.3");
+    }
+
+    #[tokio::test]
+    async fn phpstan_extensions_add_what_they_scan() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        write(&root.join("composer.json"), "{}");
+        write(&root.join("phpstan.neon"), "parameters:\n    level: 3\n");
+        write(&root.join("a.php"), "<?php\necho EXT_CONST;\n");
+        write(
+            &root.join("vendor/composer/installed.json"),
+            r#"{"packages": [
+                {"name": "phpstan/extension-installer"},
+                {"name": "acme/ext", "install-path": "../acme/ext",
+                 "extra": {"phpstan": {"includes": ["extension.neon"]}}}
+            ]}"#,
+        );
+        write(
+            &root.join("vendor/acme/ext/extension.neon"),
+            "parameters:\n    level: 8\n    scanFiles:\n        - stubs.php\n",
+        );
+        write(
+            &root.join("vendor/acme/ext/stubs.php"),
+            "<?php\nconst EXT_CONST = 1;\n",
+        );
+        let loaded = load(&root).await;
+        let settings = loaded.workspace.settings(&loaded.db);
+        assert_eq!(settings.php_level, 3, "the project's config comes last");
+        assert_eq!(
+            paths_of(&loaded, &root, FileOrigin::Vendor),
+            ["vendor/acme/ext/stubs.php"]
+        );
+        // a broken one doesn't take the project down
+        write(
+            &root.join("vendor/acme/ext/extension.neon"),
+            "parameters:\n  level: [\n",
+        );
+        assert_eq!(
+            load(&root).await.workspace.settings(&loaded.db).php_level,
+            3
+        );
+    }
+
+    #[tokio::test]
+    async fn one_notice_while_composer_has_not_installed_what_is_declared() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        write(
+            &root.join("composer.json"),
+            r#"{"require": {"acme/lib": "^1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+        );
+        write(&root.join("src/A.php"), "<?php\n");
+        let loaded = load(&root).await;
+        assert_eq!(loaded.notices.len(), 1, "{:?}", loaded.notices);
+        assert!(loaded.notices[0].contains("composer install"));
+        let settings = loaded.workspace.settings(&loaded.db);
+        assert_eq!(
+            settings.pending_install.as_deref(),
+            Some(&["app\\".to_owned()][..])
+        );
+
+        write(
+            &root.join("vendor/composer/installed.json"),
+            r#"{"packages": [{"name": "acme/lib", "version": "1.0.0"}], "dev": true}"#,
+        );
+        let loaded = load(&root).await;
+        assert!(loaded.notices.is_empty(), "{:?}", loaded.notices);
+        assert!(
+            loaded
+                .workspace
+                .settings(&loaded.db)
+                .pending_install
+                .is_none()
+        );
+
+        write(
+            &root.join("composer.lock"),
+            r#"{"packages": [{"name": "acme/lib", "version": "1.1.0"}]}"#,
+        );
+        let loaded = load(&root).await;
+        assert_eq!(loaded.notices.len(), 1, "{:?}", loaded.notices);
+        assert!(loaded.notices[0].contains("1.1.0"), "{:?}", loaded.notices);
+        assert!(
+            loaded
+                .workspace
+                .settings(&loaded.db)
+                .pending_install
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_broken_composer_json_is_a_notice() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        write(&root.join("composer.json"), "{");
+        write(&root.join("a.php"), "<?php\n");
+        let loaded = load(&root).await;
+        assert_eq!(loaded.sources.len(), 1);
+        assert_eq!(loaded.notices.len(), 1);
+        assert!(
+            loaded.notices[0].contains("composer.json"),
+            "{:?}",
+            loaded.notices
+        );
     }
 }

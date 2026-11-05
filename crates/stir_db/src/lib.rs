@@ -78,6 +78,12 @@ pub struct Settings {
     pub php_paths: Vec<PathBuf>,
     /// PHPStan `excludePaths` (may contain fnmatch globs): `.php` files not reported.
     pub php_excludes: Vec<PathBuf>,
+    /// Composer's packages aren't installed as declared, so a name they might declare isn't
+    /// known to be wrong: the namespaces of the project's own code (lowercase), where it is.
+    pub pending_install: Option<Vec<String>>,
+    /// The `ext-*` that Composer's files mention (lowercase, no `ext-`). `None` without Composer.
+    /// Editors don't offer extensions that aren't PHP's own unless they're in here.
+    pub declared_extensions: Option<Vec<String>>,
 }
 
 impl Default for Settings {
@@ -88,6 +94,8 @@ impl Default for Settings {
             ignore_errors: Vec::new(),
             php_paths: Vec::new(),
             php_excludes: Vec::new(),
+            pending_install: None,
+            declared_extensions: None,
         }
     }
 }

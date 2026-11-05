@@ -1263,6 +1263,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "stir_composer"
+version = "0.1.21"
+dependencies = [
+ "regex",
+ "serde_json",
+ "stir_db",
+]
+
+[[package]]
 name = "stir_db"
 version = "0.1.21"
 dependencies = [
@@ -1299,6 +1308,7 @@ dependencies = [
  "stir_db",
  "stir_hir",
  "stir_project",
+ "stir_stubs",
  "stir_syntax",
  "stir_types",
  "tempfile",
@@ -1336,6 +1346,7 @@ dependencies = [
  "ignore",
  "serde",
  "serde_json",
+ "stir_composer",
  "stir_db",
  "stir_neon",
  "stir_stubs",

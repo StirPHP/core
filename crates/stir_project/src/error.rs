@@ -20,11 +20,11 @@ pub enum Error {
         source: Box<toml::de::Error>,
     },
 
-    #[error("failed to parse `{}`: {source}", .path.display())]
-    Json {
+    #[error("failed to read `{}`: {source}", .path.display())]
+    Composer {
         path: PathBuf,
         #[source]
-        source: serde_json::Error,
+        source: stir_composer::ComposerError,
     },
 
     #[error("invalid glob pattern `{pattern}`: {source}")]

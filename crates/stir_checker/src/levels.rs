@@ -99,8 +99,19 @@ pub fn filter_php(diags: &mut Vec<Diagnostic>, settings: &Settings) {
     diags.retain(|d| {
         min_level(d) <= level
             && is_analysed(&d.file, settings)
+            && !is_held_back(d, settings)
             && !rules.iter().any(|r| r.matches(d))
     });
+}
+
+/// Composer's packages aren't installed as declared, and `d` is about a name they might declare:
+/// the name's not in a namespace of the project's own code.
+pub fn is_held_back(d: &Diagnostic, settings: &Settings) -> bool {
+    let (Some(own), Some(symbol)) = (&settings.pending_install, &d.symbol) else {
+        return false;
+    };
+    let symbol = symbol.trim_start_matches('\\').to_ascii_lowercase();
+    !own.iter().any(|prefix| symbol.starts_with(prefix.as_str()))
 }
 
 /// Is `file` within the PHPStan `paths` and outside its `excludePaths`?
