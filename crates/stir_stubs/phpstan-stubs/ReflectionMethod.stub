@@ -1,0 +1,11 @@
+<?php
+
+class ReflectionMethod
+{
+
+	/**
+	 * @var non-falsy-string
+	 */
+	public $name;
+
+}

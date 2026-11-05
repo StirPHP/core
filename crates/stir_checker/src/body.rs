@@ -4958,10 +4958,18 @@ impl<'a, 'db> Checker<'a, 'db> {
                         p.ty
                     }
                     None => {
-                        if matches!(cls.kind(), TyKind::Class { name, .. } if name.eq_ignore_ascii_case("stdClass"))
-                            || self.probing > 0
-                        {
+                        let class_named = |wanted: &str| match cls.kind() {
+                            TyKind::Class { name, .. } => name.eq_ignore_ascii_case(wanted),
+                            TyKind::SelfType { class, .. } => matches!(class.kind(),
+                                TyKind::Class { name, .. } if name.eq_ignore_ascii_case(wanted)),
+                            _ => false,
+                        };
+                        if class_named("stdClass") || self.probing > 0 {
                             return Ty::untyped();
+                        }
+                        // every child element of a document is a property
+                        if class_named("SimpleXMLElement") {
+                            return Ty::class("SimpleXMLElement", Vec::new());
                         }
                         // PHPStan's `reportMagicProperties`: fine at level 0, but from level 1
                         // a property only `__get` knows of has to be declared with `@property`

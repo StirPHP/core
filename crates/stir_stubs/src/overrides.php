@@ -393,3 +393,144 @@ function shuffle(array &$array): bool {}
  * @return class-string<T>
  */
 function get_class(object $object = UNKNOWN): string {}
+
+// What phpstorm-stubs has as `T|false` when it's only false in odd cases, from PHPStan's function
+// map (MIT, ../phpstan-stubs/LICENSE). A class here is laid over the declared one, method by method.
+
+class Closure
+{
+    /** @return __benevolent<Closure|null> */
+    public function bind() {}
+
+    /** @return __benevolent<Closure|null> */
+    public function bindTo() {}
+}
+
+class DateTime
+{
+    /** @return __benevolent<static|false> */
+    public function modify() {}
+}
+
+class DateTimeImmutable
+{
+    /** @return __benevolent<static|false> */
+    public function modify() {}
+}
+
+class DOMDocument
+{
+    /** @return __benevolent<DOMAttr|false> */
+    public function createAttribute() {}
+
+    /** @return __benevolent<DOMAttr|false> */
+    public function createAttributeNS() {}
+
+    /** @return __benevolent<DOMCDATASection|false> */
+    public function createCDATASection() {}
+
+    /** @return __benevolent<DOMElement|false> */
+    public function createElement() {}
+
+    /** @return __benevolent<DOMElement|false> */
+    public function createElementNS() {}
+
+    /** @return __benevolent<DOMEntityReference|false> */
+    public function createEntityReference() {}
+
+    /** @return __benevolent<DOMProcessingInstruction|false> */
+    public function createProcessingInstruction() {}
+}
+
+class DOMElement
+{
+    /** @return __benevolent<DOMAttr|false> */
+    public function getAttributeNode() {}
+
+    /** @return __benevolent<DOMAttr|null> */
+    public function getAttributeNodeNS() {}
+}
+
+class DOMNode
+{
+    /** @return __benevolent<string|false> */
+    public function C14N() {}
+
+    /** @return __benevolent<int|false> */
+    public function C14NFile() {}
+
+    /** @return __benevolent<DOMNode|false> */
+    public function cloneNode() {}
+}
+
+class PDO
+{
+    /** @return __benevolent<PDOStatement|false> */
+    public function prepare() {}
+
+    /** @return __benevolent<string|false> */
+    public function quote() {}
+}
+
+class SimpleXMLElement
+{
+    /** @return __benevolent<static|null> */
+    public function addChild() {}
+
+    /** @return __benevolent<static|null> */
+    public function attributes() {}
+
+    /** @return __benevolent<static|null> */
+    public function children() {}
+}
+
+class SplFileInfo
+{
+    /** @return __benevolent<int|false> */
+    public function getATime() {}
+
+    /** @return __benevolent<int|false> */
+    public function getGroup() {}
+
+    /** @return __benevolent<int|false> */
+    public function getInode() {}
+
+    /** @return __benevolent<string|false> */
+    public function getLinkTarget() {}
+
+    /** @return __benevolent<int|false> */
+    public function getMTime() {}
+
+    /** @return __benevolent<int|false> */
+    public function getOwner() {}
+
+    /** @return __benevolent<SplFileInfo|null> */
+    public function getPathInfo() {}
+
+    /** @return __benevolent<int|false> */
+    public function getPerms() {}
+
+    /** @return __benevolent<string|false> */
+    public function getRealPath() {}
+
+    /** @return __benevolent<int|false> */
+    public function getSize() {}
+
+    /** @return __benevolent<string|false> */
+    public function getType() {}
+}
+
+/**
+ * @template-covariant TKey
+ * @template-covariant TYield
+ * @template TSend
+ * @template-covariant TReturn
+ */
+class Generator
+{
+    /** @return TYield */
+    public function current() {}
+
+    /** @return TKey */
+    public function key() {}
+}

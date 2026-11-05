@@ -1,0 +1,28 @@
+<?php
+
+class ReflectionParameter
+{
+    /**
+     * @return list<ReflectionAttribute<object>>
+     */
+    public function getAttributes(?string $name = null, int $flags = 0)
+    {
+    }
+
+	/**
+	 * @return bool
+	 * @phpstan-assert-if-true !null $this->getType()
+	 */
+	public function hasType(): bool
+	{
+	}
+
+	/**
+	 * @return bool
+	 * @throws void
+	 */
+	public function isOptional(): bool
+	{
+	}
+
+}

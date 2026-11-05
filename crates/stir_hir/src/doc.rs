@@ -198,6 +198,13 @@ impl DocCx<'_> {
     }
 
     fn generic(&self, base: &str, args: &[GenericArg], range: TextRange) -> TypeRef {
+        // what a stub says will be right in all but the odd case: it's taken at its word, as
+        // nothing's said about the odd case where it's used
+        if base == "__benevolent"
+            && let Some(arg) = args.first()
+        {
+            return benevolent(self.lower(&arg.ty));
+        }
         let lowered = || args.iter().map(|a| self.arg(a)).collect::<Vec<_>>();
         let kw = if base.starts_with('\\') || self.type_params.iter().any(|p| p == base) {
             None
@@ -277,6 +284,25 @@ impl DocCx<'_> {
             }
         };
         tr(kind, range)
+    }
+}
+
+/// The members of a `__benevolent<...>` union that say something.
+fn benevolent(t: TypeRef) -> TypeRef {
+    let TypeRefKind::Union(members) = t.kind else {
+        return t;
+    };
+    let says_something = |m: &TypeRef| {
+        !matches!(
+            m.kind,
+            TypeRefKind::Php(PhpBuiltin::False | PhpBuiltin::Null)
+        )
+    };
+    let mut kept: Vec<TypeRef> = members.into_iter().filter(says_something).collect();
+    match kept.len() {
+        0 => tr(TypeRefKind::Php(PhpBuiltin::Mixed), t.range),
+        1 => kept.remove(0),
+        _ => tr(TypeRefKind::Union(kept), t.range),
     }
 }
 

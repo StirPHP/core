@@ -16,6 +16,16 @@ pub struct StubAttrs {
     /// `#[LanguageLevelTypeAware]`: the type string for the target and its
     /// offset; an empty string means "no native type".
     pub type_aware: Option<(String, TextSize)>,
+    /// `#[Deprecated]`, PHP's own or the stubs'.
+    pub deprecated: Option<DeprecatedAttr>,
+}
+
+/// What a `#[Deprecated]` says.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeprecatedAttr {
+    pub reason: String,
+    /// `since: '8.1'`
+    pub since: Option<String>,
 }
 
 /// Reads the attributes written directly on `node`.
@@ -48,9 +58,42 @@ pub fn stub_attrs(node: &SyntaxNode, scope: &Scope, version: PhpVersion) -> Stub
                             out.type_aware = type_aware(&a, version);
                         }
                     }
+                    "deprecated" => {
+                        out.deprecated =
+                            Some(args.map(|a| deprecated_args(&a)).unwrap_or_default());
+                    }
                     _ => {}
                 }
             }
+        }
+    }
+    out
+}
+
+/// `(reason: 'R', since: 'S')` or positional `('R', 'S')`: PHP's own is `(message:, since:)`.
+fn deprecated_args(args: &SyntaxNode) -> DeprecatedAttr {
+    let mut out = DeprecatedAttr::default();
+    let mut pos = 0;
+    for a in args.children() {
+        match a.kind() {
+            ARG => {
+                let v = string_of(&a).map(|s| s.0);
+                if pos == 0 {
+                    out.reason = v.unwrap_or_default();
+                } else if pos == 1 {
+                    out.since = v;
+                }
+                pos += 1;
+            }
+            NAMED_ARG => {
+                let v = string_of(&a).map(|s| s.0);
+                match a.name_text().as_deref() {
+                    Some("reason" | "message") => out.reason = v.unwrap_or_default(),
+                    Some("since") => out.since = v,
+                    _ => {}
+                }
+            }
+            _ => {}
         }
     }
     out

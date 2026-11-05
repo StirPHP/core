@@ -147,6 +147,15 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
 
     let config = load_neon_config(project, composer.as_ref()).await?;
     if let Some(config) = &config {
+        // laid over the stubs of our own, and so after them
+        for (path, text) in read_vendor(config.stub_files.clone()).await {
+            files.push(SourceFile::new(
+                &db,
+                stir_db::overlay_path(&path),
+                text,
+                FileOrigin::Stub,
+            ));
+        }
         let own: BTreeSet<PathBuf> = sources
             .iter()
             .filter_map(|f| f.path(&db).canonicalize().ok())
@@ -499,6 +508,7 @@ async fn settings_from(
     let Some(config) = config else {
         return (settings, ignore_notice(skipped, &php));
     };
+    settings.deprecations = project.config.deprecations || config.deprecation_rules;
     settings.php_paths = config.paths.clone();
     settings.php_excludes = config
         .exclude_paths

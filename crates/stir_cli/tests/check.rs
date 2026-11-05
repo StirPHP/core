@@ -1066,3 +1066,58 @@ fn fmt_formats_checks_and_reads_standard_input() {
         .success()
         .stdout("<?php\nif ($a) {\n  b();\n}\n");
 }
+
+#[test]
+fn stub_files_say_what_declarations_do_not() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::write(
+        root.join("phpstan.neon"),
+        "parameters:\n    level: 6\n    paths: [src]\n    stubFiles: [stubs/lib.stub]\n    scanFiles: [lib/lib.php]\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    std::fs::create_dir_all(root.join("stubs")).unwrap();
+    std::fs::write(
+        root.join("lib/lib.php"),
+        "<?php\nnamespace Lib;\nclass Box {\n    public function get() { return 1; }\n    public function other(): int { return 1; }\n}\nfunction made() { return 1; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("stubs/lib.stub"),
+        "<?php\nnamespace Lib;\n/** @template T */\nclass Box {\n    /** @return T */\n    public function get() {}\n}\n/** @return \\DateTime */\nfunction made() {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/a.php"),
+        "<?php\nuse Lib\\Box;\n/** @param Box<int> $b */\nfunction f(Box $b): string {\n    return $b->get();\n}\nfunction g(Box $b): int {\n    return \\Lib\\made();\n}\nfunction h(Box $b): int {\n    return $b->other();\n}\n",
+    )
+    .unwrap();
+    let out = assert_cmd::Command::cargo_bin("stirphp")
+        .unwrap()
+        .current_dir(root)
+        .args(["check", "--format", "json"])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let diags: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    let found: Vec<(i64, String)> = diags
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| {
+            (
+                d["line"].as_i64().unwrap(),
+                d["code"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [(5, "return.type".to_owned()), (8, "return.type".to_owned())],
+        "{diags}"
+    );
+}

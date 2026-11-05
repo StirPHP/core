@@ -1,0 +1,162 @@
+<?php
+
+class DOMDocument
+{
+
+	/** @var DOMDocumentType|null */
+	public $doctype;
+
+	/** @var DOMElement|null */
+	public $documentElement;
+
+	/** @var null */
+	public $ownerDocument;
+
+	/**
+	 * @param string $name
+	 * @return DOMNodeList<DOMElement>
+	 */
+	public function getElementsByTagName ($name) {}
+
+	/**
+	 * @param string $namespaceURI
+	 * @param string $localName
+	 * @return DOMNodeList<DOMElement>
+	 */
+	public function getElementsByTagNameNS ($namespaceURI, $localName) {}
+
+}
+
+class DOMNode
+{
+
+	/**
+	 * @var DOMNamedNodeMap<DOMAttr>|null
+	 */
+	public $attributes;
+
+	/**
+	 * @phpstan-assert-if-true =DOMNamedNodeMap<DOMAttr> $this->attributes
+	 * @return bool
+	 */
+	public function hasAttributes() {}
+
+	/**
+	 * @template TNode of DOMNode
+	 * @param TNode $node
+	 * @return __benevolent<TNode|false>
+	 */
+	public function insertBefore(DOMNode $node, ?DOMNode $child = null) {}
+
+	/**
+	 * @template TNode of DOMNode
+	 * @param TNode $node
+	 * @return __benevolent<TNode|false>
+	 */
+	public function removeChild(DOMNode $node) {}
+
+	/**
+	 * @template TNode of DOMNode
+	 * @param TNode $node
+	 * @return __benevolent<TNode|false>
+	 */
+	public function appendChild(DOMNode $node) {}
+
+}
+
+class DOMElement extends DOMNode
+{
+
+	/** @var DOMNamedNodeMap<DOMAttr> */
+	public $attributes;
+
+	/**
+	 * @param string $name
+	 * @return DOMNodeList<DOMElement>
+	 */
+	public function getElementsByTagName ($name) {}
+
+	/**
+	 * @param string $namespaceURI
+	 * @param string $localName
+	 * @return DOMNodeList<DOMElement>
+	 */
+	public function getElementsByTagNameNS ($namespaceURI, $localName) {}
+
+}
+
+/**
+ * @template-covariant TNode as DOMNameSpaceNode|DOMNode
+ * @implements IteratorAggregate<int, TNode>
+ */
+class DOMNodeList implements IteratorAggregate, Countable
+{
+
+	/**
+	 * @param int $index
+	 * @return TNode|null
+	 */
+	public function item ($index) {}
+
+}
+
+class DOMAttr extends DOMNode
+{
+
+}
+
+class DOMProcessingInstruction
+{
+
+	/**
+	 * @var string
+	 */
+	public $target;
+
+	/**
+	 * @var string
+	 */
+	public $data;
+
+}
+
+/**
+ * @template-covariant TNode as DOMNode
+ * @implements IteratorAggregate<int, TNode>
+ *
+ * @property-read int $length
+ */
+class DOMNamedNodeMap implements IteratorAggregate, Countable
+{
+	/**
+	 * @return Iterator<TNode>
+	 */
+	public function getIterator(): Iterator {}
+
+	/**
+	 * @param string $qualifiedName
+	 * @return TNode|null
+	 */
+	public function getNamedItem($qualifiedName): ?DOMNode {}
+
+	/**
+	 * @param string|null $namespace
+	 * @param string $localName
+	 * @return TNode|null
+	 */
+	public function getNamedItemNS($namespace, $localName): ?DOMNode {}
+
+	/**
+	 * @param int $index
+	 * @return TNode|null
+	 */
+	public function item($index): ?DOMNode {}
+}
+
+class DOMText
+{
+
+	/** @var string */
+	public $wholeText;
+
+}

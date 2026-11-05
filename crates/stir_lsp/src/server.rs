@@ -188,6 +188,10 @@ fn stub_dir() -> PathBuf {
 fn file_uri(db: &dyn Db, file: SourceFile) -> Option<Uri> {
     let path = file.path(db);
     let s = path.to_string_lossy();
+    // a project's stub file is a file of the project
+    if let Some(real) = s.strip_prefix(stir_db::OVERLAY_PREFIX) {
+        return Uri::from_file_path(real);
+    }
     if let Some(rest) = s.strip_prefix("stubs://") {
         let target = stub_dir().join("stubs").join(rest);
         let text = file.text(db);

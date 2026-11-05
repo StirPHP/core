@@ -7,6 +7,7 @@ pub mod doc;
 mod index;
 mod items;
 pub mod name;
+mod overlay;
 pub mod type_ref;
 
 use rustc_hash::FxHashMap;
@@ -91,9 +92,9 @@ pub fn symbol_table(db: &dyn Db, ws: Workspace) -> Arc<Vec<Symbol>> {
     Arc::new(out)
 }
 
-/// Declarations of one file.
+/// Declarations of one file, as it has them.
 #[salsa::tracked(returns(ref))]
-pub fn file_items(db: &dyn Db, file: SourceFile) -> Arc<FileItems> {
+fn own_items(db: &dyn Db, file: SourceFile) -> Arc<FileItems> {
     let parse = stir_db::parse(db, file);
     let versions = if file.origin(db) == FileOrigin::Stub {
         items::StubVersions::for_stub(file.path(db), stir_db::php_versions(db))
@@ -101,6 +102,47 @@ pub fn file_items(db: &dyn Db, file: SourceFile) -> Arc<FileItems> {
         items::StubVersions::default()
     };
     Arc::new(items::lower_file(&parse.syntax(), versions))
+}
+
+/// By lowercase name, what the stub files say of classes, in the order they're to be laid.
+#[salsa::tracked(returns(ref))]
+fn overlay_classes(db: &dyn Db) -> Arc<FxHashMap<SmolStr, Vec<ClassDef>>> {
+    let mut out: FxHashMap<SmolStr, Vec<ClassDef>> = FxHashMap::default();
+    let Some(ws) = Workspace::try_get(db) else {
+        return Arc::new(out);
+    };
+    for &file in ws.files(db) {
+        if stir_db::is_overlay(file.path(db)) {
+            for class in &own_items(db, file).classes {
+                out.entry(class.name.key()).or_default().push(class.clone());
+            }
+        }
+    }
+    Arc::new(out)
+}
+
+/// Declarations of one file, with what stub files say of them.
+#[salsa::tracked(returns(ref))]
+pub fn file_items(db: &dyn Db, file: SourceFile) -> Arc<FileItems> {
+    let own = own_items(db, file);
+    if stir_db::is_overlay(file.path(db)) {
+        return own.clone();
+    }
+    let overlays = overlay_classes(db);
+    if !own
+        .classes
+        .iter()
+        .any(|c| overlays.contains_key(&c.name.key()))
+    {
+        return own.clone();
+    }
+    let mut items = own.as_ref().clone();
+    for class in &mut items.classes {
+        for over in overlays.get(&class.name.key()).into_iter().flatten() {
+            overlay::lay_class(class, over);
+        }
+    }
+    Arc::new(items)
 }
 
 /// Every declaration in the workspace.
@@ -150,11 +192,22 @@ pub fn def_index(db: &dyn Db, ws: Workspace) -> Arc<DefIndex> {
         }
     }
     index.sort();
-    // our own stubs replace the phpstorm-stubs declarations of a function
+    // our own stubs replace the phpstorm-stubs declarations of a function, and a project's replace
+    // those and a dependency's
+    let in_project_stub = |l: &ItemLoc| l.file.path(db).starts_with("stubs://overlay");
+    let in_our_stub = |l: &ItemLoc| l.file.path(db).starts_with("stubs://override");
     for locs in index.functions.values_mut() {
-        let overriding = |l: &ItemLoc| l.file.path(db).starts_with("stubs://override");
-        if locs.iter().any(overriding) {
-            locs.retain(|l| overriding(l) || l.file.origin(db) != stir_db::FileOrigin::Stub);
+        if locs.iter().any(in_project_stub) {
+            locs.retain(|l| in_project_stub(l) || l.file.origin(db) == FileOrigin::Source);
+        } else if locs.iter().any(in_our_stub) {
+            locs.retain(|l| in_our_stub(l) || l.file.origin(db) != FileOrigin::Stub);
+        }
+    }
+    // a class is declared where it's declared, and only without that by a stub
+    let overlaid = |l: &ItemLoc| stir_db::is_overlay(l.file.path(db));
+    for locs in index.classes.values_mut() {
+        if !locs.iter().all(overlaid) {
+            locs.retain(|l| !overlaid(l));
         }
     }
     Arc::new(index)

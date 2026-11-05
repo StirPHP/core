@@ -155,6 +155,10 @@ pub struct PhpstanConfig {
     /// `typeAliases`: name → PHPStan type string.
     pub type_aliases: IndexMap<String, String>,
     pub bootstrap_files: Vec<PathBuf>,
+    /// `stubFiles`: what they declare is laid over what's declared elsewhere.
+    pub stub_files: Vec<PathBuf>,
+    /// PHPStan's rules for deprecations are among the extensions it's configured with.
+    pub deprecation_rules: bool,
     pub scan_files: Vec<PathBuf>,
     pub scan_directories: Vec<PathBuf>,
     pub treat_phpdoc_types_as_certain: Option<bool>,
@@ -172,6 +176,7 @@ pub struct PhpstanConfig {
 const PATH_LIST_PARAMS: &[&str] = &[
     "paths",
     "bootstrapFiles",
+    "stubFiles",
     "scanFiles",
     "scanDirectories",
     "stubFiles",
@@ -235,6 +240,8 @@ impl PhpstanConfig {
             ignore_errors: Vec::new(),
             type_aliases: IndexMap::new(),
             bootstrap_files: Vec::new(),
+            stub_files: Vec::new(),
+            deprecation_rules: false,
             scan_files: Vec::new(),
             scan_directories: Vec::new(),
             treat_phpdoc_types_as_certain: None,
@@ -303,6 +310,11 @@ impl PhpstanConfig {
         };
         self.paths = self.path_list("paths")?;
         self.bootstrap_files = self.path_list("bootstrapFiles")?;
+        self.stub_files = self.path_list("stubFiles")?;
+        self.deprecation_rules = matches!(
+            self.param("deprecationRulesInstalled"),
+            Some(Value::Bool(true))
+        );
         if let Some(Value::String(b)) = self.param("bootstrap") {
             self.bootstrap_files.push(PathBuf::from(b));
         }

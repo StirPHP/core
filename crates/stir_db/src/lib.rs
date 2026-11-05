@@ -49,6 +49,21 @@ pub struct SourceFile {
     pub origin: FileOrigin,
 }
 
+/// Where the stub files of a project are in a workspace: under a name that isn't a place on disk,
+/// as their declarations aren't where a name is declared.
+pub const OVERLAY_PREFIX: &str = "stubs://overlay/";
+
+/// The path a project's stub file at `path` has in a workspace.
+pub fn overlay_path(path: &Path) -> PathBuf {
+    PathBuf::from(format!("{OVERLAY_PREFIX}{}", path.display()))
+}
+
+/// Is what's at `path` a stub file, laid over what's declared elsewhere (see the `stir_hir` crate)?
+/// Our own ones are under `stubs://override`, and those of a project under [`OVERLAY_PREFIX`].
+pub fn is_overlay(path: &Path) -> bool {
+    path.starts_with("stubs://override") || path.starts_with("stubs://overlay")
+}
+
 /// A project's script (`parameters.stirphp.rules`). An input of its own, so that changing a script
 /// invalidates what ran it and nothing else.
 #[salsa::input(debug)]
@@ -108,6 +123,9 @@ pub struct Settings {
     /// The `ext-*` that Composer's files mention (lowercase, no `ext-`). `None` without Composer.
     /// Editors don't offer extensions that aren't PHP's own unless they're in here.
     pub declared_extensions: Option<Vec<String>>,
+    /// Report the use of what's deprecated as warnings: `parameters.stirphp.deprecations`, or
+    /// PHPStan's rules for it being installed. Editors mark it either way.
+    pub deprecations: bool,
 }
 
 impl Default for Settings {
@@ -121,6 +139,7 @@ impl Default for Settings {
             php_excludes: Vec::new(),
             pending_install: None,
             declared_extensions: None,
+            deprecations: false,
         }
     }
 }

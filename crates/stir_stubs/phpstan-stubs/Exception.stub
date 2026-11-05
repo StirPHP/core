@@ -1,0 +1,123 @@
+<?php
+
+interface Throwable
+{
+	/**
+	 * @throws void
+	 */
+	public function getMessage();
+
+	/**
+	 * @throws void
+	 */
+	public function getCode();
+
+	/**
+	 * @throws void
+	 */
+	public function getFile();
+
+	/**
+	 * @throws void
+	 */
+	public function getLine();
+
+	/**
+	 * @return list<array{function:string,line?:int,file?:string,class?:class-string,type?:'::'|'->',args?:list<mixed>,object?:object}>
+	 * @throws void
+	 */
+	public function getTrace();
+
+	/**
+	 * @throws void
+	 */
+	public function getTraceAsString();
+
+	/**
+	 * @return null|Throwable
+	 * @throws void
+	 */
+	public function getPrevious();
+}
+
+class Exception implements Throwable
+{
+
+	/**
+	 * @throws void
+	 */
+	final public function getMessage(): string {}
+
+	/**
+	 * @throws void
+	 */
+	final public function getCode() {}
+
+	/**
+	 * @throws void
+	 */
+	final public function getFile(): string {}
+
+	/**
+	 * @throws void
+	 */
+	final public function getLine(): int {}
+
+	/**
+	 * @return list<array{function:string,line?:int,file?:string,class?:class-string,type?:'::'|'->',args?:list<mixed>,object?:object}>
+	 * @throws void
+	 */
+	final public function getTrace(): array {}
+
+	/**
+	 * @throws void
+	 */
+	final public function getPrevious(): ?Throwable {}
+
+	/**
+	 * @throws void
+	 */
+	final public function getTraceAsString(): string {}
+
+}
+
+class Error implements Throwable
+{
+
+	/**
+	 * @throws void
+	 */
+	final public function getMessage(): string {}
+
+	/**
+	 * @throws void
+	 */
+	final public function getCode() {}
+
+	/**
+	 * @throws void
+	 */
+	final public function getFile(): string {}
+
+	/**
+	 * @throws void
+	 */
+	final public function getLine(): int {}
+
+	/**
+	 * @return list<array{function:string,line?:int,file?:string,class?:class-string,type?:'::'|'->',args?:list<mixed>,object?:object}>
+	 * @throws void
+	 */
+	final public function getTrace(): array {}
+
+	/**
+	 * @throws void
+	 */
+	final public function getPrevious(): ?Throwable {}
+
+	/**
+	 * @throws void
+	 */
+	final public function getTraceAsString(): string {}
+
+}

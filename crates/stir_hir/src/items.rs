@@ -13,7 +13,7 @@ use crate::ast::NodeExt;
 use crate::attrs::{StubAttrs, stub_attrs, version_tags};
 use crate::doc::{self, Aliases, DocCx};
 use crate::name::{Fqn, Scope, UseKind};
-use crate::type_ref::{TypeCtx, TypeRef, TypeRefKind, unquote};
+use crate::type_ref::{PhpBuiltin, TypeCtx, TypeRef, TypeRefKind, unquote};
 
 pub type NodePtr = SyntaxNodePtr<PhpLanguage>;
 
@@ -95,6 +95,8 @@ pub struct Signature {
     pub by_ref: bool,
     /// `@phpstan-assert-if-true` / `-if-false` on parameters.
     pub asserts: Vec<AssertDef>,
+    /// `@throws`: the exceptions it says it can throw.
+    pub throws: Option<TypeRef>,
 }
 
 /// When an assert holds.
@@ -131,6 +133,8 @@ pub struct FunctionDef {
     pub scope: u32,
     pub sig: Signature,
     pub doc: Option<DocText>,
+    /// Deprecated, and why as far as it says.
+    pub deprecated: Option<SmolStr>,
     pub ptr: NodePtr,
     pub name_range: TextRange,
 }
@@ -181,6 +185,7 @@ pub fn magic_members(
                     immutable: p.access == stir_phpdoc::PropertyAccess::Read,
                     has_default: false,
                     doc: None,
+                    deprecated: None,
                     range: tag.range,
                     ptr,
                 });
@@ -242,10 +247,12 @@ pub fn magic_members(
                         doc_ret: m.return_type.as_ref().map(|t| dcx.lower(t)),
                         by_ref: false,
                         asserts: Vec::new(),
+                        throws: None,
                     },
                     has_body: true,
                     magic: true,
                     doc: None,
+                    deprecated: None,
                     ptr,
                     name_range: m.name.range,
                 });
@@ -269,6 +276,7 @@ pub struct PropertyDef {
     pub immutable: bool,
     pub has_default: bool,
     pub doc: Option<DocText>,
+    pub deprecated: Option<SmolStr>,
     pub range: TextRange,
     pub ptr: NodePtr,
 }
@@ -283,6 +291,7 @@ pub struct MethodDef {
     /// Declared by a class-level `@method` tag (its `ptr` is the class node).
     pub magic: bool,
     pub doc: Option<DocText>,
+    pub deprecated: Option<SmolStr>,
     pub ptr: NodePtr,
     pub name_range: TextRange,
 }
@@ -295,6 +304,7 @@ pub struct ClassConstDef {
     pub doc_ty: Option<TypeRef>,
     pub mods: MemberMods,
     pub value: Option<NodePtr>,
+    pub deprecated: Option<SmolStr>,
     pub range: TextRange,
 }
 
@@ -302,6 +312,7 @@ pub struct ClassConstDef {
 pub struct EnumCaseDef {
     pub name: SmolStr,
     pub value: Option<NodePtr>,
+    pub deprecated: Option<SmolStr>,
     pub range: TextRange,
 }
 
@@ -332,6 +343,7 @@ pub struct ClassDef {
     /// Members of a stub class not on every target version.
     pub limited_members: Vec<LimitedMember>,
     pub doc: Option<DocText>,
+    pub deprecated: Option<SmolStr>,
     pub ptr: NodePtr,
     pub name_range: TextRange,
 }
@@ -348,6 +360,7 @@ pub struct ConstDef {
     pub name: Fqn,
     pub scope: u32,
     pub value: Option<NodePtr>,
+    pub deprecated: Option<SmolStr>,
     pub range: TextRange,
 }
 
@@ -412,6 +425,8 @@ pub(crate) struct StubVersions {
     versions: PhpVersions,
     /// Do `@since` and `@removed` tags speak of PHP versions?
     tags: bool,
+    /// A stub's `@return mixed` says nothing: what it overrides may say more.
+    stub: bool,
 }
 
 impl StubVersions {
@@ -423,6 +438,7 @@ impl StubVersions {
         StubVersions {
             versions,
             tags: stir_stubs::ships_with_php(extension),
+            stub: true,
         }
     }
 }
@@ -496,6 +512,38 @@ impl Lowerer {
 
     fn target(&self) -> PhpVersion {
         self.versions.versions.target()
+    }
+
+    /// Is `node` deprecated, by its attribute or doc comment? What the stubs of PHP's own extensions
+    /// say is from some version of PHP on, and not before that.
+    fn deprecation(&self, node: &SyntaxNode, doc: Option<&DocBlock>) -> Option<SmolStr> {
+        let from_version = |since: Option<&str>| {
+            !self.versions.tags
+                || since
+                    .and_then(PhpVersion::parse)
+                    .is_none_or(|v| v <= self.target())
+        };
+        if let Some(attr) = self.attrs(node).deprecated
+            && from_version(attr.since.as_deref())
+        {
+            return Some(SmolStr::new(attr.reason.trim()));
+        }
+        let doc = doc?;
+        let tag = doc.tags.iter().find_map(|t| match &t.kind {
+            TagKind::Deprecated(d) => Some(d),
+            _ => None,
+        })?;
+        if doc.tags.iter().any(|t| t.name == "not-deprecated") {
+            return None;
+        }
+        let text = tag.description.as_ref().map_or("", |d| d.text.trim());
+        let first = text.split_whitespace().next();
+        // `@deprecated 8.1`, in the stubs
+        let (since, rest) = match first.and_then(PhpVersion::parse) {
+            Some(_) if self.versions.tags => (first, text[first.map_or(0, str::len)..].trim()),
+            _ => (None, text),
+        };
+        from_version(since).then(|| SmolStr::new(rest))
     }
 
     /// Which versions have the element `node`, by its attributes and doc comment.
@@ -601,10 +649,13 @@ impl Lowerer {
                         if !self.on_target(node, LimitedKind::Const, name.clone()) {
                             continue;
                         }
+                        let doc = self.doc_block(node);
+                        let deprecated = self.deprecation(node, doc.as_ref());
                         self.out.consts.push(ConstDef {
                             name,
                             scope: self.scope_id(),
                             value: value_ptr(&elem),
+                            deprecated,
                             range: elem.text_range(),
                         });
                     }
@@ -650,6 +701,8 @@ impl Lowerer {
         if !self.on_target(node, LimitedKind::Const, name.clone()) {
             return;
         }
+        let doc = self.doc_block(node);
+        let deprecated = self.deprecation(node, doc.as_ref());
         self.out.consts.push(ConstDef {
             name,
             scope: self.scope_id(),
@@ -657,6 +710,7 @@ impl Lowerer {
                 .get(1)
                 .and_then(|a| a.children().next())
                 .map(|e| NodePtr::new(&e)),
+            deprecated,
             range: node.text_range(),
         });
     }
@@ -710,7 +764,10 @@ impl Lowerer {
         }
         let doc_ret = doc
             .and_then(|d| d.return_tag())
-            .map(|r| self.doc_cx(&names).lower(&r.ty));
+            .map(|r| self.doc_cx(&names).lower(&r.ty))
+            .filter(|t| {
+                !(self.versions.stub && matches!(t.kind, TypeRefKind::Php(PhpBuiltin::Mixed)))
+            });
         // `func_get_args()`: the function takes more than it declares
         if node.descendants().any(|d| {
             d.kind() == NAME_EXPR && {
@@ -769,6 +826,24 @@ impl Lowerer {
                     .collect()
             })
             .unwrap_or_default();
+        let throws = doc.and_then(|d| {
+            let lowered: Vec<TypeRef> = d
+                .effective_tags()
+                .into_iter()
+                .filter_map(|t| match &t.kind {
+                    TagKind::Throws(t) => Some(self.doc_cx(&names).lower(&t.ty)),
+                    _ => None,
+                })
+                .collect();
+            let range = lowered.first()?.range;
+            Some(match <[TypeRef; 1]>::try_from(lowered) {
+                Ok([one]) => one,
+                Err(many) => TypeRef {
+                    kind: TypeRefKind::Union(many),
+                    range,
+                },
+            })
+        });
         Signature {
             type_params,
             params,
@@ -776,6 +851,7 @@ impl Lowerer {
             doc_ret,
             by_ref: node.has_token(AMP),
             asserts,
+            throws,
         }
     }
 
@@ -903,11 +979,13 @@ impl Lowerer {
         }
         let doc = self.doc_block(node);
         let sig = self.signature(node, &[], false, doc.as_ref());
+        let deprecated = self.deprecation(node, doc.as_ref());
         self.out.functions.push(FunctionDef {
             name,
             scope: self.scope_id(),
             sig,
             doc: doc_of(node),
+            deprecated,
             ptr: NodePtr::new(node),
             name_range: name_node.text_range(),
         });
@@ -1064,6 +1142,7 @@ impl Lowerer {
             trait_aliases: Vec::new(),
             limited_members: Vec::new(),
             doc: doc_of(node),
+            deprecated: self.deprecation(node, doc),
             ptr: NodePtr::new(node),
             name_range: match &name {
                 ClassName::Declared(n) => n.text_range(),
@@ -1152,6 +1231,7 @@ impl Lowerer {
                     magic: false,
                     has_body: m.child(BLOCK).is_some(),
                     doc: doc_of(m),
+                    deprecated: self.deprecation(m, doc.as_ref()),
                     ptr: NodePtr::new(m),
                     name_range: name_node.text_range(),
                 });
@@ -1180,6 +1260,7 @@ impl Lowerer {
                         immutable: false,
                         has_default: elem.has_token(EQ),
                         doc: doc_of(m),
+                        deprecated: self.deprecation(m, doc.as_ref()),
                         range: elem.text_range(),
                         ptr: NodePtr::new(&elem),
                     });
@@ -1199,6 +1280,7 @@ impl Lowerer {
                         doc_ty,
                         mods: mods.clone(),
                         value: value_ptr(&elem),
+                        deprecated: self.deprecation(m, doc.as_ref()),
                         range: elem.text_range(),
                     });
                 }
@@ -1208,6 +1290,7 @@ impl Lowerer {
                     class.cases.push(EnumCaseDef {
                         name: SmolStr::new(name),
                         value: value_ptr(m),
+                        deprecated: self.deprecation(m, doc.as_ref()),
                         range: m.text_range(),
                     });
                 }
@@ -1256,9 +1339,9 @@ fn literal_type_ref(node: &SyntaxNode) -> Option<TypeRef> {
     let text = text.trim();
     let kind = match node.kind() {
         NAME_EXPR => match text.to_ascii_lowercase().as_str() {
-            "true" => TypeRefKind::Php(crate::type_ref::PhpBuiltin::True),
-            "false" => TypeRefKind::Php(crate::type_ref::PhpBuiltin::False),
-            "null" => TypeRefKind::Php(crate::type_ref::PhpBuiltin::Null),
+            "true" => TypeRefKind::Php(PhpBuiltin::True),
+            "false" => TypeRefKind::Php(PhpBuiltin::False),
+            "null" => TypeRefKind::Php(PhpBuiltin::Null),
             _ => return None,
         },
         STRING_LITERAL => TypeRefKind::Literal(crate::type_ref::Literal::String(SmolStr::new(

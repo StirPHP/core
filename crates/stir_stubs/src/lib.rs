@@ -83,12 +83,137 @@ include!(concat!(env!("OUT_DIR"), "/stubs.rs"));
 /// All embedded stub files, grouped by extension in [`EXTENSIONS`] order and
 /// sorted by path within each extension.
 pub fn stub_files() -> impl Iterator<Item = StubFile> {
-    FILES.iter().copied().chain(std::iter::once(StubFile {
-        extension: "override",
-        path: "override/functions.php",
-        text: include_str!("overrides.php"),
-    }))
+    let ours = PHPSTAN_STUBS
+        .iter()
+        .map(|(path, text)| StubFile {
+            extension: "override",
+            path,
+            text,
+        })
+        .chain(std::iter::once(StubFile {
+            extension: "override",
+            path: "override/functions.php",
+            text: include_str!("overrides.php"),
+        }));
+    FILES.iter().copied().chain(ours)
 }
+
+/// PHPStan's stubs for PHP's classes (MIT, `phpstan-stubs/LICENSE`): what's generic, and what
+/// phpstorm-stubs says less of. Each is laid over the phpstorm-stubs declaration, method by method.
+const PHPSTAN_STUBS: &[(&str, &str)] = &[
+    (
+        "override/phpstan/ArrayObject.stub",
+        include_str!("../phpstan-stubs/ArrayObject.stub"),
+    ),
+    (
+        "override/phpstan/Countable.stub",
+        include_str!("../phpstan-stubs/Countable.stub"),
+    ),
+    (
+        "override/phpstan/Exception.stub",
+        include_str!("../phpstan-stubs/Exception.stub"),
+    ),
+    (
+        "override/phpstan/ImagickPixel.stub",
+        include_str!("../phpstan-stubs/ImagickPixel.stub"),
+    ),
+    (
+        "override/phpstan/Memcached.stub",
+        include_str!("../phpstan-stubs/Memcached.stub"),
+    ),
+    (
+        "override/phpstan/PDOStatement.stub",
+        include_str!("../phpstan-stubs/PDOStatement.stub"),
+    ),
+    (
+        "override/phpstan/Redis.stub",
+        include_str!("../phpstan-stubs/Redis.stub"),
+    ),
+    (
+        "override/phpstan/ReflectionAttribute.stub",
+        include_str!("../phpstan-stubs/ReflectionAttribute.stub"),
+    ),
+    (
+        "override/phpstan/ReflectionClass.stub",
+        include_str!("../phpstan-stubs/ReflectionClass.stub"),
+    ),
+    (
+        "override/phpstan/ReflectionClassConstant.stub",
+        include_str!("../phpstan-stubs/ReflectionClassConstant.stub"),
+    ),
+    (
+        "override/phpstan/ReflectionEnum.stub",
+        include_str!("../phpstan-stubs/ReflectionEnum.stub"),
+    ),
+    (
+        "override/phpstan/ReflectionFunctionAbstract.stub",
+        include_str!("../phpstan-stubs/ReflectionFunctionAbstract.stub"),
+    ),
+    (
+        "override/phpstan/ReflectionMethod.stub",
+        include_str!("../phpstan-stubs/ReflectionMethod.stub"),
+    ),
+    (
+        "override/phpstan/ReflectionObject.stub",
+        include_str!("../phpstan-stubs/ReflectionObject.stub"),
+    ),
+    (
+        "override/phpstan/ReflectionParameter.stub",
+        include_str!("../phpstan-stubs/ReflectionParameter.stub"),
+    ),
+    (
+        "override/phpstan/ReflectionProperty.stub",
+        include_str!("../phpstan-stubs/ReflectionProperty.stub"),
+    ),
+    (
+        "override/phpstan/ReflectionType.stub",
+        include_str!("../phpstan-stubs/ReflectionType.stub"),
+    ),
+    (
+        "override/phpstan/SensitiveParameterValue.stub",
+        include_str!("../phpstan-stubs/SensitiveParameterValue.stub"),
+    ),
+    (
+        "override/phpstan/SplObjectStorage.stub",
+        include_str!("../phpstan-stubs/SplObjectStorage.stub"),
+    ),
+    (
+        "override/phpstan/WeakReference.stub",
+        include_str!("../phpstan-stubs/WeakReference.stub"),
+    ),
+    (
+        "override/phpstan/bcmath.stub",
+        include_str!("../phpstan-stubs/bcmath.stub"),
+    ),
+    (
+        "override/phpstan/date.stub",
+        include_str!("../phpstan-stubs/date.stub"),
+    ),
+    (
+        "override/phpstan/dom.stub",
+        include_str!("../phpstan-stubs/dom.stub"),
+    ),
+    (
+        "override/phpstan/ext-ds.stub",
+        include_str!("../phpstan-stubs/ext-ds.stub"),
+    ),
+    (
+        "override/phpstan/iterable.stub",
+        include_str!("../phpstan-stubs/iterable.stub"),
+    ),
+    (
+        "override/phpstan/mysqli.stub",
+        include_str!("../phpstan-stubs/mysqli.stub"),
+    ),
+    (
+        "override/phpstan/spl.stub",
+        include_str!("../phpstan-stubs/spl.stub"),
+    ),
+    (
+        "override/phpstan/zip.stub",
+        include_str!("../phpstan-stubs/zip.stub"),
+    ),
+];
 
 /// The embedded extension directory names.
 pub fn extensions() -> &'static [&'static str] {
