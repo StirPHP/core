@@ -1,67 +1,21 @@
-//! A small read-only view of the semantic model for the transpiler.
+//! A small read-only view of the semantic model for the language server.
 
 use std::rc::Rc;
 
 use smol_str::SmolStr;
-use stir_hir::{ItemLoc, MethodDef};
-use stir_types::{Ty, TyKind, Variance};
+use stir_hir::ItemLoc;
+use stir_types::{Ty, TyKind};
 
 use crate::model::{ClassModel, Ctx, FnSig};
 
 pub type ClassModelRef<'db> = Rc<ClassModel<'db>>;
 
-/// A resolved signature: type parameters (name, bound, variance), parameter
-/// types (element type for variadics), return type, receiver.
-#[derive(Debug, Clone)]
-pub struct FnSigView {
-    pub type_params: Vec<(SmolStr, Option<Ty>, Variance)>,
-    pub params: Vec<Ty>,
-    pub ret: Ty,
-    pub receiver: Option<Ty>,
-}
-
-fn view(ctx: &Ctx<'_>, sig: &FnSig) -> FnSigView {
-    FnSigView {
-        type_params: sig
-            .type_params
-            .iter()
-            .map(|p| {
-                (
-                    p.name.clone(),
-                    stir_types::TypeEnv::param_bound(ctx, p.id),
-                    p.variance,
-                )
-            })
-            .collect(),
-        params: sig.params.iter().map(|p| p.ty.clone()).collect(),
-        ret: sig.ret.clone(),
-        receiver: sig.receiver.clone(),
-    }
-}
-
-pub fn fn_sig_view(ctx: &Ctx<'_>, loc: ItemLoc) -> FnSigView {
-    view(ctx, &ctx.function_sig(loc))
-}
-
-pub fn method_sig_view<'db>(
-    ctx: &Ctx<'db>,
-    model: &ClassModelRef<'db>,
-    m: &MethodDef,
-) -> FnSigView {
-    view(ctx, &ctx.method_sig(model, m))
-}
-
-/// What the transpiler needs to emit a class header.
+/// A class header, for display.
 #[derive(Debug, Clone)]
 pub struct ClassView {
-    pub type_params: Vec<(SmolStr, Option<Ty>, Variance)>,
-    /// `@extends`/`@implements` tags for generic supertypes.
-    pub super_docs: Vec<(&'static str, String)>,
+    pub type_params: Vec<(SmolStr, Option<Ty>)>,
     pub parent: Option<String>,
     pub interfaces: Vec<String>,
-    /// Primary-constructor parameter types.
-    pub ctor_params: Vec<Ty>,
-    pub enum_backing: Option<Ty>,
 }
 
 pub fn class_view<'db>(ctx: &Ctx<'db>, model: &ClassModelRef<'db>) -> ClassView {
@@ -70,51 +24,13 @@ pub fn class_view<'db>(ctx: &Ctx<'db>, model: &ClassModelRef<'db>) -> ClassView 
         TyKind::Class { name, .. } => Some(name.to_string()),
         _ => None,
     };
-    let mut super_docs = Vec::new();
-    let generic = |t: &Ty| matches!(t.kind(), TyKind::Class { args, .. } if !args.is_empty());
-    if let Some(p) = &supers.parent
-        && generic(p)
-    {
-        super_docs.push(("extends", stir_types::to_phpdoc(p)));
-    }
-    for i in &supers.interfaces {
-        if generic(i) {
-            let tag = if model.kind() == stir_hir::ClassKind::Interface {
-                "extends"
-            } else {
-                "implements"
-            };
-            super_docs.push((tag, stir_types::to_phpdoc(i)));
-        }
-    }
-    let cx = ctx.class_cx(model);
-    let mut sink = Vec::new();
-    let ctor_params = model
-        .def
-        .primary_ctor
-        .iter()
-        .flatten()
-        .map(|p| ctx.param_sig(p, &cx, &mut sink).ty)
-        .collect();
-    let enum_backing = model
-        .def
-        .enum_backing
-        .as_ref()
-        .map(|t| ctx.lower(t, &cx, &mut sink));
     let builtin = |n: &String| matches!(n.to_ascii_lowercase().as_str(), "unitenum" | "backedenum");
     ClassView {
         type_params: model
             .params
             .iter()
-            .map(|p| {
-                (
-                    p.name.clone(),
-                    stir_types::TypeEnv::param_bound(ctx, p.id),
-                    p.variance,
-                )
-            })
+            .map(|p| (p.name.clone(), stir_types::TypeEnv::param_bound(ctx, p.id)))
             .collect(),
-        super_docs,
         parent: supers.parent.as_ref().and_then(name_of),
         interfaces: supers
             .interfaces
@@ -122,17 +38,8 @@ pub fn class_view<'db>(ctx: &Ctx<'db>, model: &ClassModelRef<'db>) -> ClassView 
             .filter_map(name_of)
             .filter(|n| !builtin(n))
             .collect(),
-        ctor_params,
-        enum_backing,
     }
 }
-
-/// The declared type of a property of `model`.
-pub fn property_ty<'db>(ctx: &Ctx<'db>, model: &ClassModelRef<'db>, name: &str) -> Option<Ty> {
-    ctx.find_property(&model.self_ty(), name).map(|p| p.ty)
-}
-
-// ------------------------------------------------------------ language server
 
 /// A parameter of [`SigInfo`].
 #[derive(Debug, Clone)]
@@ -154,7 +61,6 @@ pub struct SigInfo {
     pub ret: Ty,
     /// Was a return type written (or known from the declaration)?
     pub ret_declared: bool,
-    pub receiver: Option<Ty>,
 }
 
 fn info(ctx: &Ctx<'_>, sig: &FnSig) -> SigInfo {
@@ -179,11 +85,10 @@ fn info(ctx: &Ctx<'_>, sig: &FnSig) -> SigInfo {
             .collect(),
         ret: sig.ret.clone(),
         ret_declared: sig.ret_declared,
-        receiver: sig.receiver.clone(),
     }
 }
 
-/// The signature of a function (or extension function).
+/// The signature of a function.
 pub fn function_info(ctx: &Ctx<'_>, loc: ItemLoc) -> SigInfo {
     info(ctx, &ctx.function_sig(loc))
 }
@@ -225,7 +130,6 @@ pub fn ctor_info(ctx: &Ctx<'_>, class: &str) -> Option<SigInfo> {
                 .collect(),
             ret: c.self_ty(),
             ret_declared: true,
-            receiver: None,
         });
     }
     let (owner, m, _) = ctx.find_method(&c.self_ty(), "__construct")?;
@@ -362,25 +266,6 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
                 visibility: stir_hir::Visibility::Public,
             };
             push(&mut out, member, 2);
-        }
-    }
-    out
-}
-
-/// Extension functions callable on a receiver of type `recv`.
-pub fn applicable_extensions(ctx: &Ctx<'_>, recv: &Ty) -> Vec<ItemLoc> {
-    let mut out = Vec::new();
-    for locs in ctx.index.extensions.values() {
-        for &loc in locs {
-            let sig = ctx.function_sig(loc);
-            let Some(r) = &sig.receiver else { continue };
-            let mut inf = crate::infer::Inference::new(sig.type_params.iter().map(|p| p.id));
-            inf.unify(ctx, r, recv);
-            inf.finish(&Ty::nothing());
-            let want = inf.apply(r);
-            if stir_types::is_assignable(ctx, recv, &want) {
-                out.push(loc);
-            }
         }
     }
     out

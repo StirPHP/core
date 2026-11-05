@@ -60,18 +60,12 @@ pub fn document_symbols(db: &dyn Db, file: SourceFile) -> Vec<Symbol> {
     };
     let mut out = Vec::new();
     for f in &items.functions {
-        let mut s = leaf(
+        out.push(leaf(
             f.name.short(),
             SymbolKind::Function,
             f.ptr.text_range(),
             f.name_range,
-        );
-        if let Some(r) = &f.receiver {
-            let recv =
-                file.text(db)[usize::from(r.range.start())..usize::from(r.range.end())].to_owned();
-            s.name = format!("{recv}.{}", f.name.short());
-        }
-        out.push(s);
+        ));
     }
     for c in &items.consts {
         out.push(leaf(

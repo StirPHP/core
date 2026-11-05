@@ -373,24 +373,6 @@ fn member_items(
             rank: 0,
         });
     }
-    if statics {
-        return;
-    }
-    let mut seen = FxHashSet::default();
-    for loc in model_api::applicable_extensions(ctx, ty) {
-        let sig = model_api::function_info(ctx, loc);
-        let name = sig.name.rsplit('\\').next().unwrap_or(&sig.name).to_owned();
-        if !seen.insert(name.clone()) {
-            continue;
-        }
-        out.push(Item {
-            label: name.clone(),
-            kind: ItemKind::Method,
-            detail: Some(render::signature(&sig, "function").label),
-            insert: name,
-            rank: 1,
-        });
-    }
 }
 
 /// Nodes that bound the visibility of the bindings declared in them.

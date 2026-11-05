@@ -146,12 +146,7 @@ pub fn describe(
                 render::class_keyword(model.kind(), &model.def.mods),
                 model.def.name.short()
             );
-            let tps: Vec<_> = view
-                .type_params
-                .iter()
-                .map(|(n, b, _)| (n.clone(), b.clone()))
-                .collect();
-            code.push_str(&render::type_params(&tps));
+            code.push_str(&render::type_params(&view.type_params));
             if model.kind() == ClassKind::Record {
                 let fields: Vec<String> = model_api::members(
                     &ctx,

@@ -36,13 +36,6 @@ impl Inference {
             .any(|p| self.vars.contains(p) && !self.solved.contains_key(p))
     }
 
-    /// Replaces any still-unsolved variable with `fallback`.
-    pub fn finish(&mut self, fallback: &Ty) {
-        for v in self.vars.clone() {
-            self.solved.entry(v).or_insert_with(|| fallback.clone());
-        }
-    }
-
     /// Replaces any still-unsolved variable with what `fallback` makes of it.
     pub fn finish_with(&mut self, fallback: impl Fn(ParamId) -> Ty) {
         for v in self.vars.clone() {

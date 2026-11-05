@@ -114,7 +114,6 @@ pub struct FnSig {
     pub ret: Ty,
     /// Was a return type written (or known from the declaration)?
     pub ret_declared: bool,
-    pub receiver: Option<Ty>,
     /// Declared outside the project's `.sphp` sources.
     pub external: bool,
 }
@@ -904,7 +903,6 @@ impl<'db> Ctx<'db> {
             &format!("fn:{}", f.name.key()),
             &f.name.0,
             &f.sig,
-            f.receiver.as_ref(),
             loc.file,
             &cx,
             &mut sink,
@@ -925,7 +923,6 @@ impl<'db> Ctx<'db> {
         owner: &str,
         name: &str,
         sig: &stir_hir::Signature,
-        receiver: Option<&TypeRef>,
         file: SourceFile,
         outer: &LowerCx,
         sink: &mut Vec<LowerError>,
@@ -960,7 +957,6 @@ impl<'db> Ctx<'db> {
             params,
             ret,
             ret_declared,
-            receiver: receiver.map(|r| self.lower(r, &cx, sink)),
             external,
         }
     }
@@ -994,7 +990,6 @@ impl<'db> Ctx<'db> {
             &format!("m:{}::{}", c.key, m.name.to_ascii_lowercase()),
             &m.name,
             &m.sig,
-            None,
             c.file,
             &cx,
             &mut sink,
@@ -1137,15 +1132,6 @@ impl<'db> Ctx<'db> {
             }
         }
         None
-    }
-
-    /// Extension functions named `name` (lowercase lookup).
-    pub fn extensions(&self, name: &str) -> Vec<ItemLoc> {
-        self.index
-            .extensions
-            .get(name.to_ascii_lowercase().as_str())
-            .cloned()
-            .unwrap_or_default()
     }
 
     pub fn function(&self, name: &str) -> Option<ItemLoc> {

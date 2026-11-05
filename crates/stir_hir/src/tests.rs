@@ -25,7 +25,7 @@ fn lowers_stir_declarations() {
     let names: Vec<_> = items.functions.iter().map(|f| f.name.to_string()).collect();
     assert_eq!(names, ["App\\second", "App\\greet"]);
     let ext = &items.functions[0];
-    assert!(ext.receiver.is_some() && ext.expr_body);
+    assert!(ext.expr_body);
     assert_eq!(ext.sig.type_params[0].name, "T");
     let greet = &items.functions[1];
     assert_eq!(greet.sig.params[0].binding, Binding::Val);
@@ -107,21 +107,22 @@ fn lowers_php_declarations_and_index() {
 
     let b = file(
         &db,
-        "b.sphp",
-        "namespace Foo\nfunction String.shout(): String = this\n",
+        "b.php",
+        "<?php\nnamespace Foo;\nfunction shout(): void {}\n",
     );
     let ws = Workspace::new(&db, vec![a, b], stir_db::Settings::default());
     let index = def_index(&db, ws);
     assert!(index.classes.contains_key("foo\\a"));
     assert!(index.functions.contains_key("foo\\g"));
-    assert!(index.extensions.contains_key("shout"));
+    assert!(index.functions.contains_key("foo\\shout"));
 
     // incremental: editing b doesn't change a's items
     use salsa::Setter;
-    b.set_text(&mut db).to("namespace Foo\nclass B {}\n".into());
+    b.set_text(&mut db)
+        .to("<?php\nnamespace Foo;\nclass B {}\n".into());
     let index = def_index(&db, ws);
     assert!(index.classes.contains_key("foo\\b"));
-    assert!(!index.extensions.contains_key("shout"));
+    assert!(!index.functions.contains_key("foo\\shout"));
     let _ = Dialect::Php;
 }
 

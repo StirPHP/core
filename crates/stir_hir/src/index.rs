@@ -15,10 +15,8 @@ pub struct ItemLoc {
 pub struct DefIndex {
     /// lowercase FQN → classes/interfaces/traits/enums/records
     pub classes: FxHashMap<SmolStr, Vec<ItemLoc>>,
-    /// lowercase FQN → functions (extension functions are excluded)
+    /// lowercase FQN → functions
     pub functions: FxHashMap<SmolStr, Vec<ItemLoc>>,
-    /// lowercase short name → extension functions with that name
-    pub extensions: FxHashMap<SmolStr, Vec<ItemLoc>>,
     /// FQN (case-sensitive) → constants
     pub consts: FxHashMap<SmolStr, Vec<ItemLoc>>,
     /// lowercase FQN → type aliases
@@ -47,7 +45,6 @@ impl DefIndex {
         for map in [
             &mut self.classes,
             &mut self.functions,
-            &mut self.extensions,
             &mut self.consts,
             &mut self.type_aliases,
         ] {

@@ -125,8 +125,6 @@ pub struct DocText {
 pub struct FunctionDef {
     pub name: Fqn,
     pub scope: u32,
-    /// Extension-function receiver (`function String.isBlank()`).
-    pub receiver: Option<TypeRef>,
     pub sig: Signature,
     pub expr_body: bool,
     pub doc: Option<DocText>,
@@ -754,15 +752,9 @@ impl Lowerer {
         let name = name_node.text().to_string().trim().to_owned();
         let doc = self.doc_block(node);
         let sig = self.signature(node, &[], false, doc.as_ref());
-        let names = names_of(&sig.type_params, &[]);
-        let receiver = node
-            .child(RECEIVER_TYPE)
-            .and_then(|r| first_type(&r))
-            .map(|t| self.ctx(&names).lower(&t));
         self.out.functions.push(FunctionDef {
             name: Fqn::join(&self.scope.namespace, &name),
             scope: self.scope_id(),
-            receiver,
             sig,
             expr_body: node.child(FUNCTION_BODY).is_some(),
             doc: doc_of(node),

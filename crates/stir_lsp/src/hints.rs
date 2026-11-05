@@ -170,9 +170,6 @@ pub fn signature_help(
         }
         _ => return None,
     };
-    // the receiver of an extension function is not an argument
-    let mut sig = sig;
-    sig.receiver = None;
     let label = render::signature(&sig, kw);
     let commas = args
         .children_with_tokens()

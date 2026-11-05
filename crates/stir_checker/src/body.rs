@@ -516,7 +516,6 @@ impl<'a, 'db> Checker<'a, 'db> {
                 &format!("check:{i}"),
                 &f.name.0,
                 &f.sig,
-                f.receiver.as_ref(),
                 self.file,
                 &cx,
                 &mut sink,
@@ -1118,7 +1117,6 @@ impl<'a, 'db> Checker<'a, 'db> {
             "m:check",
             &m.name,
             &m.sig,
-            None,
             self.file,
             &self.ctx.class_cx(model),
             &mut sink,
@@ -3184,7 +3182,6 @@ impl<'a, 'db> Checker<'a, 'db> {
                         .collect(),
                     ret: f.ret.clone(),
                     ret_declared: true,
-                    receiver: None,
                     external: false,
                 };
                 self.check_args(node, &sig, &FxHashMap::default(), expected, &[])
@@ -3879,7 +3876,6 @@ impl<'a, 'db> Checker<'a, 'db> {
                     .collect(),
                 ret: model.self_ty(),
                 ret_declared: true,
-                receiver: None,
                 external: false,
             })
         } else {

@@ -11,7 +11,6 @@ pub mod type_ref;
 
 use std::sync::Arc;
 
-use smol_str::SmolStr;
 use stir_db::{Db, SourceFile, Workspace};
 
 pub use index::{DefIndex, ItemLoc};
@@ -51,12 +50,7 @@ pub fn def_index(db: &dyn Db, ws: Workspace) -> Arc<DefIndex> {
                 file,
                 index: i as u32,
             };
-            if f.receiver.is_some() {
-                let short = SmolStr::new(f.name.short().to_ascii_lowercase());
-                index.extensions.entry(short).or_default().push(loc);
-            } else {
-                index.functions.entry(f.name.key()).or_default().push(loc);
-            }
+            index.functions.entry(f.name.key()).or_default().push(loc);
         }
         for (i, c) in items.consts.iter().enumerate() {
             index
