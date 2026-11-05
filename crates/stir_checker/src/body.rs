@@ -452,6 +452,23 @@ impl<'a, 'db> Checker<'a, 'db> {
                 } else {
                     ty.clone()
                 };
+                // it was found to hold something
+                if !ty.is_null() {
+                    l.maybe_undefined = false;
+                }
+            } else if let Some(frame) = self.frames.first_mut()
+                && name.starts_with('?')
+            {
+                frame.insert(
+                    name.clone(),
+                    Local {
+                        ty: ty.clone(),
+                        declared: ty.clone(),
+                        kind: LocalKind::Variable,
+                        range: TextRange::default(),
+                        maybe_undefined: false,
+                    },
+                );
             }
         }
     }
@@ -1163,6 +1180,42 @@ impl<'a, 'db> Checker<'a, 'db> {
                 (key.clone(), value.clone())
             }
             TyKind::Shape(_) => (Ty::array_key(), Ty::mixed()),
+            // an object of all those types: if one is iterable, it is
+            TyKind::Intersection(ms) => {
+                for m in ms.iter() {
+                    let before = self.diags.len();
+                    let found = self.iter_types(range, m);
+                    if self.diags.len() == before {
+                        return found;
+                    }
+                    self.diags.truncate(before);
+                }
+                self.error(
+                    range,
+                    codes::INVALID_OPERAND,
+                    format!("`{ty}` is not iterable"),
+                );
+                self.tag_level(3);
+                (Ty::error(), Ty::error())
+            }
+            TyKind::SelfType { class, .. } => self.iter_types(range, &class.clone()),
+            TyKind::Param { .. } => {
+                let b = self.bound_of(ty);
+                if matches!(b.kind(), TyKind::Param { .. }) {
+                    (Ty::untyped(), Ty::untyped())
+                } else {
+                    self.iter_types(range, &b)
+                }
+            }
+            TyKind::Object => {
+                self.error(
+                    range,
+                    codes::INVALID_OPERAND,
+                    format!("`{ty}` is not iterable"),
+                );
+                self.tag_level(7);
+                (Ty::untyped(), Ty::untyped())
+            }
             TyKind::Error | TyKind::Mixed => (Ty::error(), Ty::error()),
             TyKind::Never => (Ty::never(), Ty::never()),
             TyKind::Class { name, args } => {
@@ -1540,6 +1593,15 @@ impl<'a, 'db> Checker<'a, 'db> {
                     Some(k @ (EQ2 | EQ3 | NEQ | NEQ2)) => {
                         let positive = matches!(k, EQ2 | EQ3);
                         let strict = matches!(k, EQ3 | NEQ2);
+                        // `($x ?? false) !== false`: `$x` is set
+                        if let Some(set) = self.coalesce_compared(&es[0], &es[1]) {
+                            let narrow = self.isset_facts(&set);
+                            return if positive {
+                                (Facts::default(), narrow)
+                            } else {
+                                (narrow, Facts::default())
+                            };
+                        }
                         let var = if is_null_literal(&es[1]) {
                             &es[0]
                         } else if is_null_literal(&es[0]) {
@@ -1664,6 +1726,24 @@ impl<'a, 'db> Checker<'a, 'db> {
                             Facts::default(),
                         );
                     }
+                    // what follows may rely on the class, whether this project has it or not
+                    "class_exists" | "interface_exists" | "trait_exists" | "enum_exists" => {
+                        let Some(arg) = first else {
+                            return Default::default();
+                        };
+                        let Some(name) = self.mentioned_class(&arg) else {
+                            return Default::default();
+                        };
+                        return (
+                            Facts {
+                                narrow: vec![(
+                                    SmolStr::new(format!("?class::{name}")),
+                                    Ty::lit_bool(true),
+                                )],
+                            },
+                            Facts::default(),
+                        );
+                    }
                     "in_array" => {
                         let strict = args
                             .get(2)
@@ -1726,6 +1806,22 @@ impl<'a, 'db> Checker<'a, 'db> {
             | ASSIGN_EXPR => self.truthiness_facts(node),
             _ => Default::default(),
         }
+    }
+
+    /// In `($x ?? false) === false`, the `$x`: if the comparison fails it was set.
+    fn coalesce_compared(&self, a: &SyntaxNode, b: &SyntaxNode) -> Option<SyntaxNode> {
+        let mut left = a.clone();
+        while left.kind() == PAREN_EXPR {
+            left = exprs_of(&left).into_iter().next()?;
+        }
+        if left.kind() != BIN_EXPR || op_token(&left).is_none_or(|t| t.kind() != QUESTION2) {
+            return None;
+        }
+        let parts = exprs_of(&left);
+        let fallback = parts.get(1)?;
+        (text_of(fallback).eq_ignore_ascii_case(&text_of(b)))
+            .then(|| parts.into_iter().next())
+            .flatten()
     }
 
     /// Facts for a path taken when either of two conditions held: only what both say,
@@ -1791,6 +1887,24 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
         }
         narrow
+    }
+
+    /// The lowercase name of the class an argument is about: `Foo::class`, `'Foo'`.
+    fn mentioned_class(&self, arg: &SyntaxNode) -> Option<String> {
+        let name = match arg.kind() {
+            CLASS_CONST_FETCH_EXPR => {
+                let base = arg.children().next().filter(|b| b.kind() == NAME_EXPR)?;
+                self.scope(arg)
+                    .resolve_class(&text_of(&base))
+                    .key()
+                    .to_string()
+            }
+            STRING_LITERAL => unquote(&text_of(arg))
+                .trim_start_matches('\\')
+                .to_ascii_lowercase(),
+            _ => return None,
+        };
+        Some(name)
     }
 
     /// The class a value names: `Foo::class`, `'Foo'`.
@@ -3034,8 +3148,16 @@ impl<'a, 'db> Checker<'a, 'db> {
                 Some(Ty::untyped())
             }
             TyKind::List { elem, .. } => Some(elem.clone()),
-            TyKind::Array { value, .. } => Some(value.clone()),
-            TyKind::String => Some(base.clone()),
+            TyKind::Array { value, .. } | TyKind::Iterable { value, .. } => Some(value.clone()),
+            // a string or an array, if it's anything that can be indexed
+            TyKind::Callable { .. }
+            | TyKind::Object
+            | TyKind::SelfType { .. }
+            | TyKind::Intersection(_) => Some(Ty::untyped()),
+            TyKind::String
+            | TyKind::NonEmptyString
+            | TyKind::NumericString
+            | TyKind::ClassString(_) => Some(Ty::string()),
             TyKind::Literal(LitValue::String(_)) => Some(Ty::string()),
             TyKind::Shape(_) | TyKind::Mixed => Some(Ty::mixed()),
             TyKind::Error => Some(Ty::error()),
@@ -3162,6 +3284,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                 if sm.mods.visibility == Visibility::Private {
                     continue;
                 }
+                // a class is free to replace a trait's method, unless it's abstract
+                if c.kind() == ClassKind::Trait && !sm.mods.is_abstract {
+                    continue;
+                }
                 let map = self.ctx.subst_map(&c, args);
                 let sup = self.ctx.method_sig(&c, sm);
                 let required = |s: &FnSig| {
@@ -3229,6 +3355,7 @@ impl<'a, 'db> Checker<'a, 'db> {
     fn override_compatible(&self, a: &Ty, b: &Ty) -> bool {
         a.is_error()
             || b.is_error()
+            || a.is_never()
             || !stir_types::free_params(a).is_empty()
             || !stir_types::free_params(b).is_empty()
             || !stir_types::meet(self.ctx, a, b).is_never()
@@ -3825,8 +3952,30 @@ impl<'a, 'db> Checker<'a, 'db> {
         t
     }
 
+    /// The member of an intersection that has what's looked for: an object of all those types
+    /// has the members of any.
+    fn intersection_member(&self, ty: &Ty, has: impl Fn(&Self, &Ty) -> bool) -> Option<Ty> {
+        match ty.kind() {
+            TyKind::Intersection(ms) => {
+                let found = ms.iter().find(|m| {
+                    let bound = self.bound_of(m);
+                    !matches!(bound.kind(), TyKind::Param { .. }) && has(self, &class_of(&bound))
+                })?;
+                Some(self.bound_of(found))
+            }
+            _ => None,
+        }
+    }
+
     fn member_type(&mut self, recv: &Ty, name: &str, range: TextRange) -> Ty {
         let recv = &self.bound_of(recv);
+        let recv = &self
+            .intersection_member(recv, |this, m| this.ctx.find_property(m, name).is_some())
+            .unwrap_or_else(|| recv.clone());
+        // a template without a bound is `mixed`
+        if matches!(recv.kind(), TyKind::Param { .. }) {
+            return Ty::untyped();
+        }
         if recv.is_union() {
             return self.union_member_type(recv, name, range);
         }
@@ -4025,9 +4174,19 @@ impl<'a, 'db> Checker<'a, 'db> {
         } else {
             recv
         };
+        let recv = &self
+            .intersection_member(recv, |this, m| {
+                matches!(m.kind(), TyKind::Class { .. }) && this.ctx.find_method(m, name).is_some()
+            })
+            .unwrap_or_else(|| recv.clone());
         if recv.is_error() {
             self.check_args_untyped(node);
             return Ty::error();
+        }
+        // a template without a bound is `mixed`
+        if matches!(recv.kind(), TyKind::Param { .. }) {
+            self.check_args_untyped(node);
+            return Ty::untyped();
         }
         // narrowing ruled this path out, so it can't run
         if matches!(recv.kind(), TyKind::Never) {
@@ -4053,7 +4212,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 m.mods.visibility,
                 &format!("method `{name}`"),
             );
-            let sig = self.ctx.method_sig(&owner, m);
+            let sig = sig_for_receiver(self.ctx.method_sig(&owner, m), recv);
             // `static` return types resolve to the receiver
             let ret = self.check_args(node, &sig, &map, expected, &[]);
             let cx = self.ctx.class_cx(&owner);
@@ -4184,11 +4343,14 @@ impl<'a, 'db> Checker<'a, 'db> {
                 )
             }
             None => {
-                self.error(
-                    node.text_range(),
-                    codes::UNDEFINED_CLASS,
-                    format!("unknown class `{text}`"),
-                );
+                // `class_exists()` said it's there
+                if self.lookup(&format!("?class::{}", fqn.key())).is_none() {
+                    self.error(
+                        node.text_range(),
+                        codes::UNDEFINED_CLASS,
+                        format!("unknown class `{text}`"),
+                    );
+                }
                 Ty::error()
             }
         }
@@ -4230,7 +4392,21 @@ impl<'a, 'db> Checker<'a, 'db> {
                     m.mods.visibility,
                     &format!("method `{name}`"),
                 );
-                let sig = self.ctx.method_sig(&owner, m);
+                // `self::`, `static::` and `parent::` keep the class the call came in on
+                let forwards = fetch.children().next().is_some_and(|b| {
+                    b.kind() == NAME_EXPR
+                        && matches!(
+                            text_of(&b).to_ascii_lowercase().as_str(),
+                            "self" | "static" | "parent"
+                        )
+                });
+                let recv = match &self.class {
+                    Some(c) if forwards && c.kind() != ClassKind::Trait => {
+                        Ty::static_of(c.self_ty())
+                    }
+                    _ => cls.clone(),
+                };
+                let sig = sig_for_receiver(self.ctx.method_sig(&owner, m), &recv);
                 // static generic classes: class params are inferred like function params
                 let extra: Vec<_> = if m.mods.is_static {
                     owner.params.iter().map(|p| p.id).collect()
@@ -4245,7 +4421,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 let ret = self.check_args(node, &sig, &map, expected, &extra);
                 let cx = self.ctx.class_cx(&owner);
                 self.record_asserts(node, &m.sig, &sig, cx);
-                resolve_self(&ret, &cls)
+                resolve_self(&ret, &recv)
             }
             None => {
                 if self.has_magic(&cls, "__callStatic") || !self.class_known(&cls) {
@@ -4309,12 +4485,16 @@ impl<'a, 'db> Checker<'a, 'db> {
         let name = text_of(&name_node);
         if name.eq_ignore_ascii_case("class") {
             let base = node.children().next();
+            // `Foo::class` is just the name: no such class needs to exist
+            let found = self.diags.len();
             let of = if let Some(b) = &base
                 && b.kind() != NAME_EXPR
             {
                 self.expr(b, None)
             } else {
-                self.static_base(node)
+                let t = self.static_base(node);
+                self.diags.truncate(found);
+                t
             };
             return Ty::class_string(
                 matches!(class_of(&of).kind(), TyKind::Class { .. }).then_some(of),
@@ -4375,9 +4555,13 @@ impl<'a, 'db> Checker<'a, 'db> {
             let t = text_of(&target);
             self.class_ref_ty(&target, &t)
         } else {
-            self.expr(&target, None);
+            // the class comes from a value: if its type doesn't say which, an object of some class
+            let t = self.expr(&target, None);
             self.check_args_untyped(node);
-            return Ty::untyped();
+            return match self.named_class(&t) {
+                Some(c) if !matches!(c.kind(), TyKind::Param { .. }) => c,
+                _ => Ty::object(),
+            };
         };
         let TyKind::Class { name, .. } = cls.kind() else {
             self.check_args_untyped(node);
@@ -4388,6 +4572,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             return Ty::error();
         };
         match model.kind() {
+            // `new self` in a trait is the class using it
+            ClassKind::Trait if self.class.as_ref().is_some_and(|c| c.key == model.key) => {}
             ClassKind::Interface | ClassKind::Trait | ClassKind::Enum => {
                 self.error(
                     target.text_range(),
@@ -4395,7 +4581,8 @@ impl<'a, 'db> Checker<'a, 'db> {
                     format!("`{}` can't be instantiated", model.name),
                 );
             }
-            _ if model.def.mods.is_abstract => {
+            // `new static` makes whichever concrete class it's called on
+            _ if model.def.mods.is_abstract && !text_of(&target).eq_ignore_ascii_case("static") => {
                 self.error(
                     target.text_range(),
                     codes::INSTANTIATION,
@@ -4482,9 +4669,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                             if v.has_token(AMP) {
                                 frame.insert(
                                     SmolStr::new(n),
+                                    // whatever the outer code puts there, even the closure itself
                                     Local {
-                                        ty: Ty::null(),
-                                        declared: Ty::mixed(),
+                                        ty: Ty::untyped(),
+                                        declared: Ty::untyped(),
                                         kind: LocalKind::Variable,
                                         range: t.text_range(),
                                         maybe_undefined: false,
@@ -4511,12 +4699,33 @@ impl<'a, 'db> Checker<'a, 'db> {
         let mut params = Vec::new();
         if let Some(pl) = node.child(PARAM_LIST) {
             for (i, p) in pl.children_of(PARAM).iter().enumerate() {
-                let ty = match stir_hir::first_type(p) {
-                    Some(t) => self.lower_type_node(&t),
-                    None => exp_fn
-                        .as_ref()
-                        .and_then(|f| f.params.get(i).map(|p| p.ty.clone()))
-                        .unwrap_or_else(Ty::mixed),
+                let expected_param = exp_fn
+                    .as_ref()
+                    .and_then(|f| f.params.get(i).map(|p| p.ty.clone()))
+                    .filter(|t| {
+                        // a template of the call itself that nothing has solved says nothing
+                        stir_types::free_params(t).iter().all(|id| {
+                            self.lower_cx.generics.iter().any(|(_, g)| {
+                                matches!(g.kind(), TyKind::Param { id: g, .. } if g == id)
+                            })
+                        })
+                    });
+                // what the callback is called with, if that says more than its own type
+                let ty = match (stir_hir::first_type(p), expected_param) {
+                    (Some(t), Some(e)) => {
+                        let declared = self.lower_type_node(&t);
+                        if !e.is_error()
+                            && !matches!(e.kind(), TyKind::Mixed | TyKind::Untyped)
+                            && self.assignable(&e, &declared)
+                        {
+                            e
+                        } else {
+                            declared
+                        }
+                    }
+                    (Some(t), None) => self.lower_type_node(&t),
+                    (None, Some(e)) => e,
+                    (None, None) => Ty::untyped(),
                 };
                 let name = match p.token(VARIABLE) {
                     Some(v) => v.text()[1..].to_owned(),
@@ -4627,10 +4836,26 @@ fn class_of(ty: &Ty) -> Ty {
 
 /// Replaces `static`/`$this` in a return type with the receiver's type.
 fn resolve_self(ret: &Ty, recv: &Ty) -> Ty {
+    if matches!(ret.kind(), TyKind::SelfType { .. }) {
+        return recv.clone();
+    }
+    // inside another type `$this` is no more than `static`: `Builder<static>`
+    let nested = match recv.kind() {
+        TyKind::SelfType { class, .. } => Ty::static_of(class.clone()),
+        _ => recv.clone(),
+    };
     ret.transform(&mut |t| match t.kind() {
-        TyKind::SelfType { .. } => Some(recv.clone()),
+        TyKind::SelfType { .. } => Some(nested.clone()),
         _ => None,
     })
+}
+
+/// `sig` as seen through a receiver: what `static` in its parameters stands for.
+fn sig_for_receiver(mut sig: FnSig, recv: &Ty) -> FnSig {
+    for p in &mut sig.params {
+        p.ty = resolve_self(&p.ty, recv);
+    }
+    sig
 }
 
 /// The value of a string literal without escapes or interpolation.

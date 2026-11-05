@@ -13,8 +13,7 @@ abstract class Base implements Named
 
     public static function make(): static
     {
-        // KNOWN FALSE ALARM: `static` is a concrete subclass here.
-        return new static(); // error: SPHP0023
+        return new static();
     }
 
     public function id(): int

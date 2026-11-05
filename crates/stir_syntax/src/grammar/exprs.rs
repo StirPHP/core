@@ -398,43 +398,12 @@ pub(super) fn simple_variable(p: &mut Parser<'_>) -> Option<CompletedMarker> {
 /// Right side of `instanceof` / target of `new`: a class name, `static`,
 /// a variable with property fetches, or `(expr)`.
 fn class_reference(p: &mut Parser<'_>) {
-    match p.current() {
+    let mut lhs = match p.current() {
         VARIABLE | DOLLAR => {
-            let Some(mut lhs) = simple_variable(p) else {
+            let Some(lhs) = simple_variable(p) else {
                 return;
             };
-            loop {
-                match p.current() {
-                    ARROW | NULLSAFE_ARROW => {
-                        let nullsafe = p.at(NULLSAFE_ARROW);
-                        let m = lhs.precede(p);
-                        p.bump_any();
-                        member_selector(p);
-                        lhs = m.complete(
-                            p,
-                            if nullsafe {
-                                NULLSAFE_PROPERTY_FETCH_EXPR
-                            } else {
-                                PROPERTY_FETCH_EXPR
-                            },
-                        );
-                    }
-                    COLON2 if matches!(p.nth(1), VARIABLE | DOLLAR) => {
-                        let m = lhs.precede(p);
-                        p.bump(COLON2);
-                        simple_variable(p);
-                        lhs = m.complete(p, STATIC_PROPERTY_FETCH_EXPR);
-                    }
-                    L_BRACK => {
-                        let m = lhs.precede(p);
-                        p.bump(L_BRACK);
-                        expr(p);
-                        p.expect(R_BRACK);
-                        lhs = m.complete(p, INDEX_EXPR);
-                    }
-                    _ => break,
-                }
-            }
+            lhs
         }
         L_PAREN => {
             let m = p.start();
@@ -442,11 +411,45 @@ fn class_reference(p: &mut Parser<'_>) {
             expr(p);
             p.expect(R_PAREN);
             m.complete(p, PAREN_EXPR);
+            return;
         }
         _ => {
             let m = p.start();
             name_ref(p);
-            m.complete(p, NAME_EXPR);
+            m.complete(p, NAME_EXPR)
+        }
+    };
+    loop {
+        match p.current() {
+            ARROW | NULLSAFE_ARROW if lhs.kind() != NAME_EXPR => {
+                let nullsafe = p.at(NULLSAFE_ARROW);
+                let m = lhs.precede(p);
+                p.bump_any();
+                member_selector(p);
+                lhs = m.complete(
+                    p,
+                    if nullsafe {
+                        NULLSAFE_PROPERTY_FETCH_EXPR
+                    } else {
+                        PROPERTY_FETCH_EXPR
+                    },
+                );
+            }
+            // `new static::$class`, `$x instanceof self::$class`
+            COLON2 if matches!(p.nth(1), VARIABLE | DOLLAR) => {
+                let m = lhs.precede(p);
+                p.bump(COLON2);
+                simple_variable(p);
+                lhs = m.complete(p, STATIC_PROPERTY_FETCH_EXPR);
+            }
+            L_BRACK if lhs.kind() != NAME_EXPR => {
+                let m = lhs.precede(p);
+                p.bump(L_BRACK);
+                expr(p);
+                p.expect(R_BRACK);
+                lhs = m.complete(p, INDEX_EXPR);
+            }
+            _ => break,
         }
     }
 }
