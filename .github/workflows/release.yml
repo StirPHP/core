@@ -46,9 +46,9 @@ jobs:
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          # https://github.com/StirPHP/core/releases/latest/download/sphp-<target>.tar.gz
+          # https://github.com/StirPHP/core/releases/latest/download/stirphp-<target>.tar.gz
           # always points at the newest release
-          for f in sphp-"$VERSION"-*; do cp -- "$f" "sphp-${f#sphp-"$VERSION"-}"; done
+          for f in stirphp-"$VERSION"-*; do cp -- "$f" "stirphp-${f#stirphp-"$VERSION"-}"; done
           ls
       - name: Checksums
         working-directory: dist

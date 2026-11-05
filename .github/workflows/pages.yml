@@ -28,8 +28,8 @@ jobs:
           <!doctype html>
           <meta charset="utf-8">
           <title>StirPHP</title>
-          <meta http-equiv="refresh" content="0; url=https://stirphp.github.io/docs/guide/installation.html">
-          <a href="https://stirphp.github.io/docs/guide/installation.html">StirPHP installation guide</a>
+          <meta http-equiv="refresh" content="0; url=https://github.com/StirPHP/core#readme">
+          <a href="https://github.com/StirPHP/core#readme">StirPHP</a>
           HTML
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -58,7 +58,7 @@ jobs:
         os: [ubuntu-24.04, macos-15]
     steps:
       - run: curl -fsSL https://stirphp.github.io/core/install.sh | sh
-      - run: '"$HOME/.local/bin/sphp" --version'
+      - run: '"$HOME/.local/bin/stirphp" --version'
 
   verify-windows:
     name: One-liner (${{ matrix.shell }})
@@ -73,4 +73,4 @@ jobs:
         shell: ${{ matrix.shell }}
     steps:
       - run: irm https://stirphp.github.io/core/install.ps1 | iex
-      - run: '& (Join-Path $env:LOCALAPPDATA "Programs\sphp\bin\sphp.exe") --version'
+      - run: '& (Join-Path $env:LOCALAPPDATA "Programs\stirphp\bin\stirphp.exe") --version'

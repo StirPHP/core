@@ -53,4 +53,4 @@ jobs:
             --target "$GITHUB_SHA" \
             --prerelease \
             --title "Nightly" \
-            --notes "Built from $GITHUB_SHA (\`sphp --version\`: ${{ needs.version.outputs.version }}). Rebuilt for every commit on main: it may be broken."
+            --notes "Built from $GITHUB_SHA (\`stirphp --version\`: ${{ needs.version.outputs.version }}). Rebuilt for every commit on main: it may be broken."

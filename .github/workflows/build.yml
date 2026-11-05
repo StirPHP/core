@@ -1,4 +1,4 @@
-# Builds release archives of `sphp` for every platform, and the VS Code
+# Builds release archives of `stirphp` for every platform, and the VS Code
 # extension. Called by the release and nightly workflows.
 name: Build
 
@@ -6,11 +6,11 @@ on:
   workflow_call:
     inputs:
       version:
-        description: Version reported by `sphp --version`
+        description: Version reported by `stirphp --version`
         required: true
         type: string
       name:
-        description: Used in file names (`sphp-<name>-<target>`); the version for releases, `nightly` for nightlies
+        description: Used in file names (`stirphp-<name>-<target>`); the version for releases, `nightly` for nightlies
         required: true
         type: string
 
@@ -18,8 +18,8 @@ permissions:
   contents: read
 
 jobs:
-  sphp:
-    name: sphp (${{ matrix.target }})
+  stirphp:
+    name: stirphp (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -49,39 +49,42 @@ jobs:
       - name: Build
         shell: bash
         env:
-          SPHP_BUILD_VERSION: ${{ inputs.version }}
+          STIRPHP_BUILD_VERSION: ${{ inputs.version }}
         run: cargo build --profile dist --locked -p stir_cli --target ${{ matrix.target }}
       - name: Smoke test
         if: matrix.run
         shell: bash
         run: |
-          bin=target/${{ matrix.target }}/dist/sphp
+          bin=target/${{ matrix.target }}/dist/stirphp
           "$bin" --version
           "$bin" --version | grep -qF "${{ inputs.version }}"
-          mkdir -p smoke/src && cd smoke
-          printf '<?php\necho strlen("a");\n' > src/main.php
+          # a plain project with no configuration
+          mkdir smoke && cd smoke
+          printf '<?php\necho strlen("a");\n' > main.php
           "../$bin" check
-          printf '<?php\necho missing_function();\n' > src/bad.php
+          printf '<?php\necho missing_function();\n' > bad.php
           if "../$bin" check; then exit 1; fi
+          "../$bin" check --format json > bad.json || true
+          grep -qF function.notFound bad.json
       - name: Package
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
           NAME: ${{ inputs.name }}
         run: |
-          name="sphp-$NAME-$TARGET"
+          name="stirphp-$NAME-$TARGET"
           mkdir -p "dist/$name"
           cp LICENSE README.md "dist/$name/"
           if [[ "$TARGET" == *windows* ]]; then
-            cp "target/$TARGET/dist/sphp.exe" "dist/$name/"
+            cp "target/$TARGET/dist/stirphp.exe" "dist/$name/"
             (cd dist && 7z a -tzip "$name.zip" "$name" > /dev/null)
           else
-            cp "target/$TARGET/dist/sphp" "dist/$name/"
+            cp "target/$TARGET/dist/stirphp" "dist/$name/"
             tar -C dist -czf "dist/$name.tar.gz" "$name"
           fi
       - uses: actions/upload-artifact@v4
         with:
-          name: sphp-${{ matrix.target }}
+          name: stirphp-${{ matrix.target }}
           path: |
             dist/*.tar.gz
             dist/*.zip

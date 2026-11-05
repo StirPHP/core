@@ -1,11 +1,11 @@
 #!/bin/sh
-# Installs sphp, the StirPHP compiler, on Linux and macOS:
+# Installs stirphp, the StirPHP type checker and language server, on Linux and macOS:
 #
 #   curl -fsSL https://stirphp.github.io/core/install.sh | sh
 #
 # Environment:
-#   SPHP_VERSION      a version such as 0.1.1, or "nightly" (default: the latest release)
-#   SPHP_INSTALL_DIR  where to put sphp (default: ~/.local/bin)
+#   STIRPHP_VERSION      a version such as 0.2.0, or "nightly" (default: the latest release)
+#   STIRPHP_INSTALL_DIR  where to put stirphp (default: ~/.local/bin)
 #
 # Everything is inside main(), so a download cut short can't run half a script.
 
@@ -14,7 +14,7 @@ set -eu
 REPO="https://github.com/StirPHP/core/releases"
 
 fail() {
-    printf 'sphp install: %s\n' "$1" >&2
+    printf 'stirphp install: %s\n' "$1" >&2
     exit 1
 }
 
@@ -46,34 +46,34 @@ target() {
     case "$(uname -m)" in
         x86_64 | amd64) arch=x86_64 ;;
         aarch64 | arm64) arch=aarch64 ;;
-        *) fail "there is no build for $(uname -m); see https://stirphp.github.io/docs/guide/installation.html" ;;
+        *) fail "there is no build for $(uname -m); see https://github.com/StirPHP/core#readme" ;;
     esac
     case "$(uname -s)" in
         Linux) echo "$arch-unknown-linux-musl" ;;
         Darwin) echo "$arch-apple-darwin" ;;
         MINGW* | MSYS* | CYGWIN*) fail "on Windows, use install.ps1 from PowerShell" ;;
-        *) fail "there is no build for $(uname -s); see https://stirphp.github.io/docs/guide/installation.html" ;;
+        *) fail "there is no build for $(uname -s); see https://github.com/StirPHP/core#readme" ;;
     esac
 }
 
 main() {
     target=$(target)
-    version=${SPHP_VERSION:-latest}
+    version=${STIRPHP_VERSION:-latest}
     version=${version#v}
-    dir=${SPHP_INSTALL_DIR:-${HOME:?HOME is not set}/.local/bin}
+    dir=${STIRPHP_INSTALL_DIR:-${HOME:?HOME is not set}/.local/bin}
 
     case "$version" in
         latest)
             base="$REPO/latest/download"
-            archive="sphp-$target.tar.gz"
+            archive="stirphp-$target.tar.gz"
             ;;
         nightly)
             base="$REPO/download/nightly"
-            archive="sphp-nightly-$target.tar.gz"
+            archive="stirphp-nightly-$target.tar.gz"
             ;;
         *)
             base="$REPO/download/v$version"
-            archive="sphp-$version-$target.tar.gz"
+            archive="stirphp-$version-$target.tar.gz"
             ;;
     esac
 
@@ -92,16 +92,16 @@ main() {
 
     mkdir -p "$tmp/unpacked"
     tar -xzf "$tmp/$archive" -C "$tmp/unpacked"
-    binary=$(find "$tmp/unpacked" -type f -name sphp | head -n 1)
-    [ -n "$binary" ] || fail "$archive has no sphp"
+    binary=$(find "$tmp/unpacked" -type f -name stirphp | head -n 1)
+    [ -n "$binary" ] || fail "$archive has no stirphp"
 
-    # replaced in one step, so this also works while an older sphp is running
+    # replaced in one step, so this also works while an older stirphp is running
     mkdir -p "$dir"
-    cp "$binary" "$dir/.sphp.$$"
-    chmod 755 "$dir/.sphp.$$"
-    mv -f "$dir/.sphp.$$" "$dir/sphp"
+    cp "$binary" "$dir/.stirphp.$$"
+    chmod 755 "$dir/.stirphp.$$"
+    mv -f "$dir/.stirphp.$$" "$dir/stirphp"
 
-    printf 'Installed %s to %s\n' "$("$dir/sphp" --version)" "$dir/sphp"
+    printf 'Installed %s to %s\n' "$("$dir/stirphp" --version)" "$dir/stirphp"
     case ":${PATH:-}:" in
         *":$dir:"*) ;;
         *)

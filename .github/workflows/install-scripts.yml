@@ -25,21 +25,22 @@ jobs:
       - name: Latest release, piped
         run: |
           sh < install.sh
-          "$HOME/.local/bin/sphp" --version
+          "$HOME/.local/bin/stirphp" --version
       - name: Nightly in a custom directory
         env:
-          SPHP_VERSION: nightly
-          SPHP_INSTALL_DIR: ${{ runner.temp }}/sphp-nightly
+          STIRPHP_VERSION: nightly
+          STIRPHP_INSTALL_DIR: ${{ runner.temp }}/stirphp-nightly
         run: |
           sh < install.sh
-          "$SPHP_INSTALL_DIR/sphp" --version | grep -q nightly
+          "$STIRPHP_INSTALL_DIR/stirphp" --version | grep -q nightly
       - name: A pinned version
         env:
-          SPHP_VERSION: 0.1.1
-          SPHP_INSTALL_DIR: ${{ runner.temp }}/sphp-pinned
+          STIRPHP_INSTALL_DIR: ${{ runner.temp }}/stirphp-pinned
         run: |
-          sh < install.sh
-          test "$("$SPHP_INSTALL_DIR/sphp" --version)" = "sphp 0.1.1"
+          # the workspace's version: the latest release, as `just bump` tags each one
+          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          STIRPHP_VERSION=$version sh < install.sh
+          test "$("$STIRPHP_INSTALL_DIR/stirphp" --version)" = "stirphp $version"
 
   windows:
     name: install.ps1 (${{ matrix.os }}, ${{ matrix.shell }})
@@ -57,26 +58,27 @@ jobs:
       - name: Latest release, through iex
         run: |
           Get-Content install.ps1 -Raw | Invoke-Expression
-          $exe = Join-Path $env:LOCALAPPDATA 'Programs\sphp\bin\sphp.exe'
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\stirphp\bin\stirphp.exe'
           & $exe --version
-          if ($LASTEXITCODE -ne 0) { throw 'sphp --version failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'stirphp --version failed' }
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           if (($userPath -split ';') -notcontains (Split-Path $exe)) { throw "not on the user PATH: $userPath" }
       - name: Nightly in a custom directory
         env:
-          SPHP_VERSION: nightly
-          SPHP_INSTALL_DIR: ${{ runner.temp }}\sphp-nightly
-          SPHP_NO_MODIFY_PATH: '1'
+          STIRPHP_VERSION: nightly
+          STIRPHP_INSTALL_DIR: ${{ runner.temp }}\stirphp-nightly
+          STIRPHP_NO_MODIFY_PATH: '1'
         run: |
           Get-Content install.ps1 -Raw | Invoke-Expression
-          $v = & "$env:SPHP_INSTALL_DIR\sphp.exe" --version
+          $v = & "$env:STIRPHP_INSTALL_DIR\stirphp.exe" --version
           if ($v -notmatch 'nightly') { throw "unexpected version: $v" }
       - name: A pinned version
         env:
-          SPHP_VERSION: 0.1.1
-          SPHP_INSTALL_DIR: ${{ runner.temp }}\sphp-pinned
-          SPHP_NO_MODIFY_PATH: '1'
+          STIRPHP_INSTALL_DIR: ${{ runner.temp }}\stirphp-pinned
+          STIRPHP_NO_MODIFY_PATH: '1'
         run: |
+          # the workspace's version: the latest release, as `just bump` tags each one
+          $env:STIRPHP_VERSION = ((Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value)
           Get-Content install.ps1 -Raw | Invoke-Expression
-          $v = & "$env:SPHP_INSTALL_DIR\sphp.exe" --version
-          if ($v -ne 'sphp 0.1.1') { throw "unexpected version: $v" }
+          $v = & "$env:STIRPHP_INSTALL_DIR\stirphp.exe" --version
+          if ($v -ne "stirphp $env:STIRPHP_VERSION") { throw "unexpected version: $v" }
