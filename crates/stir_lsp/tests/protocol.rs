@@ -298,3 +298,68 @@ async fn opened_build_output_does_not_shadow_the_stdlib() {
     );
     let _ = c.request("shutdown", Value::Null).await;
 }
+
+#[tokio::test]
+async fn editing_a_php_file() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    write(
+        &root.join("sphp.toml"),
+        "srcDir = \"src\"\ncheckPhp = true\n",
+    );
+    let lib = root.join("src/lib.php");
+    write(
+        &lib,
+        "<?php\nnamespace App;\n\nfunction greet(string $name): string { return $name; }\n",
+    );
+    let main = root.join("src/main.php");
+    let main_text =
+        "<?php\nnamespace App;\n\n$msg = greet('x');\necho missing_fn();\necho strlen($msg);\n";
+    write(&main, main_text);
+    let main_uri = uri(&main);
+
+    let mut c = Client::start();
+    c.request(
+        "initialize",
+        json!({"processId": null, "rootUri": uri(&root), "capabilities": {}}),
+    )
+    .await;
+    c.notify("initialized", json!({})).await;
+    c.notify(
+        "textDocument/didOpen",
+        json!({"textDocument": {"uri": main_uri, "languageId": "php", "version": 1, "text": main_text}}),
+    )
+    .await;
+
+    let diags = c.diagnostics(&main_uri).await;
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0]["code"], "SPHP0007");
+    assert_eq!(diags[0]["range"]["start"]["line"], 4);
+
+    let hover = c
+        .request(
+            "textDocument/hover",
+            json!({"textDocument": {"uri": main_uri}, "position": {"line": 3, "character": 8}}),
+        )
+        .await;
+    let text = hover["contents"]["value"].as_str().unwrap();
+    assert!(text.contains("function greet"), "{text}");
+
+    let def = c
+        .request(
+            "textDocument/definition",
+            json!({"textDocument": {"uri": main_uri}, "position": {"line": 3, "character": 8}}),
+        )
+        .await;
+    assert_eq!(def["uri"], uri(&lib));
+
+    let edit = c
+        .request(
+            "textDocument/rename",
+            json!({"textDocument": {"uri": main_uri}, "position": {"line": 3, "character": 1},
+                   "newName": "$renamed"}),
+        )
+        .await;
+    let changes = edit["changes"][&main_uri].as_array().unwrap();
+    assert_eq!(changes.len(), 2, "{changes:?}");
+}
