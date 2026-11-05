@@ -958,3 +958,48 @@ async fn implementations_and_hierarchies() {
         .await;
     assert_eq!(down[0]["name"], "Work", "{down}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn completion_adds_a_use_line() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    write(
+        &root.join("stirphp.neon"),
+        "parameters:\n    stirphp:\n        srcDir: src\n",
+    );
+    write(
+        &root.join("src/lib.php"),
+        "<?php\nnamespace Lib;\nclass Widget {}\n",
+    );
+    let path = root.join("src/a.php");
+    let text = "<?php\nnamespace App;\n\nuse Alpha\\A;\nuse Zed\\Z;\n\nnew Widg\n";
+    write(&path, text);
+    let doc = uri(&path);
+
+    let mut c = Client::start();
+    c.request(
+        "initialize",
+        json!({"processId": null, "rootUri": uri(&root), "capabilities": {}}),
+    )
+    .await;
+    c.notify("initialized", json!({})).await;
+    c.notify(
+        "textDocument/didOpen",
+        json!({"textDocument": {"uri": doc, "languageId": "php", "version": 1, "text": text}}),
+    )
+    .await;
+    let list = c
+        .request(
+            "textDocument/completion",
+            json!({"textDocument": {"uri": doc}, "position": {"line": 6, "character": 8}}),
+        )
+        .await;
+    let items = list["items"].as_array().unwrap();
+    let widget = items.iter().find(|i| i["label"] == "Widget").unwrap();
+    assert_eq!(widget["labelDetails"]["description"], "Lib\\Widget");
+    assert_eq!(widget["textEdit"]["newText"], "Widget");
+    let edit = &widget["additionalTextEdits"][0];
+    assert_eq!(edit["newText"], "use Lib\\Widget;\n");
+    assert_eq!(edit["range"]["start"], json!({"line": 4, "character": 0}));
+    assert_eq!(edit["range"]["end"], json!({"line": 4, "character": 0}));
+}

@@ -18,6 +18,79 @@ use stir_db::{Db, FileOrigin, SourceFile, Workspace};
 pub use index::{DefIndex, ItemLoc};
 pub use items::*;
 
+/// What a [`Symbol`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymbolKind {
+    Class(ClassKind),
+    Function,
+    Const,
+}
+
+/// A name a program's code can mention from anywhere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Symbol {
+    pub kind: SymbolKind,
+    pub name: name::Fqn,
+    /// The name's last segment, in lowercase, for matching.
+    pub short_lower: SmolStr,
+    pub file: SourceFile,
+    /// In the file's list of items of that kind.
+    pub index: u32,
+}
+
+/// The names of what one file declares. Without positions, so that editing the file doesn't change
+/// this unless a declaration does.
+#[salsa::tracked(returns(ref))]
+pub fn file_symbols(db: &dyn Db, file: SourceFile) -> Arc<Vec<Symbol>> {
+    let items = file_items(db, file);
+    let symbol = |kind, name: &name::Fqn, index: usize| Symbol {
+        kind,
+        name: name.clone(),
+        short_lower: SmolStr::new(name.short().to_ascii_lowercase()),
+        file,
+        index: index as u32,
+    };
+    let classes = items
+        .classes
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !c.is_anonymous())
+        .map(|(i, c)| symbol(SymbolKind::Class(c.kind), &c.name, i));
+    let functions = items
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(i, f)| symbol(SymbolKind::Function, &f.name, i));
+    let consts = items
+        .consts
+        .iter()
+        .enumerate()
+        .map(|(i, c)| symbol(SymbolKind::Const, &c.name, i));
+    Arc::new(classes.chain(functions).chain(consts).collect())
+}
+
+/// Every name of the workspace, once each: the declarations a name resolves to. Not re-made for a
+/// keystroke that changes no declaration, so that completion can walk it.
+#[salsa::tracked(returns(ref))]
+pub fn symbol_table(db: &dyn Db, ws: Workspace) -> Arc<Vec<Symbol>> {
+    let index = def_index(db, ws);
+    let first = |symbol: &Symbol| {
+        let (locs, key) = match symbol.kind {
+            SymbolKind::Class(_) => (&index.classes, symbol.name.key()),
+            SymbolKind::Function => (&index.functions, symbol.name.key()),
+            SymbolKind::Const => (&index.consts, symbol.name.0.clone()),
+        };
+        locs.get(&key)
+            .and_then(|l| l.first())
+            .is_some_and(|l| l.file == symbol.file && l.index == symbol.index)
+    };
+    let mut out = Vec::new();
+    for &file in ws.files(db) {
+        out.extend(file_symbols(db, file).iter().filter(|s| first(s)).cloned());
+    }
+    Arc::new(out)
+}
+
 /// Declarations of one file.
 #[salsa::tracked(returns(ref))]
 pub fn file_items(db: &dyn Db, file: SourceFile) -> Arc<FileItems> {

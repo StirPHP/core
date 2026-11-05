@@ -9,6 +9,7 @@ pub mod convert;
 pub mod hierarchy;
 pub mod hints;
 pub mod hover;
+pub mod imports;
 pub mod nav;
 pub mod render;
 #[cfg(feature = "server")]

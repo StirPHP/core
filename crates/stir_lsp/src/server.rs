@@ -977,7 +977,7 @@ impl LanguageServer for Server {
                     work_done_progress_options: Default::default(),
                 })),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(vec![">".into(), ":".into(), "$".into()]),
+                    trigger_characters: Some(vec![">".into(), ":".into(), "$".into(), "\\".into()]),
                     ..Default::default()
                 }),
                 signature_help_provider: Some(SignatureHelpOptions {
@@ -1563,13 +1563,25 @@ impl LanguageServer for Server {
                     .into_iter()
                     .map(|i| CompletionItem {
                         filter_text: Some(i.label.clone()),
-                        sort_text: Some(format!("{}{}", i.rank, i.label)),
+                        sort_text: Some(format!("{}{:04}{}", i.rank, i.order, i.label)),
                         kind: Some(completion_kind(i.kind)),
                         detail: i.detail,
+                        label_details: i.qualified.map(|q| CompletionItemLabelDetails {
+                            detail: None,
+                            description: Some(q),
+                        }),
                         text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                             range,
                             new_text: i.insert,
                         })),
+                        additional_text_edits: i.import.map(|edit| {
+                            let at = map.position(edit.at);
+                            vec![TextEdit {
+                                range: Range::new(at, at),
+                                new_text: edit.text,
+                            }]
+                        }),
+                        tags: i.deprecated.then(|| vec![CompletionItemTag::DEPRECATED]),
                         label: i.label,
                         ..Default::default()
                     })

@@ -737,3 +737,417 @@ fn use_lines_resolve_what_they_import() {
         assert!(f.definition().starts_with("/src/lib.php:"), "{main}");
     }
 }
+
+// ------------------------------------------------------------------ `use` insertion
+
+const LIB: &str = "//- /vendor/lib.php
+<?php
+namespace Vendor\\Http;
+class Request {}
+class Response {}
+interface Client {}
+trait Retries {}
+function fetch(): int { return 1; }
+const TIMEOUT = 3;
+//- /vendor/other.php
+<?php
+namespace Vendor\\Other;
+class Request {}
+//- /vendor/global.php
+<?php
+class GlobalThing {}
+";
+
+impl Fixture {
+    /// The file with the item that has this label and full name accepted.
+    fn accept(&self, label: &str, full: &str) -> String {
+        let (file, offset) = self.at();
+        let c = complete::complete(&self.db, self.ws, file, offset);
+        let item = c
+            .items
+            .iter()
+            .find(|i| i.label == label && i.qualified.as_deref() == Some(full))
+            .unwrap_or_else(|| {
+                let found: Vec<_> = c.items.iter().map(|i| &i.label).collect();
+                panic!("no {label} {full} in {found:?}")
+            });
+        let mut text = file.text(&self.db).clone();
+        text.replace_range(
+            usize::from(c.replace.start())..usize::from(c.replace.end()),
+            &item.insert,
+        );
+        if let Some(edit) = &item.import {
+            text.insert_str(usize::from(edit.at), &edit.text);
+        }
+        text
+    }
+}
+
+fn with_main(main: &str) -> Fixture {
+    Fixture::new(&format!("{LIB}//- /src/main.php\n{main}"))
+}
+
+#[test]
+fn accepting_a_class_adds_its_use_line() {
+    let f = with_main("<?php\nnamespace App;\n\nnew Requ<|>\n");
+    assert_eq!(
+        f.accept("Request", "Vendor\\Http\\Request"),
+        "<?php\nnamespace App;\n\nuse Vendor\\Http\\Request;\n\nnew Request\n"
+    );
+    // directly below the namespace line
+    let f = with_main("<?php\nnamespace App;\nnew Requ<|>\n");
+    assert_eq!(
+        f.accept("Request", "Vendor\\Http\\Request"),
+        "<?php\nnamespace App;\n\nuse Vendor\\Http\\Request;\n\nnew Request\n"
+    );
+    // without a namespace, below the tag, a declare and a header
+    let f = with_main("<?php\n\nnew Requ<|>\n");
+    assert_eq!(
+        f.accept("Request", "Vendor\\Http\\Request"),
+        "<?php\n\nuse Vendor\\Http\\Request;\n\nnew Request\n"
+    );
+    let f = with_main("<?php\ndeclare(strict_types=1);\n\nnew Requ<|>\n");
+    assert_eq!(
+        f.accept("Request", "Vendor\\Http\\Request"),
+        "<?php\ndeclare(strict_types=1);\n\nuse Vendor\\Http\\Request;\n\nnew Request\n"
+    );
+    let f = with_main("<?php\n/* Licence */\n\n/** About it. */\nnew Requ<|>\n");
+    assert_eq!(
+        f.accept("Request", "Vendor\\Http\\Request"),
+        "<?php\n/* Licence */\n\nuse Vendor\\Http\\Request;\n\n/** About it. */\nnew Request\n"
+    );
+    // in a block
+    let f = with_main("<?php\nnamespace App {\n    new Requ<|>\n}\n");
+    assert_eq!(
+        f.accept("Request", "Vendor\\Http\\Request"),
+        "<?php\nnamespace App {\n    use Vendor\\Http\\Request;\n\n    new Request\n}\n"
+    );
+    // with the file's line breaks
+    let f = with_main("<?php\r\nnamespace App;\r\n\r\nnew Requ<|>\r\n");
+    assert_eq!(
+        f.accept("Request", "Vendor\\Http\\Request"),
+        "<?php\r\nnamespace App;\r\n\r\nuse Vendor\\Http\\Request;\r\n\r\nnew Request\r\n"
+    );
+}
+
+#[test]
+fn a_use_line_goes_in_order() {
+    let main = "<?php\nnamespace App;\n\nuse Alpha\\A;\nuse Zed\\Z;\n\nnew Requ<|>\n";
+    assert_eq!(
+        with_main(main).accept("Request", "Vendor\\Http\\Request"),
+        "<?php\nnamespace App;\n\nuse Alpha\\A;\nuse Vendor\\Http\\Request;\nuse Zed\\Z;\n\nnew Request\n"
+    );
+    // not sorted: at the end
+    let main = "<?php\nnamespace App;\n\nuse Zed\\Z;\nuse Alpha\\A;\n\nnew Requ<|>\n";
+    assert_eq!(
+        with_main(main).accept("Request", "Vendor\\Http\\Request"),
+        "<?php\nnamespace App;\n\nuse Zed\\Z;\nuse Alpha\\A;\nuse Vendor\\Http\\Request;\n\nnew Request\n"
+    );
+    // kinds apart, classes first
+    let main = "<?php\nnamespace App;\n\nuse function Alpha\\f;\n\nnew Requ<|>\n";
+    assert_eq!(
+        with_main(main).accept("Request", "Vendor\\Http\\Request"),
+        "<?php\nnamespace App;\n\nuse Vendor\\Http\\Request;\n\nuse function Alpha\\f;\n\nnew Request\n"
+    );
+}
+
+#[test]
+fn functions_and_constants_get_their_kind_of_use_line() {
+    let main = "<?php\nnamespace App;\n\nuse Alpha\\A;\n\nfet<|>\n";
+    assert_eq!(
+        with_main(main).accept("fetch", "Vendor\\Http\\fetch"),
+        "<?php\nnamespace App;\n\nuse Alpha\\A;\n\nuse function Vendor\\Http\\fetch;\n\nfetch\n"
+    );
+    let main = "<?php\nnamespace App;\n\nuse Alpha\\A;\n\nuse function Beta\\b;\n\nTIME<|>\n";
+    assert_eq!(
+        with_main(main).accept("TIMEOUT", "Vendor\\Http\\TIMEOUT"),
+        "<?php\nnamespace App;\n\nuse Alpha\\A;\n\nuse function Beta\\b;\n\nuse const Vendor\\Http\\TIMEOUT;\n\nTIMEOUT\n"
+    );
+    // global functions just work from a namespace
+    let main = "<?php\nnamespace App;\n\nstrle<|>\n";
+    assert_eq!(
+        with_main(main).accept("strlen", "strlen"),
+        "<?php\nnamespace App;\n\nstrlen\n"
+    );
+}
+
+#[test]
+fn what_is_already_available_needs_no_use_line() {
+    // imported already
+    let main = "<?php\nnamespace App;\n\nuse Vendor\\Http\\Request;\n\nnew Requ<|>\n";
+    assert_eq!(
+        with_main(main).accept("Request", "Vendor\\Http\\Request"),
+        "<?php\nnamespace App;\n\nuse Vendor\\Http\\Request;\n\nnew Request\n"
+    );
+    // imported under another name, or in a group
+    let main = "<?php\nnamespace App;\n\nuse Vendor\\Http\\Request as Req;\n\nnew Requ<|>\n";
+    assert_eq!(
+        with_main(main).accept("Request", "Vendor\\Http\\Request"),
+        "<?php\nnamespace App;\n\nuse Vendor\\Http\\Request as Req;\n\nnew Req\n"
+    );
+    let main = "<?php\nnamespace App;\n\nuse Vendor\\Http\\{Request, Response};\n\nnew Requ<|>\n";
+    assert_eq!(
+        with_main(main).accept("Request", "Vendor\\Http\\Request"),
+        "<?php\nnamespace App;\n\nuse Vendor\\Http\\{Request, Response};\n\nnew Request\n"
+    );
+    // in the same namespace
+    let main = "<?php\nnamespace Vendor\\Http;\n\nnew Requ<|>\n";
+    assert_eq!(
+        with_main(main).accept("Request", "Vendor\\Http\\Request"),
+        "<?php\nnamespace Vendor\\Http;\n\nnew Request\n"
+    );
+    // imported below the cursor counts
+    let main = "<?php\nnamespace App;\nnew Requ<|>;\nuse Vendor\\Http\\Request;\n";
+    assert_eq!(
+        with_main(main).accept("Request", "Vendor\\Http\\Request"),
+        "<?php\nnamespace App;\nnew Request;\nuse Vendor\\Http\\Request;\n"
+    );
+}
+
+#[test]
+fn a_name_that_cannot_be_imported_is_written_in_full() {
+    // the short name is another import's
+    let main = "<?php\nnamespace App;\n\nuse Vendor\\Other\\Request;\n\nnew Requ<|>\n";
+    assert_eq!(
+        with_main(main).accept("Request", "Vendor\\Http\\Request"),
+        "<?php\nnamespace App;\n\nuse Vendor\\Other\\Request;\n\nnew \\Vendor\\Http\\Request\n"
+    );
+    // or a class of this namespace that importing would hide
+    let main = "//- /src/mine.php\n<?php\nnamespace App;\nclass Request {}\n//- /src/main.php\n<?php\nnamespace App;\n\nnew Requ<|>\n";
+    let f = Fixture::new(&format!("{LIB}{main}"));
+    assert_eq!(
+        f.accept("Request", "Vendor\\Http\\Request"),
+        "<?php\nnamespace App;\n\nnew \\Vendor\\Http\\Request\n"
+    );
+    // or declared in this file
+    let main = "<?php\nnamespace App;\n\nclass Request {}\nnew Requ<|>\n";
+    assert_eq!(
+        with_main(main).accept("Request", "Vendor\\Http\\Request"),
+        "<?php\nnamespace App;\n\nclass Request {}\nnew \\Vendor\\Http\\Request\n"
+    );
+    // a function over a global one
+    let main = "//- /vendor/f.php\n<?php\nnamespace Lib;\nfunction strlen(): int { return 0; }\n//- /src/main.php\n<?php\nnamespace App;\n\nstrle<|>\n";
+    let f = Fixture::new(main);
+    assert_eq!(
+        f.accept("strlen", "Lib\\strlen"),
+        "<?php\nnamespace App;\n\n\\Lib\\strlen\n"
+    );
+}
+
+#[test]
+fn global_classes_follow_the_file() {
+    // an import by default
+    let main = "<?php\nnamespace App;\n\nnew GlobalTh<|>\n";
+    assert_eq!(
+        with_main(main).accept("GlobalThing", "GlobalThing"),
+        "<?php\nnamespace App;\n\nuse GlobalThing;\n\nnew GlobalThing\n"
+    );
+    // `\\Foo` where that's what the file does
+    let main = "<?php\nnamespace App;\n\nnew \\Exception();\nnew GlobalTh<|>\n";
+    assert_eq!(
+        with_main(main).accept("GlobalThing", "GlobalThing"),
+        "<?php\nnamespace App;\n\nnew \\Exception();\nnew \\GlobalThing\n"
+    );
+    // without a namespace, as it is
+    let main = "<?php\nnew GlobalTh<|>\n";
+    assert_eq!(
+        with_main(main).accept("GlobalThing", "GlobalThing"),
+        "<?php\nnew GlobalThing\n"
+    );
+}
+
+#[test]
+fn completion_knows_what_a_place_takes() {
+    let labels = |main: &str| with_main(main).completions();
+    let full = |main: &str, want: &str| {
+        let f = with_main(main);
+        let (file, offset) = f.at();
+        complete::complete(&f.db, f.ws, file, offset)
+            .items
+            .iter()
+            .any(|i| i.qualified.as_deref() == Some(want))
+    };
+    const CLIENT: &str = "Vendor\\Http\\Client";
+    const REQUEST: &str = "Vendor\\Http\\Request";
+    assert!(
+        !full("<?php\nnew Cli<|>\n", CLIENT),
+        "an interface can't be created"
+    );
+    assert!(full("<?php\nclass A implements Cli<|> {}\n", CLIENT));
+    assert!(!full("<?php\nclass A implements Req<|> {}\n", REQUEST));
+    assert!(full(
+        "<?php\nclass A { use Retr<|> }\n",
+        "Vendor\\Http\\Retries"
+    ));
+    assert!(!full("<?php\nclass A { use Req<|> }\n", REQUEST));
+    assert!(full("<?php\nfunction f(Req<|>) {}\n", REQUEST));
+    assert!(!full(
+        "<?php\nfunction f(fet<|>) {}\n",
+        "Vendor\\Http\\fetch"
+    ));
+    assert!(has(&labels("<?php\nfunction f(in<|>) {}\n"), "int"));
+    // nothing in strings and comments
+    assert!(labels("<?php\n$a = 'Req<|>';\n").is_empty());
+    assert!(labels("<?php\n// Req<|> \n").is_empty());
+}
+
+#[test]
+fn completion_matches_fuzzily_with_the_best_first() {
+    let lib = "//- /vendor/a.php\n<?php\nnamespace V;\nclass HttpClientFactory {}\nclass HelloThere {}\nclass ShouldBeHttp {}\nclass Chart {}\n//- /src/mine.php\n<?php\nnamespace App;\nclass HttpThing {}\n";
+    let f = Fixture::new(&format!(
+        "{lib}//- /src/main.php\n<?php\nnamespace App;\nnew HCF<|>\n"
+    ));
+    let (file, offset) = f.at();
+    let c = complete::complete(&f.db, f.ws, file, offset);
+    assert_eq!(c.items[0].label, "HttpClientFactory");
+    let f = Fixture::new(&format!(
+        "{lib}//- /src/main.php\n<?php\nnamespace App;\nnew http<|>\n"
+    ));
+    let (file, offset) = f.at();
+    let c = complete::complete(&f.db, f.ws, file, offset);
+    let order: Vec<_> = c.items.iter().map(|i| i.label.as_str()).collect();
+    // what starts with it before what has it inside, the project's before others'
+    let at = |l: &str| order.iter().position(|o| *o == l).unwrap();
+    assert!(at("HttpThing") < at("HttpClientFactory"), "{order:?}");
+    assert!(at("HttpClientFactory") < at("ShouldBeHttp"), "{order:?}");
+}
+
+#[test]
+fn a_written_namespace_narrows_completion() {
+    let main = "<?php\nnamespace App;\n\nnew \\Vendor\\Http\\Re<|>\n";
+    assert_eq!(
+        with_main(main).accept("Request", "Vendor\\Http\\Request"),
+        "<?php\nnamespace App;\n\nnew \\Vendor\\Http\\Request\n"
+    );
+    assert!(!has(&with_main(main).completions(), "Client"));
+    // through an import of the namespace
+    let main = "<?php\nnamespace App;\n\nuse Vendor\\Http;\n\nnew Http\\Re<|>\n";
+    assert_eq!(
+        with_main(main).accept("Request", "Vendor\\Http\\Request"),
+        "<?php\nnamespace App;\n\nuse Vendor\\Http;\n\nnew Http\\Request\n"
+    );
+    // absolute
+    let main = "<?php\nnamespace App;\n\nnew \\GlobalTh<|>\n";
+    assert_eq!(
+        with_main(main).accept("GlobalThing", "GlobalThing"),
+        "<?php\nnamespace App;\n\nnew \\GlobalThing\n"
+    );
+}
+
+#[test]
+fn use_lines_complete_with_whole_names() {
+    let main = "<?php\nnamespace App;\n\nuse Requ<|>\n";
+    assert_eq!(
+        with_main(main).accept("Vendor\\Http\\Request", "Vendor\\Http\\Request"),
+        "<?php\nnamespace App;\n\nuse Vendor\\Http\\Request\n"
+    );
+    let main = "<?php\nnamespace App;\n\nuse Vendor\\Http\\Requ<|>\n";
+    assert_eq!(
+        with_main(main).accept("Vendor\\Http\\Request", "Vendor\\Http\\Request"),
+        "<?php\nnamespace App;\n\nuse Vendor\\Http\\Request\n"
+    );
+    let main = "<?php\nuse function fet<|>\n";
+    assert_eq!(
+        with_main(main).accept("Vendor\\Http\\fetch", "Vendor\\Http\\fetch"),
+        "<?php\nuse function Vendor\\Http\\fetch\n"
+    );
+    assert!(!has(
+        &with_main("<?php\nuse function Req<|>\n").completions(),
+        "Vendor\\Http\\Request"
+    ));
+}
+
+/// How long completion takes on a big project: `cargo test --release -p stir_lsp --test php
+/// completion_latency -- --ignored --nocapture`, after installing `corpus/symfony`'s packages.
+#[test]
+#[ignore = "needs corpus/symfony, and is about timing"]
+fn completion_latency() {
+    use salsa::Setter;
+    use std::time::{Duration, Instant};
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/symfony");
+    let root = std::fs::canonicalize(root).unwrap();
+    let start = Instant::now();
+    let (mut db, ws, target) = runtime.block_on(async {
+        let project = stir_project::Project::load_or_default(&root).await.unwrap();
+        let loaded = stir_project::workspace::load_workspace(
+            &project,
+            stir_project::workspace::LoadOptions::default(),
+        )
+        .await
+        .unwrap();
+        let target = loaded
+            .sources
+            .iter()
+            .copied()
+            .find(|f| {
+                f.path(&loaded.db)
+                    .ends_with("src/Symfony/Component/HttpFoundation/Request.php")
+            })
+            .unwrap();
+        (loaded.db, loaded.workspace, target)
+    });
+    println!(
+        "loaded {} files in {:?}",
+        ws.files(&db).len(),
+        start.elapsed()
+    );
+    let original = target.text(&db).clone();
+    let at = original.rfind('}').unwrap();
+    let edited = |word: &str| {
+        let mut t = original.clone();
+        t.insert_str(at, &format!("\n    public function probe() {{ {word} }}\n"));
+        (
+            t.clone(),
+            at + "\n    public function probe() { ".len() + word.len(),
+        )
+    };
+    let timed = |db: &stir_db::RootDatabase, word: &str, offset: usize| {
+        let start = Instant::now();
+        let c = complete::complete(db, ws, target, TextSize::from(offset as u32));
+        let elapsed = start.elapsed();
+        println!(
+            "{word:>12}: {elapsed:?}, {} items (incomplete: {})",
+            c.items.len(),
+            c.incomplete
+        );
+        elapsed
+    };
+    // the first one builds everything; after that as an editor does, a keystroke at a time
+    let mut warm: Vec<Duration> = Vec::new();
+    let mut all = Vec::new();
+    for (i, word) in [
+        "new R",
+        "new Re",
+        "new Req",
+        "new Reque",
+        "new Reques",
+        "new Reqst",
+        "cach",
+        "array_ma",
+        "HCF",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let (text, offset) = edited(word);
+        target.set_text(&mut db).to(text);
+        let t = timed(&db, word, offset);
+        if i > 0 {
+            warm.push(t);
+        }
+        all.push(t);
+    }
+    // nothing changed but the cursor: the checker's answers are all there
+    let (text, offset) = edited("new Reque");
+    target.set_text(&mut db).to(text);
+    timed(&db, "new Reque", offset);
+    let again = timed(&db, "new Reque", offset);
+    warm.sort();
+    println!(
+        "after an edit: median {:?}, max {:?}; no edit: {again:?}; first: {:?}",
+        warm[warm.len() / 2],
+        warm[warm.len() - 1],
+        all[0]
+    );
+}
