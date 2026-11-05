@@ -193,12 +193,12 @@ pub fn def_index(db: &dyn Db, ws: Workspace) -> Arc<DefIndex> {
     }
     index.sort();
     // our own stubs replace the phpstorm-stubs declarations of a function, and a project's replace
-    // those and a dependency's
+    // every other
     let in_project_stub = |l: &ItemLoc| l.file.path(db).starts_with("stubs://overlay");
     let in_our_stub = |l: &ItemLoc| l.file.path(db).starts_with("stubs://override");
     for locs in index.functions.values_mut() {
         if locs.iter().any(in_project_stub) {
-            locs.retain(|l| in_project_stub(l) || l.file.origin(db) == FileOrigin::Source);
+            locs.retain(in_project_stub);
         } else if locs.iter().any(in_our_stub) {
             locs.retain(|l| in_our_stub(l) || l.file.origin(db) != FileOrigin::Stub);
         }
