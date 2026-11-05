@@ -3888,6 +3888,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             || !stir_types::free_params(a).is_empty()
             || !stir_types::free_params(b).is_empty()
             || !stir_types::meet(self.ctx, a, b).is_never()
+            || stir_types::maybe_assignable(self.ctx, a, b)
+            || stir_types::maybe_assignable(self.ctx, b, a)
     }
 
     /// Declaration-site variance: `out T` only in output positions, `in T` only in inputs.
@@ -5362,10 +5364,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             // the class comes from a value: if its type doesn't say which, an object of some class
             let t = self.expr(&target, None);
             self.check_args_untyped(node);
-            return match self.named_class(&t) {
-                Some(c) if !matches!(c.kind(), TyKind::Param { .. }) => c,
-                _ => Ty::object(),
-            };
+            return self.named_class(&t).unwrap_or_else(Ty::object);
         };
         let TyKind::Class { name, .. } = cls.kind() else {
             self.check_args_untyped(node);
@@ -5555,8 +5554,20 @@ impl<'a, 'db> Checker<'a, 'db> {
                     Some(v) => v.text()[1..].to_owned(),
                     None => p.name_text().unwrap_or_default(),
                 };
-                self.declare(&name, ty.clone(), LocalKind::Param, p.text_range());
-                params.push(stir_types::FnParam::required(ty));
+                let variadic = p.has_token(ELLIPSIS);
+                let local = if variadic {
+                    Ty::list(ty.clone())
+                } else {
+                    ty.clone()
+                };
+                self.declare(&name, local, LocalKind::Param, p.text_range());
+                params.push(if variadic {
+                    stir_types::FnParam::variadic(ty)
+                } else if p.has_token(EQ) {
+                    stir_types::FnParam::optional(ty)
+                } else {
+                    stir_types::FnParam::required(ty)
+                });
             }
         }
         let declared_ret = node

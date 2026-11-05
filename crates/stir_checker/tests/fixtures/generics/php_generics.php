@@ -140,3 +140,19 @@ function keeps_template(Animal $a): Animal {
     return new Dog(); // error: SPHP0005
 }
 function want_animal(Animal $a): void {}
+
+// `class-string<T>` to `T`
+/**
+ * @template T of object
+ * @param class-string<T> $class
+ * @return T
+ */
+function make_one(string $class): object {
+    return new $class();
+}
+
+function makes(): void {
+    make_one(Dog::class)->nope(); // error: SPHP0009
+    make_one(Dog::class);
+    make_one("NoSuchClass"); // error: SPHP0005
+}
