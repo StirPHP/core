@@ -65,5 +65,5 @@ function php_false_stays_in_unions(string $p): string {
 }
 
 function php_bare_array_in_union(array|string|null $o): void {
-    takes_args($o ?? []);
+    takes_args($o ?? []); // error: SPHP0005
 }

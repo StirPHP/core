@@ -865,7 +865,9 @@ impl<'db> Ctx<'db> {
                 self.in_progress.borrow_mut().remove(&guard);
             }
         }
-        self.method_sigs.borrow_mut().insert(key, Rc::new(sig.clone()));
+        self.method_sigs
+            .borrow_mut()
+            .insert(key, Rc::new(sig.clone()));
         sig
     }
 
@@ -953,7 +955,11 @@ impl<'db> Ctx<'db> {
             let mut inherited_any = false;
             if !sig.ret_documented && parent.ret_documented {
                 let doc = inherited(&parent.ret);
-                let native = m.sig.ret.as_ref().map(|t| self.lower(t, cx, &mut Vec::new()));
+                let native = m
+                    .sig
+                    .ret
+                    .as_ref()
+                    .map(|t| self.lower(t, cx, &mut Vec::new()));
                 if let Some(t) = self.refine_native(native, doc) {
                     sig.ret = t;
                     sig.ret_declared = true;
@@ -962,7 +968,9 @@ impl<'db> Ctx<'db> {
                 }
             }
             for (i, p) in sig.params.iter_mut().enumerate() {
-                let Some(pp) = parent.params.get(i) else { break };
+                let Some(pp) = parent.params.get(i) else {
+                    break;
+                };
                 if p.documented || !pp.documented || p.variadic != pp.variadic {
                     continue;
                 }
@@ -1197,6 +1205,10 @@ impl TypeEnv for Ctx<'_> {
     fn is_interface(&self, class: &str) -> bool {
         self.class(class)
             .is_some_and(|c| c.kind() == ClassKind::Interface)
+    }
+
+    fn is_class(&self, class: &str) -> bool {
+        self.class(class).is_some()
     }
 
     fn invoke_signature(&self, class: &str, args: &[Ty]) -> Option<FnTy> {

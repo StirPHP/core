@@ -259,11 +259,16 @@ impl<'a, 'db> Checker<'a, 'db> {
             .push(Diagnostic::error(self.path.clone(), range, code, msg));
     }
 
-    /// An override's types are mostly PHPDoc, which PHP doesn't enforce: reported only
-    /// above the level WordPress-style projects run at.
+    /// An override's types are mostly PHPDoc, which PHP doesn't enforce: PHPStan's
+    /// `checkPhpDocMethodSignatures`, from level 3.
     fn tag_php_override(&mut self) {
+        self.tag_level(3);
+    }
+
+    /// The last diagnostic is reported from level `level`.
+    fn tag_level(&mut self, level: u8) {
         if let Some(d) = self.diags.last_mut() {
-            d.php_level = Some(6);
+            d.php_level = Some(level);
         }
     }
 
@@ -305,32 +310,17 @@ impl<'a, 'db> Checker<'a, 'db> {
         stir_types::is_assignable(self.ctx, from, to)
     }
 
-    /// Reports a mismatch if `from` is not assignable to `to`.
+    /// Reports a mismatch if `from` is not assignable to `to`, at the level PHPStan reports
+    /// that kind of mismatch.
     fn check_assign(&mut self, range: TextRange, from: &Ty, to: &Ty, what: &str) {
         if from.is_error() || to.is_error() {
-            return;
-        }
-        // PHP code isn't asked to prove `non-empty-string`, `non-negative-int`, ...
-        let widened = widen_refinements(to);
-        let to = &widened;
-        // a bare `array` is an `array<K, mixed>` of any keys
-        if php_array_of_mixed(from, to) {
-            return;
-        }
-        if from.is_union()
-            && from.members().iter().any(|m| php_array_of_mixed(m, to))
-            && from
-                .members()
-                .iter()
-                .all(|m| php_array_of_mixed(m, to) || self.assignable(m, to))
-        {
             return;
         }
         // a template the call couldn't solve says nothing about the value
         if !stir_types::free_params(from).is_empty() || !stir_types::free_params(to).is_empty() {
             return;
         }
-        // `$this` in a trait is whichever class uses it
+        // `$this` in a trait nobody here uses is whichever class would use it
         if self
             .class
             .as_ref()
@@ -346,42 +336,45 @@ impl<'a, 'db> Checker<'a, 'db> {
                     "; narrow the untyped value first (an `is_*()` check or `instanceof`)",
                 );
             }
-            let partial = from.is_union() && from.members().iter().any(|m| self.assignable(m, to));
-            let implicit_mixed = self.is_implicitly_mixed(from, to);
-            let only_error_mixed = mixed_only_from_errors(&m);
+            let level =
+                self.mismatch_level(from, to, if what.starts_with("argument") { 5 } else { 3 });
             self.error(range, codes::TYPE_MISMATCH, msg);
-            if implicit_mixed {
-                // PHPStan only checks inside `array` from level 9
-                if let Some(d) = self.diags.last_mut() {
-                    d.php_level = Some(9);
-                }
-            } else if partial {
-                self.tag_partial_union();
-            } else if only_error_mixed {
-                // the `mixed` in the message isn't a real one: not a level 9 problem
-                if let Some(d) = self.diags.last_mut() {
-                    d.php_level = Some(if what.starts_with("argument") { 5 } else { 3 });
-                }
+            if let Some(d) = self.diags.last_mut() {
+                d.php_level = Some(level);
             }
         }
     }
 
-    /// Does `from` fit `to` once the elements of its plain `array`s are ignored?
-    /// Also true of an array going to a shape: nothing says which keys it has.
-    fn is_implicitly_mixed(&self, from: &Ty, to: &Ty) -> bool {
-        let bottom = from.transform(&mut |t| match t.kind() {
-            TyKind::Mixed | TyKind::ArrayKey => Some(Ty::never()),
-            _ => None,
-        });
-        self.assignable(&bottom, to)
-            || (from
-                .members()
-                .iter()
-                .all(|m| matches!(m.kind(), TyKind::Array { .. } | TyKind::List { .. }))
-                && to
-                    .members()
-                    .iter()
-                    .any(|m| matches!(m.kind(), TyKind::Shape(_) | TyKind::List { .. })))
+    /// The level PHPStan reports `from` not fitting `to` at, by what it's still accepted as
+    /// below that level: `RuleLevelHelper::accepts`.
+    fn mismatch_level(&self, from: &Ty, to: &Ty, base: u8) -> u8 {
+        let no_nulls = stir_types::strip_nulls(from);
+        // a plain `array` has no type for its elements: that's an implicit `mixed`
+        let mixed_level = |t: &Ty| {
+            let t = t.transform(&mut |x| {
+                matches!(x.kind(), TyKind::Array { key, value, .. }
+                    if matches!(key.kind(), TyKind::ArrayKey)
+                        && matches!(value.kind(), TyKind::Mixed))
+                .then(Ty::untyped)
+            });
+            let mut explicit = false;
+            t.walk(&mut |x| {
+                explicit |= matches!(x.kind(), TyKind::Mixed);
+                true
+            });
+            if explicit { 9 } else { 10 }
+        };
+        if stir_types::assignable_ignoring_mixed(self.ctx, from, to) {
+            mixed_level(from)
+        } else if no_nulls != *from
+            && stir_types::assignable_ignoring_mixed(self.ctx, &no_nulls, to)
+        {
+            8
+        } else if stir_types::maybe_assignable(self.ctx, &no_nulls, to) {
+            7
+        } else {
+            base
+        }
     }
 
     // ------------------------------------------------------------ locals
@@ -861,6 +854,19 @@ impl<'a, 'db> Checker<'a, 'db> {
     }
 
     fn iter_types(&mut self, range: TextRange, ty: &Ty) -> (Ty, Ty) {
+        if ty.is_union() && ty.members().iter().any(Ty::is_null) {
+            let rest = stir_types::without_null(ty);
+            let start = self.diags.len();
+            let found = self.iter_types(range, &rest);
+            if self.diags.len() == start {
+                self.error(
+                    range,
+                    codes::NULLABLE_ACCESS,
+                    format!("`{ty}` is not iterable when it's null"),
+                );
+            }
+            return found;
+        }
         if ty.is_union() {
             let start = self.diags.len();
             let (mut keys, mut vals, mut missing) = (Vec::new(), Vec::new(), false);
@@ -882,6 +888,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     format!("`{ty}` is not iterable"),
                 );
                 if keys.is_empty() {
+                    self.tag_level(3);
                     return (Ty::error(), Ty::error());
                 }
                 self.tag_partial_union();
@@ -901,7 +908,11 @@ impl<'a, 'db> Checker<'a, 'db> {
             TyKind::Never => (Ty::never(), Ty::never()),
             TyKind::Class { name, args } => {
                 // Traversable / Iterator / IteratorAggregate
-                for anc in self.ctx.ancestors(&Ty::class(name.clone(), args.clone())).iter() {
+                for anc in self
+                    .ctx
+                    .ancestors(&Ty::class(name.clone(), args.clone()))
+                    .iter()
+                {
                     if let TyKind::Class { name: n, args: a } = anc.kind()
                         && matches!(
                             n.to_ascii_lowercase().as_str(),
@@ -921,6 +932,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     codes::INVALID_OPERAND,
                     format!("`{ty}` is not iterable"),
                 );
+                self.tag_level(3);
                 (Ty::error(), Ty::error())
             }
         }
@@ -1066,11 +1078,8 @@ impl<'a, 'db> Checker<'a, 'db> {
                 // the same mistake in the context of each class is one mistake
                 let found = self.diags.split_off(start);
                 let mut seen = rustc_hash::FxHashSet::default();
-                self.diags.extend(
-                    found
-                        .into_iter()
-                        .filter(|d| seen.insert((d.range, d.code))),
-                );
+                self.diags
+                    .extend(found.into_iter().filter(|d| seen.insert((d.range, d.code))));
             }
         }
         self.lower_cx = saved_cx;
@@ -1705,6 +1714,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                                 codes::INVALID_OPERAND,
                                 format!("`{bt}` can't be indexed"),
                             );
+                            self.tag_level(3);
                         }
                         Ty::error()
                     }
@@ -2553,9 +2563,22 @@ impl<'a, 'db> Checker<'a, 'db> {
                     );
                     break;
                 }
+                // PHPStan doesn't compare the PHPDoc types of static methods
+                // (`reportStaticMethodSignatures`)
+                if m.mods.is_static {
+                    break;
+                }
+                // a method's own templates are matched by position
+                let mut map = map;
+                map.extend(
+                    sup.type_params
+                        .iter()
+                        .zip(&sub.type_params)
+                        .map(|(a, b)| (a.id, b.ty.clone())),
+                );
                 for (sp, bp) in sub.params.iter().zip(&sup.params) {
                     let want = stir_types::subst(&bp.ty, &map);
-                    if !sp.ty.is_error() && !want.is_error() && !self.assignable(&want, &sp.ty) {
+                    if !self.override_compatible(&want, &sp.ty) {
                         self.error(
                             sp.range,
                             codes::INCOMPATIBLE_OVERRIDE,
@@ -2570,17 +2593,24 @@ impl<'a, 'db> Checker<'a, 'db> {
                 let sup_ret = stir_types::subst(&sup.ret, &map);
                 let sup_ret = resolve_self(&sup_ret, &self_ty);
                 let sub_ret = resolve_self(&sub.ret, &self_ty);
-                if sup.ret_declared
-                    && !sub_ret.is_error()
-                    && !sup_ret.is_error()
-                    && !self.assignable(&sub_ret, &sup_ret)
-                {
+                if sup.ret_declared && !self.override_compatible(&sub_ret, &sup_ret) {
                     self.error(m.name_range, codes::INCOMPATIBLE_OVERRIDE, format!("return type `{sub_ret}` is not compatible with `{sup_ret}` of `{}::{}`", c.name, sm.name));
                     self.tag_php_override();
                 }
                 break;
             }
         }
+    }
+
+    /// Like PHPStan without `reportMaybesInMethodSignatures`, only types that can't hold the
+    /// same value are incompatible: a parent's `@return Base` overridden by `@return Child|int`
+    /// goes unreported. Templates that aren't resolved say nothing either way.
+    fn override_compatible(&self, a: &Ty, b: &Ty) -> bool {
+        a.is_error()
+            || b.is_error()
+            || !stir_types::free_params(a).is_empty()
+            || !stir_types::free_params(b).is_empty()
+            || !stir_types::meet(self.ctx, a, b).is_never()
     }
 
     /// Declaration-site variance: `out T` only in output positions, `in T` only in inputs.
@@ -2837,24 +2867,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             let range = value_of(a)
                 .map(|v| v.text_range())
                 .unwrap_or(a.text_range());
-            // external PHP functions accept untyped values
-            if sig.external && t.is_untyped() {
-                continue;
-            }
-            // PHP code isn't asked to prove `non-negative-int`, `non-empty-string`, ...
-            let want = widen_refinements(&want);
-            // a PHP callback may ignore arguments it's passed
-            if matches!(
-                t.kind(),
-                TyKind::Callable {
-                    sig: Some(_),
-                    closure: true
-                }
-            ) && want
-                .members()
-                .iter()
-                .any(|m| matches!(m.kind(), TyKind::Callable { .. }))
-            {
+            // a variable the call fills in: nothing is known of it yet, and it isn't read
+            if param.by_ref && t.is_untyped() {
                 continue;
             }
             if !self.items.strict_types && accepts_php_scalars(&want) {
@@ -2862,7 +2876,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 let rest: Vec<Ty> = t
                     .members()
                     .iter()
-                    .filter(|m| !coerces_to(m, &want))
+                    .filter(|m| !coerces_to(m, &want) && !self.is_stringable_for(m, &want))
                     .cloned()
                     .collect();
                 if rest.is_empty() {
@@ -2890,6 +2904,15 @@ impl<'a, 'db> Checker<'a, 'db> {
             );
         }
         inf.apply(&subst_cls(&sig.ret))
+    }
+
+    /// Without `strict_types`, an object with `__toString` coerces to a `string` argument.
+    fn is_stringable_for(&self, ty: &Ty, want: &Ty) -> bool {
+        want.members()
+            .iter()
+            .any(|m| matches!(m.kind(), TyKind::String))
+            && matches!(class_of(ty).kind(), TyKind::Class { .. })
+            && self.ctx.find_method(&class_of(ty), "__toString").is_some()
     }
 
     fn call(&mut self, node: &SyntaxNode, expected: Option<&Ty>) -> Ty {
@@ -2997,6 +3020,16 @@ impl<'a, 'db> Checker<'a, 'db> {
     }
 
     fn call_value(&mut self, node: &SyntaxNode, ct: &Ty, expected: Option<&Ty>) -> Ty {
+        if ct.is_union() && ct.members().iter().any(Ty::is_null) {
+            let rest = stir_types::without_null(ct);
+            let t = self.call_value(node, &rest, expected);
+            self.error(
+                node.text_range(),
+                codes::NULLABLE_ACCESS,
+                format!("`{ct}` can't be called when it's null"),
+            );
+            return t;
+        }
         let fn_ty = match ct.kind() {
             TyKind::Callable { sig: Some(s), .. } => Some(s.clone()),
             TyKind::Class { name, args } => {
@@ -3073,7 +3106,29 @@ impl<'a, 'db> Checker<'a, 'db> {
             .next()
             .is_some_and(|c| c.kind() == NULLSAFE_PROPERTY_FETCH_EXPR);
         let nullable = stir_types::is_nullable(self.ctx, &bt);
-
+        let nullsafe = nullsafe || in_nullsafe_chain(&base);
+        if !nullsafe && self.probing == 0 {
+            let what = node
+                .child(SyntaxKind::NAME)
+                .map(|n| format!("`{}`", text_of(&n)))
+                .unwrap_or_else(|| "a member".to_owned());
+            if bt.is_null() {
+                self.error(
+                    node.text_range(),
+                    codes::NULLABLE_ACCESS,
+                    format!("can't reach {what} on `null`"),
+                );
+                self.tag_level(2);
+                return Some((Ty::error(), false));
+            }
+            if bt.is_union() && bt.members().iter().any(Ty::is_null) {
+                self.error(
+                    node.text_range(),
+                    codes::NULLABLE_ACCESS,
+                    format!("can't reach {what} on `{bt}`: it may be null"),
+                );
+            }
+        }
         Some((stir_types::without_null(&bt), nullsafe && nullable))
     }
 
@@ -3089,7 +3144,9 @@ impl<'a, 'db> Checker<'a, 'db> {
             return Ty::untyped();
         };
         let name = text_of(&name_node);
+        let start = self.diags.len();
         let t = self.member_type(&recv, &name, name_node.text_range());
+        self.tag_unless_on_this(node, start);
         if node.kind() == PROPERTY_FETCH_EXPR
             && let Some(key) = self.place_key(node)
             && let Some(l) = self.lookup(&key)
@@ -3269,8 +3326,27 @@ impl<'a, 'db> Checker<'a, 'db> {
             return Ty::untyped();
         };
         let name = text_of(&name_node);
+        let start = self.diags.len();
         let t = self.call_member(node, &recv, &name, name_node.text_range(), expected);
+        self.tag_unless_on_this(&fetch, start);
         if nullable { t.nullable() } else { t }
+    }
+
+    /// Below level 2 PHPStan only checks members on `$this` (`checkThisOnly`).
+    fn tag_unless_on_this(&mut self, fetch: &SyntaxNode, start: usize) {
+        let on_this = exprs_of(fetch)
+            .first()
+            .is_some_and(|b| b.kind() == VARIABLE_EXPR && text_of(b) == "$this");
+        if on_this {
+            return;
+        }
+        for d in &mut self.diags[start..] {
+            if d.php_level.is_none()
+                && matches!(d.code, codes::UNDEFINED_MEMBER | codes::ARGUMENT_COUNT)
+            {
+                d.php_level = Some(2);
+            }
+        }
     }
 
     fn call_member(
@@ -3571,14 +3647,16 @@ impl<'a, 'db> Checker<'a, 'db> {
         let name = text_of(&name_node);
         if name.eq_ignore_ascii_case("class") {
             let base = node.children().next();
-            if let Some(b) = &base
+            let of = if let Some(b) = &base
                 && b.kind() != NAME_EXPR
             {
-                self.expr(b, None);
+                self.expr(b, None)
             } else {
-                self.static_base(node);
-            }
-            return Ty::class_string(None);
+                self.static_base(node)
+            };
+            return Ty::class_string(
+                matches!(class_of(&of).kind(), TyKind::Class { .. }).then_some(of),
+            );
         }
         let cls = self.static_base(node);
         if cls.is_error() {
@@ -3850,6 +3928,18 @@ fn is_null_literal(node: &SyntaxNode) -> bool {
     node.kind() == NAME_EXPR && text_of(node).eq_ignore_ascii_case("null")
 }
 
+/// Is this inside a chain after `?->`? A null there skips the rest of the chain.
+fn in_nullsafe_chain(node: &SyntaxNode) -> bool {
+    match node.kind() {
+        NULLSAFE_PROPERTY_FETCH_EXPR | NULLSAFE_METHOD_CALL_EXPR => true,
+        PROPERTY_FETCH_EXPR | METHOD_CALL_EXPR | INDEX_EXPR | CALL_EXPR | PAREN_EXPR => node
+            .children()
+            .next()
+            .is_some_and(|c| in_nullsafe_chain(&c)),
+        _ => false,
+    }
+}
+
 /// The class type to look members up on (`static`/`$this` → their class).
 fn class_of(ty: &Ty) -> Ty {
     match ty.kind() {
@@ -3921,28 +4011,6 @@ fn php_callable_value(ty: &Ty) -> bool {
                 | TyKind::Shape(_)
                 | TyKind::Callable { .. }
         ) || matches!(m.kind(), TyKind::Literal(LitValue::String(_)))
-    })
-}
-
-/// The error-recovery type prints as `mixed`. Is that the only `mixed` this mismatch shows?
-fn mixed_only_from_errors(m: &stir_types::Mismatch) -> bool {
-    let shown = [&m.root().from, &m.root().to, &m.to];
-    shown.iter().any(|t| t.contains_error())
-        && !shown.iter().any(|t| {
-            t.transform(&mut |t| t.is_error().then(|| Ty::class("error", Vec::new())))
-                .to_string()
-                .contains("mixed")
-        })
-}
-
-fn php_array_of_mixed(from: &Ty, to: &Ty) -> bool {
-    let bare = matches!(
-        from.kind(),
-        TyKind::Array { key, value, .. }
-            if matches!(key.kind(), TyKind::ArrayKey) && matches!(value.kind(), TyKind::Mixed)
-    );
-    bare && to.members().iter().any(|m| {
-        matches!(m.kind(), TyKind::Array { value, non_empty: false, .. } if matches!(value.kind(), TyKind::Mixed))
     })
 }
 
@@ -4032,24 +4100,4 @@ fn is_write_target(node: &SyntaxNode) -> bool {
             _ => return false,
         }
     }
-}
-
-/// `int<0, max>` → `int`, `non-empty-string` → `string`, `non-empty-list<T>` → `list<T>`.
-fn widen_refinements(t: &Ty) -> Ty {
-    t.transform(&mut |x| match x.kind() {
-        TyKind::IntRange { .. } => Some(Ty::int()),
-        TyKind::NonEmptyString | TyKind::NumericString | TyKind::ClassString(_) => {
-            Some(Ty::string())
-        }
-        TyKind::List {
-            elem,
-            non_empty: true,
-        } => Some(Ty::list(widen_refinements(elem))),
-        TyKind::Array {
-            key,
-            value,
-            non_empty: true,
-        } => Some(Ty::array(widen_refinements(key), widen_refinements(value))),
-        _ => None,
-    })
 }

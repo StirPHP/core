@@ -203,6 +203,22 @@ pub fn check_assignable(env: &dyn TypeEnv, from: &Ty, to: &Ty) -> Result<(), Mis
     Checker::new(env).check(from, to)
 }
 
+/// Would `from` be assignable to `to` if `mixed` were accepted everywhere, as PHPStan does
+/// below level 9? `array-key` counts because a plain `array` has it as its key.
+pub fn assignable_ignoring_mixed(env: &dyn TypeEnv, from: &Ty, to: &Ty) -> bool {
+    let mut ck = Checker::new(env);
+    ck.mixed_ok = true;
+    ck.ok(from, to)
+}
+
+/// `from` isn't always acceptable to `to`, but can be: PHPStan's "maybe", which it reports
+/// from level 7 (`checkUnionTypes`). It's a union with an acceptable member, or a wider type
+/// of the same kind: `object` for a class, `iterable` for an array, `string` for a
+/// `non-empty-string`, `array` for a `list`.
+pub fn maybe_assignable(env: &dyn TypeEnv, from: &Ty, to: &Ty) -> bool {
+    Checker::new(env).maybe(from, to, 0)
+}
+
 /// Mutual assignability (used for invariant positions).
 pub fn is_equivalent(env: &dyn TypeEnv, a: &Ty, b: &Ty) -> bool {
     a == b || (is_assignable(env, a, b) && is_assignable(env, b, a))
@@ -229,6 +245,8 @@ type Res = Result<(), Mismatch>;
 pub(crate) struct Checker<'a> {
     pub(crate) env: &'a dyn TypeEnv,
     depth: u32,
+    /// Accept `mixed` as a source: see [`assignable_ignoring_mixed`].
+    mixed_ok: bool,
 }
 
 fn lit(t: &Ty) -> Option<&LitValue> {
@@ -300,7 +318,11 @@ fn shape_is_list(s: &ShapeTy) -> bool {
 
 impl<'a> Checker<'a> {
     pub(crate) fn new(env: &'a dyn TypeEnv) -> Self {
-        Self { env, depth: 0 }
+        Self {
+            env,
+            depth: 0,
+            mixed_ok: false,
+        }
     }
 
     pub(crate) fn ok(&mut self, from: &Ty, to: &Ty) -> bool {
@@ -324,6 +346,7 @@ impl<'a> Checker<'a> {
         }
         match (from.kind(), to.kind()) {
             (K::Error, _) | (_, K::Error) | (K::Never, _) => return Ok(()),
+            (K::Mixed | K::Untyped | K::ArrayKey, _) if self.mixed_ok => return Ok(()),
             _ => {}
         }
         if let K::Union(ms) = from.kind() {
@@ -476,6 +499,19 @@ impl<'a> Checker<'a> {
             }
             (K::Class { .. }, K::Class { name: n2, args: a2 }) => {
                 return self.class(from, to, n2, a2);
+            }
+            // a string naming an existing class
+            (K::Literal(LitValue::String(s)), K::ClassString(of)) => {
+                let name = s.trim_start_matches('\\');
+                if name.is_empty() || !self.env.is_class(name) {
+                    return self.fail(from, to);
+                }
+                return match of {
+                    None => Ok(()),
+                    Some(b) => {
+                        self.arg(from, to, 0, Variance::Out, &Ty::class(name, Vec::new()), b)
+                    }
+                };
             }
             (K::ClassString(a), K::ClassString(b)) => {
                 return match (a, b) {
@@ -754,9 +790,8 @@ impl<'a> Checker<'a> {
                         return Err(Mismatch::new(from, to, R::FnRequiresParam { index: i }));
                     }
                 }
-                (None, Some(_)) => {
-                    return Err(Mismatch::new(from, to, R::FnExtraArgument { index: i }));
-                }
+                // PHP ignores the extra arguments a callback doesn't take
+                (None, Some(_)) => {}
                 (Some(ap), Some(bp)) => {
                     match (ap.kind, bp.kind) {
                         (ParamKind::Required, ParamKind::Optional | ParamKind::Variadic) => {
@@ -766,6 +801,10 @@ impl<'a> Checker<'a> {
                             return Err(Mismatch::new(from, to, R::FnExtraArgument { index: i }));
                         }
                         _ => {}
+                    }
+                    let any = |t: &Ty| matches!(t.kind(), K::Mixed | K::Untyped);
+                    if any(&ap.ty) || any(&bp.ty) {
+                        continue;
                     }
                     self.check(&bp.ty, &ap.ty).map_err(|cause| {
                         Mismatch::new(
@@ -779,6 +818,12 @@ impl<'a> Checker<'a> {
                     })?;
                 }
             }
+        }
+        // a caller that expects anything takes whatever comes back
+        if matches!(b.ret.kind(), K::Mixed | K::Untyped)
+            || matches!(a.ret.kind(), K::Mixed | K::Untyped)
+        {
+            return Ok(());
         }
         self.check(&a.ret, &b.ret).map_err(|cause| {
             Mismatch::new(
@@ -847,10 +892,146 @@ impl<'a> Checker<'a> {
             return Ok(());
         }
         for (i, (x, y)) in sargs.iter().zip(a2).enumerate() {
+            if self.mixed_ok && matches!(y.kind(), K::Mixed | K::Untyped) {
+                continue;
+            }
             let v = self.env.variance(n2, i);
             self.arg(from, to, i, v, x, y)?;
         }
         Ok(())
+    }
+
+    /// See [`maybe_assignable`].
+    fn maybe(&mut self, from: &Ty, to: &Ty, depth: u32) -> bool {
+        if depth > 16 {
+            return false;
+        }
+        if self.ok(from, to) {
+            return true;
+        }
+        let d = depth + 1;
+        let (f, t) = (from.kind(), to.kind());
+        if let K::Union(ms) = f {
+            return ms.iter().any(|m| self.maybe(m, to, d));
+        }
+        if let K::Union(ms) = t {
+            return ms.iter().any(|m| self.maybe(from, m, d));
+        }
+        if let K::Intersection(ms) = t {
+            return ms.iter().all(|m| self.maybe(from, m, d));
+        }
+        if let K::Intersection(ms) = f {
+            return ms.iter().any(|m| self.maybe(m, to, d));
+        }
+        match (f, t) {
+            (K::Mixed | K::Untyped, _) => true,
+            (K::Param { id, .. }, _) => self
+                .env
+                .param_bound(*id)
+                .is_none_or(|b| self.maybe(&b, to, d)),
+            (K::SelfType { class, .. }, _) => self.maybe(&class.clone(), to, d),
+            (K::Object, K::Class { .. } | K::SelfType { .. } | K::Callable { .. }) => true,
+            (K::Object, K::Iterable { .. }) => true,
+            (
+                K::Iterable { key, value },
+                K::Array {
+                    key: k2, value: v2, ..
+                },
+            ) => self.maybe(key, k2, d) && self.maybe(value, v2, d),
+            (K::Iterable { value, .. }, K::List { elem, .. }) => self.maybe(value, elem, d),
+            (K::Iterable { .. }, K::Shape(_)) => true,
+            (K::Iterable { .. }, K::Class { name, .. }) => {
+                self.env.is_interface(name)
+                    || self
+                        .find_super(to, &|n| n.eq_ignore_ascii_case("Traversable"))
+                        .is_some()
+            }
+            (K::Class { .. }, K::Iterable { .. }) => false,
+            (
+                K::Callable { .. },
+                K::String | K::NonEmptyString | K::List { .. } | K::Array { .. } | K::Shape(_),
+            ) => true,
+            (K::Callable { .. }, K::Class { name, .. }) => {
+                is_closure_name(name) || self.env.is_interface(name)
+            }
+            (K::Callable { closure: false, .. }, K::Callable { closure: true, .. }) => true,
+            (K::Class { name, .. }, K::Callable { .. }) => !self.env.is_final(name),
+            (K::ArrayKey, _) => is_int_like(to) || is_string_like(to),
+            (K::Scalar, _) => {
+                is_int_like(to)
+                    || is_float_like(to)
+                    || is_string_like(to)
+                    || is_bool_like(to)
+                    || matches!(t, K::Numeric | K::ArrayKey)
+            }
+            (K::Numeric, _) => {
+                is_int_like(to) || is_float_like(to) || matches!(t, K::NumericString | K::String)
+            }
+            (K::Bool, K::Literal(LitValue::Bool(_))) => true,
+            (
+                K::String | K::NonEmptyString | K::NumericString,
+                K::NonEmptyString | K::NumericString | K::ClassString(_),
+            ) => true,
+            (K::ClassString(_), K::ClassString(_)) => true,
+            (K::Literal(LitValue::String(s)), K::ClassString(_)) => {
+                let name = s.trim_start_matches('\\');
+                !name.is_empty() && self.env.is_class(name)
+            }
+            (K::Int | K::IntRange { .. }, K::IntRange { .. }) => true,
+            (K::Float, K::Numeric) => true,
+            (
+                K::Array { key, value, .. },
+                K::Array {
+                    key: k2, value: v2, ..
+                },
+            ) => self.maybe(key, k2, d) && self.maybe(value, v2, d),
+            (K::List { elem, .. }, K::List { elem: e2, .. }) => self.maybe(elem, e2, d),
+            (
+                K::List { elem, .. },
+                K::Array {
+                    key: k2, value: v2, ..
+                },
+            ) => self.maybe(&Ty::non_negative_int(), k2, d) && self.maybe(elem, v2, d),
+            (K::Array { key, value, .. }, K::List { elem, .. }) => {
+                self.maybe(key, &Ty::non_negative_int(), d) && self.maybe(value, elem, d)
+            }
+            (K::Shape(a), K::Array { key, value, .. }) => a.fields.iter().all(|fl| {
+                self.maybe(&shape_key_ty(&fl.key), key, d) && self.maybe(&fl.ty, value, d)
+            }),
+            (K::Shape(a), K::List { elem, .. }) => a
+                .fields
+                .iter()
+                .all(|fl| matches!(fl.key, ShapeKey::Int(_)) && self.maybe(&fl.ty, elem, d)),
+            (K::Array { key, value, .. }, K::Shape(b)) => b.fields.iter().all(|fl| {
+                fl.optional
+                    || (self.maybe(&shape_key_ty(&fl.key), key, d) && self.maybe(value, &fl.ty, d))
+            }),
+            (K::List { elem, .. }, K::Shape(b)) => b.fields.iter().all(|fl| {
+                fl.optional || (matches!(fl.key, ShapeKey::Int(_)) && self.maybe(elem, &fl.ty, d))
+            }),
+            (K::Shape(a), K::Shape(b)) => b.fields.iter().all(|fl| match a.field(&fl.key) {
+                Some(af) => self.maybe(&af.ty, &fl.ty, d),
+                None => fl.optional || !a.sealed,
+            }),
+            (K::Class { .. }, K::Class { name: n2, args: a2 }) => {
+                let Some(sup) = self.find_super(from, &|n| n == n2.as_str()) else {
+                    return false;
+                };
+                let K::Class { args: sargs, .. } = sup.kind() else {
+                    return false;
+                };
+                sargs
+                    .iter()
+                    .zip(a2)
+                    .enumerate()
+                    .all(|(i, (x, y))| match self.env.variance(n2, i) {
+                        Variance::Out => self.maybe(x, y, d),
+                        Variance::In => self.maybe(y, x, d),
+                        Variance::Invariant => self.ok(x, y) && self.ok(y, x),
+                    })
+            }
+            _ => false,
+        }
     }
 
     /// Key and value types when iterating `from`, if it is iterable.

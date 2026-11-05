@@ -50,6 +50,12 @@ pub trait TypeEnv {
         false
     }
 
+    /// Whether a class, interface, trait or enum called `class` exists.
+    fn is_class(&self, class: &str) -> bool {
+        let _ = class;
+        false
+    }
+
     /// The `__invoke` signature of `class`, if instances are callable.
     fn invoke_signature(&self, class: &str, args: &[Ty]) -> Option<FnTy> {
         let _ = (class, args);

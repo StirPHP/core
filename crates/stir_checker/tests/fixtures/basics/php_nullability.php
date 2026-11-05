@@ -27,9 +27,24 @@ function nullable_argument(?string $s): void {
     wants_string($s ?? "");
 }
 
-// KNOWN GAP: calling a method on a nullable value should be an error.
 function nullable_member_access(?Account $a): string {
+    return $a->label(); // error: SPHP0012
+}
+
+function nullable_member_guarded(?Account $a): string {
+    if ($a === null) {
+        return "";
+    }
     return $a->label();
+}
+
+function nullable_member_nullsafe(?Account $a): ?string {
+    return $a?->label();
+}
+
+function nullable_property_read(?Account $a): void {
+    $a->nothing ?? null;
+    isset($a->nothing);
 }
 
 function nullable_return(?string $s): string {

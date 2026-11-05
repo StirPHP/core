@@ -3,14 +3,17 @@
 //!
 //! | level | what is reported |
 //! |-------|------------------|
-//! | 0 | unknown classes/functions/methods/constants/variables, wrong argument counts, syntax |
-//! | 2 | PHPDoc validation (PHPDoc vs native types, generic arity, bounds), visibility, invalid operands |
-//! | 3 | return types, property types, other assignments |
+//! | 0 | unknown classes/functions/constants/variables, members on `$this`, wrong argument counts on it, static access, syntax |
+//! | 2 | the same on any other value, PHPDoc validation (PHPDoc vs native types, generic arity, bounds, variance), visibility, invalid operators and callables |
+//! | 3 | return types, property types, other assignments, PHPDoc types of overrides, iterating and indexing, writes to readonly properties |
 //! | 5 | argument types |
-//! | 6 | overrides (needs a [`Diagnostic::php_level`] tag) |
-//! | 7 | partially wrong unions (needs a [`Diagnostic::php_level`] tag) |
-//! | 9 | strictness about `mixed` / untyped values |
-//! | 10 | implicit `mixed` (needs a [`Diagnostic::php_level`] tag) |
+//! | 7 | what can be right but isn't always: unions with a right member, `object` for a class, `string` for a `non-empty-string` |
+//! | 8 | nullable values, as arguments and when reached through |
+//! | 9 | explicit `mixed` |
+//! | 10 | implicit `mixed`: no type at all |
+//!
+//! These follow PHPStan's documented levels and its `RuleLevelHelper`. Where a level depends
+//! on more than the kind of problem, the checker sets [`Diagnostic::php_level`].
 
 use std::path::Path;
 
@@ -33,11 +36,14 @@ pub fn min_level(d: &Diagnostic) -> u8 {
         codes::TYPE_MISMATCH if d.message.contains("in argument") => 5,
         codes::TYPE_MISMATCH | codes::RETURN_VALUE => 3,
         codes::INVALID_OPERAND | codes::NOT_CALLABLE if untyped => 9,
+        codes::REASSIGN_IMMUTABLE => 3,
+        codes::NULLABLE_ACCESS => 8,
         codes::INVALID_OPERAND
         | codes::NOT_CALLABLE
         | codes::VISIBILITY
         | codes::GENERIC_ARITY
         | codes::TYPE_BOUND
+        | codes::VARIANCE
         | PHPDOC_MISMATCH => 2,
         // Unknown symbols, argument counts and syntax.
         _ => 0,

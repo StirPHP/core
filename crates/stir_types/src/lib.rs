@@ -23,10 +23,15 @@ pub mod env;
 pub mod ops;
 pub mod ty;
 
-pub use assign::{Mismatch, MismatchReason, check_assignable, is_assignable, is_equivalent};
+pub use assign::{
+    Mismatch, MismatchReason, assignable_ignoring_mixed, check_assignable, is_assignable,
+    is_equivalent, maybe_assignable,
+};
 pub use compare::are_comparable;
 pub use env::{EmptyEnv, TypeEnv, Variance};
-pub use ops::{free_params, is_nullable, join, meet, narrow_away, narrow_to, subst, without_null};
+pub use ops::{
+    free_params, is_nullable, join, meet, narrow_away, narrow_to, strip_nulls, subst, without_null,
+};
 pub use ty::{
     FloatLit, FnParam, FnTy, LitValue, ParamId, ParamKind, SelfKind, ShapeField, ShapeKey, ShapeTy,
     Ty, TyKind, TyList,

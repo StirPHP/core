@@ -537,10 +537,11 @@ fn function_types() {
                 fun(vec![Ty::int().nullable()], Ty::int()),
                 false,
             ),
+            // PHP ignores the extra arguments a callback doesn't take
             (
                 fun(vec![Ty::int()], Ty::int()),
                 fun(vec![Ty::int(), Ty::int()], Ty::int()),
-                false,
+                true,
             ),
             (
                 fun(vec![Ty::int(), Ty::int()], Ty::int()),

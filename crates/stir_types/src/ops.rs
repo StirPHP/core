@@ -43,6 +43,17 @@ pub fn without_null(ty: &Ty) -> Ty {
     }
 }
 
+/// `ty` with the `null` of nullable types removed, nested ones too: what PHPStan compares
+/// below level 8 (`checkNullables`). A type that is only `null` stays.
+pub fn strip_nulls(ty: &Ty) -> Ty {
+    ty.transform(&mut |t| match t.kind() {
+        K::Union(ms) if ms.iter().any(Ty::is_null) => Some(strip_nulls(&Ty::union(
+            ms.iter().filter(|m| !m.is_null()).cloned(),
+        ))),
+        _ => None,
+    })
+}
+
 /// Whether a value of type `ty` may be null: `null`, nullable unions, `mixed`, untyped values,
 /// and type parameters whose bound is nullable or absent (an unbounded parameter is
 /// implicitly bounded by `mixed`).
