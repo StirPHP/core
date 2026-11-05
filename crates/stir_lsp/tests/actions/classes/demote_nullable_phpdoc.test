@@ -1,0 +1,22 @@
+=== action: Convert promoted parameters to properties
+=== level: 9
+=== input
+<?php
+class A {
+    /** @param class-string $type */
+    public function __construct‸(public ?string $type = null)
+    {
+    }
+}
+=== output
+<?php
+class A {
+    /** @var class-string|null */
+    public ?string $type;
+
+    /** @param class-string $type */
+    public function __construct(?string $type = null)
+    {
+        $this->type = $type;
+    }
+}

@@ -395,7 +395,15 @@ fn demote_offer<'c>(cx: &'c Cx<'c>, ctor: &SyntaxNode, out: &mut Vec<Offer<'c>>)
             .and_then(|(_, m)| m.sig.params.iter().find(|q| q.name == name[1..]))
             .and_then(|q| q.doc_ty.as_ref())
             .map(|t| cx.ctx().lower_plain(t))
-            .and_then(|t| doc_type(&mut namer, &t))
+            .and_then(|t| {
+                // a parameter's PHPDoc leaves out the null its default is
+                let nullable = ty.as_deref().is_some_and(|n| {
+                    let n = n.to_ascii_lowercase();
+                    n.starts_with('?') || n.split('|').any(|p| p.trim() == "null")
+                });
+                let t = if nullable { t.nullable() } else { t };
+                doc_type(&mut namer, &t)
+            })
             .filter(|d| ty.as_deref().is_none_or(|n| !n.eq_ignore_ascii_case(d)))
             .map_or_else(String::new, |d| format!("/** @var {d} */\n"));
         properties.push(match ty {
