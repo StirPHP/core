@@ -36,18 +36,17 @@ function php_declared_array(): array {
 /** @param array<string, int> $a */
 function php_array_functions_keep_types(array $a, string $s): string {
     foreach (array_keys($a) as $k) {
-        // KNOWN FALSE ALARM: `array_keys` of `array<string, int>` gives strings.
-        echo strlen($k); // error: SPHP0005
+        echo strlen($k);
+        echo $k + 1;
     }
     foreach (array_values($a) as $v) {
         echo $v + 1;
     }
     foreach (array_filter($a) as $k => $v) {
-        // KNOWN FALSE ALARM: `array_filter` keeps the string keys.
-        echo strlen($k) + $v; // error: SPHP0005
+        echo strlen($k) + $v;
+        echo strlen($v); // error: SPHP0005
     }
-    // KNOWN FALSE ALARM: both are `list<string>`, which `str_replace` accepts.
-    return str_replace(array_keys(["a" => "b"]), array_values(["a" => "b"]), $s); // error: SPHP0005
+    return str_replace(array_keys(["a" => "b"]), array_values(["a" => "b"]), $s);
 }
 
 function php_explode_is_indexable(string $s): string {

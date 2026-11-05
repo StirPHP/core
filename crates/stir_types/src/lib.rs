@@ -34,8 +34,8 @@ pub use ops::{
     strip_nulls, subst, without_null,
 };
 pub use ty::{
-    FloatLit, FnParam, FnTy, LitValue, ParamId, ParamKind, SelfKind, ShapeField, ShapeKey, ShapeTy,
-    Ty, TyKind, TyList,
+    ConditionalTy, FloatLit, FnParam, FnTy, LitValue, ParamId, ParamKind, SelfKind, ShapeField,
+    ShapeKey, ShapeTy, Ty, TyKind, TyList,
 };
 
 /// Re-exported so callers can build substitution maps without depending on `rustc-hash`.

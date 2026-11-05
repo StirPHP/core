@@ -28,8 +28,7 @@ function php_offset_may_be_missing(array $m): bool {
 }
 
 function php_known_non_null(string $s): string {
-    // KNOWN GAP: a pointless `??` on a non-null value should warn.
-    return $s ?? "";
+    return $s ?? ""; // warning: SPHP0021
 }
 
 function php_both_sides_narrow(?string $v): int {

@@ -43,17 +43,15 @@ fn stub_signatures_follow_attributes_and_phpdoc() {
     let ws = workspace(&db);
     let ctx = Ctx::new(&db, ws);
     let cases = [
-        // `$arrays` (PHP <= 7.4 only) is dropped, leaving the variadic.
-        "array_map(?callable $callback, array $array, array ...$arrays): array",
-        // `[optional]` in the PHPDoc; `int[]|string[]` refines `array`.
-        "array_keys(array $array, mixed $filter_value?, bool $strict?): array<int>|array<string>",
+        // A declaration of our own replaces the stub's.
+        "array_keys(array<K, mixed> $array, mixed $filter_value?, bool $strict?): list<K>",
         "str_contains(string $haystack, string $needle): bool",
         "json_decode(string $json, ?bool $associative?, int $depth?, int $flags?): mixed",
-        // `#[LanguageLevelTypeAware(['8.0' => 'string[]'])]` is the native type.
-        "explode(string $separator, string $string, int $limit?): array<string>",
+        // `#[LanguageLevelTypeAware(['8.0' => 'string'])]` is the native type.
+        "substr(string $string, int $offset, ?int $length?): string",
         // `int<0, max>` from the PHPDoc refines `int`.
         "strlen(string $string): non-negative-int",
-        "array_key_first(array $array): string|int|null",
+        "array_is_list(array $array): bool",
     ];
     for want in cases {
         let name = &want[..want.find('(').unwrap()];
@@ -66,6 +64,6 @@ fn stub_signatures_follow_attributes_and_phpdoc() {
             .iter()
             .map(|p| p.name.as_str())
             .collect::<Vec<_>>(),
-        ["TKey", "TValue"]
+        ["K", "V"]
     );
 }

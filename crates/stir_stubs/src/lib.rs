@@ -84,7 +84,11 @@ include!(concat!(env!("OUT_DIR"), "/stubs.rs"));
 /// All embedded stub files, grouped by extension in [`EXTENSIONS`] order and
 /// sorted by path within each extension.
 pub fn stub_files() -> impl Iterator<Item = StubFile> {
-    FILES.iter().copied()
+    FILES.iter().copied().chain(std::iter::once(StubFile {
+        extension: "override",
+        path: "override/functions.php",
+        text: include_str!("overrides.php"),
+    }))
 }
 
 /// The embedded extension directory names.

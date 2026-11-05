@@ -65,6 +65,13 @@ pub fn def_index(db: &dyn Db, ws: Workspace) -> Arc<DefIndex> {
         }
     }
     index.sort();
+    // our own stubs replace the phpstorm-stubs declarations of a function
+    for locs in index.functions.values_mut() {
+        let overriding = |l: &ItemLoc| l.file.path(db).starts_with("stubs://override");
+        if locs.iter().any(overriding) {
+            locs.retain(|l| overriding(l) || l.file.origin(db) != stir_db::FileOrigin::Stub);
+        }
+    }
     Arc::new(index)
 }
 

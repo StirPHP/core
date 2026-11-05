@@ -187,7 +187,7 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
                     .map(|pr| (p.name.clone(), false, pr.mods.visibility))
             });
         for (pname, is_static, visibility) in props.chain(promoted).collect::<Vec<_>>() {
-            let Some(p) = ctx.find_property(&anc, &pname) else {
+            let Some(p) = ctx.find_property(anc, &pname) else {
                 continue;
             };
             let member = MemberInfo {
@@ -203,7 +203,7 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
             push(&mut out, member, 1);
         }
         for k in &c.def.consts {
-            let ty = ctx.find_const(&anc, &k.name).unwrap_or_else(Ty::error);
+            let ty = ctx.find_const(anc, &k.name).unwrap_or_else(Ty::error);
             let member = MemberInfo {
                 name: k.name.clone(),
                 class: c.key.clone(),

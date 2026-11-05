@@ -5,16 +5,16 @@
 use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
 use stir_phpdoc::{
-    ConstExpr, DocBlock, GenericArg, Keyword, TagKind, TemplateVariance, TypeKind, TypeNode,
-    Variance as DocVariance,
+    ConditionalSubject, ConstExpr, DocBlock, GenericArg, Keyword, TagKind, TemplateVariance,
+    TypeKind, TypeNode, Variance as DocVariance,
 };
 use stir_syntax::{TextRange, TextSize};
 
 use crate::items::{TypeParamDef, Variance};
 use crate::name::{Fqn, Scope};
 use crate::type_ref::{
-    CallableParamRef, DocKeyword, Literal, PhpBuiltin, ShapeFieldRef, ShapeKeyRef, TypeRef,
-    TypeRefKind,
+    CallableParamRef, ConditionalSubjectRef, DocKeyword, Literal, PhpBuiltin, ShapeFieldRef,
+    ShapeKeyRef, TypeRef, TypeRefKind,
 };
 
 /// Type aliases in scope (`@phpstan-type` / `@phpstan-import-type`), by name.
@@ -132,15 +132,24 @@ impl DocCx<'_> {
                     closure,
                 }
             }
-            // Conditional types degrade to the union of their branches.
             TypeKind::Conditional(c) => {
-                let (a, b) = (self.lower(&c.if_type), self.lower(&c.else_type));
-                // what a template resolves to decides the branch, which isn't tracked: say
-                // nothing, and leave it to the native type if there is one
-                if mentions_type_param(&a) || mentions_type_param(&b) {
-                    return mixed();
+                let (mut then, mut otherwise) = (self.lower(&c.if_type), self.lower(&c.else_type));
+                if c.negated {
+                    std::mem::swap(&mut then, &mut otherwise);
                 }
-                TypeRefKind::Union(vec![a, b])
+                TypeRefKind::Conditional {
+                    subject: match &c.subject {
+                        ConditionalSubject::Type(t) => {
+                            ConditionalSubjectRef::Type(boxed(self.lower(t)))
+                        }
+                        ConditionalSubject::Parameter(v) => {
+                            ConditionalSubjectRef::Param(v.name.clone())
+                        }
+                    },
+                    target: boxed(self.lower(&c.target)),
+                    then: boxed(then),
+                    otherwise: boxed(otherwise),
+                }
             }
             TypeKind::Error(_) => return mixed(),
         };
@@ -450,17 +459,25 @@ pub fn optional_marker(doc: &DocBlock, name: &str) -> bool {
     })
 }
 
-fn mentions_type_param(t: &TypeRef) -> bool {
+/// Does `t` have a conditional type about a parameter?
+pub fn mentions_parameter(t: &TypeRef) -> bool {
     match &t.kind {
-        TypeRefKind::Param(_) => true,
-        TypeRefKind::Nullable(inner) => mentions_type_param(inner),
-        TypeRefKind::Union(ms) | TypeRefKind::Intersection(ms) => {
-            ms.iter().any(mentions_type_param)
+        TypeRefKind::Conditional {
+            subject,
+            then,
+            otherwise,
+            ..
+        } => {
+            matches!(subject, ConditionalSubjectRef::Param(_))
+                || mentions_parameter(then)
+                || mentions_parameter(otherwise)
         }
-        TypeRefKind::Named(_, args) => args.iter().any(mentions_type_param),
-        TypeRefKind::PhpList { elem, .. } => mentions_type_param(elem),
-        TypeRefKind::PhpArray { key, value, .. } | TypeRefKind::Iterable { key, value } => {
-            key.as_deref().is_some_and(mentions_type_param) || mentions_type_param(value)
+        TypeRefKind::Nullable(inner) => mentions_parameter(inner),
+        TypeRefKind::Union(ms) | TypeRefKind::Intersection(ms) => ms.iter().any(mentions_parameter),
+        TypeRefKind::Named(_, args) => args.iter().any(mentions_parameter),
+        TypeRefKind::PhpList { elem, .. } => mentions_parameter(elem),
+        TypeRefKind::PhpArray { value, .. } | TypeRefKind::Iterable { value, .. } => {
+            mentions_parameter(value)
         }
         _ => false,
     }

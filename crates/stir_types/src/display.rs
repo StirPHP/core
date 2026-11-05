@@ -131,6 +131,11 @@ fn print(w: &mut dyn Write, ty: &Ty, prec: Prec) -> fmt::Result {
             print_args(w, args)
         }
         K::Param { name, .. } => w.write_str(name),
+        K::Conditional(c) => write!(
+            w,
+            "({} is {} ? {} : {})",
+            c.subject, c.target, c.then, c.otherwise
+        ),
         K::SelfType { kind, .. } => w.write_str(match kind {
             SelfKind::Static => "static",
             SelfKind::This => "$this",

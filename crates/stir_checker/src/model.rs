@@ -89,6 +89,8 @@ pub struct ParamSig {
     pub range: TextRange,
     /// Has a PHPDoc type, its own or inherited: overrides inherit it.
     pub documented: bool,
+    /// The type of the default value, when it's a literal.
+    pub default: Option<Ty>,
 }
 
 /// A resolved function or method signature.
@@ -104,6 +106,9 @@ pub struct FnSig {
     pub ret_documented: bool,
     /// A declared function, not a function value: it takes untyped values.
     pub external: bool,
+    /// Parameters a conditional return type is about, with the type parameter standing in
+    /// for them.
+    pub conditional_on: Vec<(usize, ParamId)>,
 }
 
 impl FnSig {
@@ -205,6 +210,36 @@ impl<'db> Ctx<'db> {
 
     pub fn set_bound(&self, id: ParamId, bound: Ty) {
         self.params.borrow_mut().bounds.insert(id, bound);
+    }
+
+    /// Decides the conditional types in `ty`: a subject that's known to fit or not to fit picks
+    /// a branch, and one that may fit, like one still unknown, leaves it at either.
+    pub fn decide_conditionals(&self, ty: &Ty) -> Ty {
+        ty.transform(&mut |t| {
+            let TyKind::Conditional(c) = t.kind() else {
+                return None;
+            };
+            let (subject, target) = (&c.subject, &c.target);
+            let both = || {
+                Ty::union([
+                    self.decide_conditionals(&c.then),
+                    self.decide_conditionals(&c.otherwise),
+                ])
+            };
+            let unknown = !stir_types::free_params(subject).is_empty()
+                || subject.is_error()
+                || subject.is_untyped()
+                || matches!(subject.kind(), TyKind::Mixed);
+            Some(if unknown {
+                both()
+            } else if stir_types::is_assignable(self, subject, target) {
+                self.decide_conditionals(&c.then)
+            } else if stir_types::meet(self, subject, target).is_never() {
+                self.decide_conditionals(&c.otherwise)
+            } else {
+                both()
+            })
+        })
     }
 
     /// Lowers declared type parameters, registering their bounds.
@@ -524,6 +559,30 @@ impl<'db> Ctx<'db> {
                 let args: Vec<Ty> = args.iter().map(|a| self.lower(a, cx, sink)).collect();
                 self.lower_named(fqn.as_str(), args, tr.range, sink)
             }
+            TypeRefKind::Conditional {
+                subject,
+                target,
+                then,
+                otherwise,
+            } => {
+                let subject = match subject {
+                    stir_hir::type_ref::ConditionalSubjectRef::Type(t) => self.lower(t, cx, sink),
+                    stir_hir::type_ref::ConditionalSubjectRef::Param(name) => {
+                        let key = format!("${name}");
+                        cx.generics
+                            .iter()
+                            .rev()
+                            .find(|(n, _)| *n == key)
+                            .map_or_else(Ty::error, |(_, t)| t.clone())
+                    }
+                };
+                Ty::new(TyKind::Conditional(Box::new(stir_types::ConditionalTy {
+                    subject,
+                    target: self.lower(target, cx, sink),
+                    then: self.lower(then, cx, sink),
+                    otherwise: self.lower(otherwise, cx, sink),
+                })))
+            }
             TypeRefKind::SelfGeneric(builtin, args) => {
                 let base = match builtin {
                     PhpBuiltin::Parent => cx.parent_ty.clone(),
@@ -809,6 +868,20 @@ impl<'db> Ctx<'db> {
         let mut cx = outer.clone();
         cx.generics
             .extend(type_params.iter().map(|p| (p.name.clone(), p.ty.clone())));
+        // a parameter a conditional type is about acts as a type parameter
+        let mut conditional_on = Vec::new();
+        if sig
+            .doc_ret
+            .as_ref()
+            .is_some_and(stir_hir::doc::mentions_parameter)
+        {
+            for (i, p) in sig.params.iter().enumerate() {
+                let name = SmolStr::new(format!("${}", p.name));
+                let id = self.param_id(&format!("arg:{owner}"), &name);
+                cx.generics.push((name.clone(), Ty::param(id, name)));
+                conditional_on.push((i, id));
+            }
+        }
         let params = sig
             .params
             .iter()
@@ -827,6 +900,7 @@ impl<'db> Ctx<'db> {
             ret_declared,
             ret_documented: sig.doc_ret.is_some(),
             external: true,
+            conditional_on,
         }
     }
 
@@ -843,6 +917,7 @@ impl<'db> Ctx<'db> {
             by_ref: p.by_ref,
             range: p.range,
             documented: p.doc_ty.is_some(),
+            default: p.default_ty.as_ref().map(|t| self.lower(t, cx, sink)),
         }
     }
 

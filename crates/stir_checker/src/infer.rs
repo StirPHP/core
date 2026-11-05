@@ -120,6 +120,38 @@ impl Inference {
                 self.unify_depth(env, pv, a, depth + 1);
             }
             (
+                TyKind::Array {
+                    key: pk, value: pv, ..
+                }
+                | TyKind::Iterable { key: pk, value: pv },
+                TyKind::Shape(s),
+            ) => {
+                let keys = s.fields.iter().map(|f| match &f.key {
+                    stir_types::ShapeKey::Int(_) => Ty::int(),
+                    stir_types::ShapeKey::Str(_) => Ty::string(),
+                });
+                let (keys, values) = (
+                    Ty::union(keys.collect::<Vec<_>>()),
+                    Ty::union(
+                        s.fields
+                            .iter()
+                            .map(|f| widen_literals(&f.ty))
+                            .collect::<Vec<_>>(),
+                    ),
+                );
+                if !s.fields.is_empty() {
+                    self.unify_depth(env, pk, &keys, depth + 1);
+                    self.unify_depth(env, pv, &values, depth + 1);
+                }
+            }
+            (TyKind::List { elem: p, .. }, TyKind::Shape(s)) => {
+                let values = s.fields.iter().map(|f| widen_literals(&f.ty));
+                let values = Ty::union(values.collect::<Vec<_>>());
+                if !s.fields.is_empty() {
+                    self.unify_depth(env, p, &values, depth + 1);
+                }
+            }
+            (
                 TyKind::Callable { sig: Some(pf), .. },
                 TyKind::Callable {
                     sig: Some(af),

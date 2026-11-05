@@ -65,6 +65,13 @@ pub enum TypeRefKind {
     Php(PhpBuiltin),
     /// A type parameter in scope.
     Param(SmolStr),
+    /// `(subject is target ? then : otherwise)`.
+    Conditional {
+        subject: ConditionalSubjectRef,
+        target: Box<TypeRef>,
+        then: Box<TypeRef>,
+        otherwise: Box<TypeRef>,
+    },
     /// `self<A, B>`, `static<A, B>` or `parent<A, B>` in PHPDoc: the class with these arguments.
     SelfGeneric(PhpBuiltin, Vec<TypeRef>),
     /// A class, interface or enum.
@@ -117,6 +124,15 @@ pub enum TypeRefKind {
         name: SmolStr,
     },
     Error,
+}
+
+/// What a conditional type is about.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ConditionalSubjectRef {
+    /// A template.
+    Type(Box<TypeRef>),
+    /// A parameter of the function, by name.
+    Param(SmolStr),
 }
 
 /// PHPStan-only keyword types.

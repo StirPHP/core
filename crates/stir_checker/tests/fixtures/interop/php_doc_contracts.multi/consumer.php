@@ -23,9 +23,8 @@ function php_conditional_return(string $a): int {
 }
 
 function php_shapes(): void {
-    // KNOWN FALSE ALARM: array literals should be checked against the shape's keys.
-    register_thing(["apply" => "strlen", "name" => "a"]); // error: SPHP0005
-    register_thing(["name" => "a"]); // error: SPHP0005
+    register_thing(["apply" => "strlen", "name" => "a"]);
+    register_thing(["name" => "a"]);
     register_thing(["name" => 1]); // error: SPHP0005
     register_thing(["apply" => "strlen"]); // error: SPHP0005
 }

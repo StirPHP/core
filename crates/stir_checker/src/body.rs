@@ -1237,18 +1237,38 @@ impl<'a, 'db> Checker<'a, 'db> {
                 }
             }
             ARRAY_EXPR | LIST_EXPR => {
+                let mut position = 0;
                 for elem in target.children_of(ARRAY_ELEM) {
                     let parts = exprs_of(&elem);
-                    if let Some(last) = parts.last() {
-                        let elem_ty = self.index_type(&ty, None).unwrap_or_else(Ty::untyped);
-                        self.bind_target(last, elem_ty);
-                    }
+                    let Some(last) = parts.last() else {
+                        position += 1;
+                        continue;
+                    };
+                    let key = if elem.has_token(FAT_ARROW) {
+                        parts.first().map(|k| self.expr(k, None))
+                    } else {
+                        position += 1;
+                        Some(Ty::lit_int(position - 1))
+                    };
+                    let elem_ty = self.destructured(&ty, key.as_ref());
+                    self.bind_target(last, elem_ty);
                 }
             }
             _ => {
                 self.expr(target, None);
             }
         }
+    }
+
+    /// What destructuring gets at `key` of a value of type `ty`. If it isn't there it's null.
+    fn destructured(&self, ty: &Ty, key: Option<&Ty>) -> Ty {
+        let found: Vec<Ty> = ty
+            .members()
+            .iter()
+            .filter(|m| !m.is_null())
+            .map(|m| self.index_type(m, key).unwrap_or_else(Ty::untyped))
+            .collect();
+        Ty::union(found)
     }
 
     fn iter_types(&mut self, range: TextRange, ty: &Ty) -> (Ty, Ty) {
@@ -1301,7 +1321,22 @@ impl<'a, 'db> Checker<'a, 'db> {
             TyKind::Array { key, value, .. } | TyKind::Iterable { key, value } => {
                 (key.clone(), value.clone())
             }
-            TyKind::Shape(_) => (Ty::array_key(), Ty::mixed()),
+            TyKind::Shape(s) => {
+                if s.fields.is_empty() {
+                    return (Ty::array_key(), Ty::mixed());
+                }
+                let keys = s.fields.iter().map(|f| match &f.key {
+                    stir_types::ShapeKey::Int(n) => Ty::lit_int(*n),
+                    stir_types::ShapeKey::Str(k) => Ty::lit_string(k.clone()),
+                });
+                let keys = widen_literals(&Ty::union(keys.collect::<Vec<_>>()));
+                let values = s.fields.iter().map(|f| f.ty.clone()).collect::<Vec<_>>();
+                let mut values = widen_literals(&Ty::union(values));
+                if !s.sealed {
+                    values = values.nullable();
+                }
+                (keys, values)
+            }
             // an object of all those types: if one is iterable, it is
             TyKind::Intersection(ms) => {
                 for m in ms.iter() {
@@ -1464,7 +1499,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             self.declare(&p.name, ty, LocalKind::Param, p.range);
         }
         self.fns.push(FnCx {
-            ret: sig.ret.clone(),
+            ret: self.ctx.decide_conditionals(&sig.ret),
             infer_ret: false,
             returns: Vec::new(),
         });
@@ -2527,6 +2562,21 @@ impl<'a, 'db> Checker<'a, 'db> {
                 };
 
                 let indexed = stir_types::without_null(&bt);
+                if let (TyKind::Shape(s), Some(key), Some(i)) =
+                    (indexed.kind(), it.as_ref().and_then(shape_key_of), idx)
+                    && s.field(&key).is_none()
+                    && s.sealed
+                    && self.probing == 0
+                    && !written_through
+                    && !is_write_target(node)
+                {
+                    self.error(
+                        i.text_range(),
+                        codes::INVALID_OPERAND,
+                        format!("offset {} doesn't exist on `{bt}`", text_of(i)),
+                    );
+                    self.tag_level(3);
+                }
                 if indexed.is_union() {
                     let (ok, bad): (Vec<Ty>, Vec<Ty>) = indexed
                         .members()
@@ -2846,6 +2896,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 self.probing += 1;
                 let l = self.expr(&es[0], expected.map(|e| e.clone().nullable()).as_ref());
                 self.probing -= 1;
+                self.check_pointless_coalesce(&es[0], &l);
                 // `$m[$k] ?? []`: the fallback takes the left side's type
                 let fallback = stir_types::without_null(&l);
                 let r = self.expr(&es[1], expected.or((!l.is_error()).then_some(&fallback)));
@@ -2875,6 +2926,33 @@ impl<'a, 'db> Checker<'a, 'db> {
             },
             _ => Ty::error(),
         }
+    }
+
+    /// `$s ?? "x"` on a variable that's always there and can't be null.
+    fn check_pointless_coalesce(&mut self, left: &SyntaxNode, ty: &Ty) {
+        if left.kind() != VARIABLE_EXPR
+            || ty.is_error()
+            || ty.is_never()
+            || ty.is_untyped()
+            || stir_types::is_nullable(self.ctx, ty)
+        {
+            return;
+        }
+        let name = text_of(left);
+        let name = name.trim_start_matches('$');
+        if self.lookup(name).is_none_or(|l| l.maybe_undefined) {
+            return;
+        }
+        self.diags.push(
+            Diagnostic::error(
+                self.path.clone(),
+                left.text_range(),
+                codes::UNNECESSARY_NULL_CHECK,
+                format!("`${name}` is always set and is `{ty}`, which can't be null"),
+            )
+            .with_severity(stir_db::Severity::Warning)
+            .with_php_level(1),
+        );
     }
 
     fn arith_result(&self, op: SyntaxKind, l: &Ty, r: &Ty) -> Ty {
@@ -3163,7 +3241,12 @@ impl<'a, 'db> Checker<'a, 'db> {
             return None;
         }
         let current = self.lookup(name).map(|l| l.ty.clone());
-        let array_like = |t: &Ty| matches!(t.kind(), TyKind::Array { .. } | TyKind::List { .. });
+        let array_like = |t: &Ty| {
+            matches!(
+                t.kind(),
+                TyKind::Array { .. } | TyKind::List { .. } | TyKind::Shape(_)
+            )
+        };
         let grows = match &current {
             None => true,
             Some(t) if t.is_union() => t.members().iter().any(array_like),
@@ -3172,38 +3255,42 @@ impl<'a, 'db> Checker<'a, 'db> {
         if !grows {
             return None;
         }
+        indexes.reverse();
         let keys: Vec<Option<Ty>> = indexes
             .iter()
-            .map(|i| i.as_ref().map(|i| widen_literals(&self.expr(i, None))))
+            .map(|i| i.as_ref().map(|i| self.expr(i, None)))
             .collect();
-        let vt = widen_literals(&self.expr(rhs, None));
+        let vt = self.expr(rhs, None);
         self.types.insert(rhs.text_range(), vt.clone());
+        let in_loop = !self.loops.is_empty();
         let value = match op {
             EQ => vt,
-            _ => Ty::mixed(),
+            DOT_EQ => Ty::string(),
+            _ => {
+                let at = keys.iter().fold(current.clone(), |c, k| {
+                    c.and_then(|c| self.index_type(&c, k.as_ref()))
+                });
+                match (op, at) {
+                    (QUESTION2_EQ, Some(at)) => {
+                        stir_types::join(self.ctx, &stir_types::without_null(&at), &vt)
+                    }
+                    (QUESTION2_EQ, None) => vt,
+                    (PLUS_EQ | MINUS_EQ | STAR_EQ | SLASH_EQ | PERCENT_EQ | POW_EQ, Some(at)) => {
+                        let k = match op {
+                            PLUS_EQ => PLUS,
+                            MINUS_EQ => MINUS,
+                            STAR_EQ => STAR,
+                            SLASH_EQ => SLASH,
+                            PERCENT_EQ => PERCENT,
+                            _ => POW,
+                        };
+                        self.arith_result(k, &at, &vt)
+                    }
+                    _ => Ty::mixed(),
+                }
+            }
         };
-        // an empty array takes the shape of what is written to it
-        let existing = current.as_ref().filter(|t| {
-            !matches!(t.kind(), TyKind::List { elem, .. } if matches!(elem.kind(), TyKind::Never))
-        });
-        let grown = match (keys.as_slice(), existing.map(Ty::kind)) {
-            ([None], None | Some(TyKind::Null)) => Ty::list(value),
-            ([None], Some(TyKind::List { elem, .. })) => Ty::list(Ty::union([elem.clone(), value])),
-            ([Some(k)], Some(TyKind::List { elem, .. })) => Ty::array(
-                Ty::union([Ty::int(), k.clone()]),
-                Ty::union([elem.clone(), value]),
-            ),
-            ([None], Some(TyKind::Array { key, value: v, .. })) => Ty::array(
-                Ty::union([key.clone(), Ty::int()]),
-                Ty::union([v.clone(), value]),
-            ),
-            ([Some(k)], Some(TyKind::Array { key, value: v, .. })) => Ty::array(
-                Ty::union([key.clone(), k.clone()]),
-                Ty::union([v.clone(), value]),
-            ),
-            ([Some(k)], None | Some(TyKind::Null)) => Ty::array(k.clone(), value),
-            _ => Ty::array(Ty::array_key(), Ty::mixed()),
-        };
+        let grown = self.array_written(current.as_ref(), &keys, &value, in_loop);
         self.forget_properties_of(name);
         match self.lookup_mut(name) {
             Some(l) => {
@@ -3214,6 +3301,123 @@ impl<'a, 'db> Checker<'a, 'db> {
             None => self.declare(name, grown, LocalKind::Variable, root.text_range()),
         }
         Some(())
+    }
+
+    /// The type of an array after writing `value` at `keys` in it. Outside loops a known key
+    /// keeps it a shape. In a loop it can't be said how many rounds there are, so `$a[] = v`
+    /// makes a list.
+    fn array_written(
+        &self,
+        current: Option<&Ty>,
+        keys: &[Option<Ty>],
+        value: &Ty,
+        in_loop: bool,
+    ) -> Ty {
+        let Some((key, rest)) = keys.split_first() else {
+            return value.clone();
+        };
+        if let Some(c) = current.filter(|c| c.is_union()) {
+            let members = c.members().iter().filter_map(|m| match m.kind() {
+                TyKind::Null | TyKind::Literal(LitValue::Bool(false)) => None,
+                _ => Some(self.array_written(Some(m), keys, value, in_loop)),
+            });
+            return Ty::union(members.collect::<Vec<_>>());
+        }
+        let at = current.and_then(|c| self.index_type(c, key.as_ref()));
+        let new = if rest.is_empty() {
+            value.clone()
+        } else {
+            self.array_written(at.as_ref(), rest, value, in_loop)
+        };
+        let shape_key = key.as_ref().and_then(shape_key_of);
+        let empty = match current.map(Ty::kind) {
+            None | Some(TyKind::Null) => true,
+            Some(TyKind::List { elem, .. }) => elem.is_never(),
+            _ => false,
+        };
+        if empty {
+            return match (key, shape_key) {
+                (None, _) if in_loop => Ty::non_empty_list(widen_literals(&new)),
+                (None, _) => Ty::shape(vec![stir_types::ShapeField::new(0, new)], true),
+                (Some(_), Some(k)) if !in_loop => {
+                    Ty::shape(vec![stir_types::ShapeField::new(k, new)], true)
+                }
+                (Some(k), _) => Ty::non_empty_array(widen_literals(k), widen_literals(&new)),
+            };
+        }
+        match current.map(Ty::kind) {
+            Some(TyKind::Shape(s)) => {
+                match (key, shape_key) {
+                    (Some(_), Some(k))
+                        if s.field(&k).is_some()
+                            || (!in_loop && s.fields.len() < MAX_SHAPE_FIELDS) =>
+                    {
+                        let mut fields = s.fields.clone();
+                        set_shape_field(&mut fields, k, new);
+                        return Ty::shape(fields, s.sealed);
+                    }
+                    (None, _) if !in_loop && s.fields.len() < MAX_SHAPE_FIELDS => {
+                        let next = s
+                            .fields
+                            .iter()
+                            .filter_map(|f| match f.key {
+                                stir_types::ShapeKey::Int(n) => Some(n + 1),
+                                _ => None,
+                            })
+                            .max()
+                            .unwrap_or(0);
+                        let mut fields = s.fields.clone();
+                        set_shape_field(&mut fields, stir_types::ShapeKey::Int(next), new);
+                        return Ty::shape(fields, s.sealed);
+                    }
+                    _ => {}
+                }
+                let found = self.diags.len();
+                let _ = found;
+                let keys_now = s.fields.iter().map(|f| match &f.key {
+                    stir_types::ShapeKey::Int(_) => Ty::int(),
+                    stir_types::ShapeKey::Str(_) => Ty::string(),
+                });
+                let values = s.fields.iter().map(|f| widen_literals(&f.ty));
+                let all_ints = s
+                    .fields
+                    .iter()
+                    .all(|f| matches!(f.key, stir_types::ShapeKey::Int(_)));
+                if key.is_none() && all_ints {
+                    return Ty::non_empty_list(Ty::union(
+                        values
+                            .chain(std::iter::once(widen_literals(&new)))
+                            .collect::<Vec<_>>(),
+                    ));
+                }
+                let new_key = key.as_ref().map_or_else(Ty::int, widen_literals);
+                Ty::non_empty_array(
+                    Ty::union(keys_now.chain(std::iter::once(new_key)).collect::<Vec<_>>()),
+                    Ty::union(
+                        values
+                            .chain(std::iter::once(widen_literals(&new)))
+                            .collect::<Vec<_>>(),
+                    ),
+                )
+            }
+            Some(TyKind::List { elem, .. }) => match key {
+                None => Ty::non_empty_list(Ty::union([elem.clone(), widen_literals(&new)])),
+                Some(k) => Ty::non_empty_array(
+                    Ty::union([Ty::int(), widen_literals(k)]),
+                    Ty::union([elem.clone(), widen_literals(&new)]),
+                ),
+            },
+            Some(TyKind::Array {
+                key: k0, value: v0, ..
+            }) => Ty::non_empty_array(
+                Ty::union([
+                    k0.clone(),
+                    key.as_ref().map_or_else(Ty::int, widen_literals),
+                ]),
+                Ty::union([v0.clone(), widen_literals(&new)]),
+            ),
+            _ => Ty::array(Ty::array_key(), Ty::mixed()),
+        }
     }
 
     /// A variable passed by reference in PHP code may be written by the callee, and
@@ -3228,7 +3432,9 @@ impl<'a, 'db> Checker<'a, 'db> {
             Some(l) if l.kind == LocalKind::This => {}
             Some(l) => {
                 l.maybe_undefined = false;
-                if !matches!(l.ty.kind(), TyKind::Array { .. } | TyKind::List { .. }) {
+                // what it holds now is what the callee made of it
+                let keeps = matches!(l.ty.kind(), TyKind::Array { .. } | TyKind::List { .. });
+                if !keeps {
                     l.ty = Ty::untyped();
                     l.declared = Ty::untyped();
                 }
@@ -3292,8 +3498,22 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     // ------------------------------------------------------------ collections
 
-    fn index_type(&self, base: &Ty, _index: Option<&Ty>) -> Option<Ty> {
+    fn index_type(&self, base: &Ty, index: Option<&Ty>) -> Option<Ty> {
         match base.kind() {
+            TyKind::Shape(s) => {
+                let key = index.and_then(shape_key_of);
+                if let Some(key) = &key {
+                    return Some(match s.field(key) {
+                        Some(f) => f.ty.clone(),
+                        None => Ty::untyped(),
+                    });
+                }
+                if s.fields.is_empty() || !s.sealed {
+                    return Some(Ty::mixed());
+                }
+                let values = s.fields.iter().map(|f| f.ty.clone()).collect::<Vec<_>>();
+                Some(widen_literals(&Ty::union(values)))
+            }
             // in a loop, an array that starts empty may have been written to by now
             TyKind::List { elem, .. } if matches!(elem.kind(), TyKind::Never) => {
                 Some(Ty::untyped())
@@ -3310,7 +3530,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             | TyKind::NumericString
             | TyKind::ClassString(_) => Some(Ty::string()),
             TyKind::Literal(LitValue::String(_)) => Some(Ty::string()),
-            TyKind::Shape(_) | TyKind::Mixed => Some(Ty::mixed()),
+            TyKind::Mixed => Some(Ty::mixed()),
             TyKind::Error => Some(Ty::error()),
             TyKind::Never => Some(Ty::never()),
             TyKind::Param { .. } => Some(Ty::untyped()),
@@ -3333,6 +3553,19 @@ impl<'a, 'db> Checker<'a, 'db> {
         {
             return array.clone();
         }
+        // what the elements are expected to be, for closures and nested literals
+        let expected_at = |key: Option<&stir_types::ShapeKey>| {
+            let e = expected?;
+            e.members().iter().find_map(|m| match m.kind() {
+                TyKind::Array { value, .. } => Some(value.clone()),
+                TyKind::List { elem, .. } => Some(elem.clone()),
+                TyKind::Shape(s) => key.and_then(|k| s.field(k)).map(|f| f.ty.clone()),
+                _ => None,
+            })
+        };
+        // while keys are known it's a shape, as long as it's a small one
+        let mut fields: Option<Vec<stir_types::ShapeField>> = Some(Vec::new());
+        let mut next_index = 0i64;
         let mut keys = Vec::new();
         let mut vals = Vec::new();
         let mut keyed = false;
@@ -3342,33 +3575,84 @@ impl<'a, 'db> Checker<'a, 'db> {
             match parts.as_slice() {
                 [k, v] if e.has_token(FAT_ARROW) => {
                     keyed = true;
-                    keys.push(self.expr(k, None));
-                    vals.push(self.expr(v, None));
+                    let kt = self.expr(k, None);
+                    let key = shape_key_of(&kt);
+                    let vt = self.expr(v, expected_at(key.as_ref()).as_ref());
+                    match (key, &mut fields) {
+                        (Some(key), Some(fs)) => {
+                            if let stir_types::ShapeKey::Int(n) = key {
+                                next_index = next_index.max(n + 1);
+                            }
+                            set_shape_field(fs, key, vt.clone());
+                        }
+                        _ => fields = None,
+                    }
+                    keys.push(kt);
+                    vals.push(vt);
                 }
                 [v] if spread => {
                     let t = self.expr(v, expected);
                     match t.kind() {
                         TyKind::List { elem, .. } => vals.push(elem.clone()),
-                        _ => vals.push(Ty::error()),
+                        TyKind::Array { key, value, .. } => {
+                            if !matches!(key.kind(), TyKind::Int) {
+                                keyed = true;
+                                keys.push(key.clone());
+                            }
+                            vals.push(value.clone());
+                        }
+                        TyKind::Shape(s) => {
+                            for f in &s.fields {
+                                vals.push(f.ty.clone());
+                            }
+                        }
+                        _ => {
+                            let found = self.diags.len();
+                            let (k, it) = self.iter_types(v.text_range(), &t);
+                            self.diags.truncate(found);
+                            if !matches!(k.kind(), TyKind::Int) {
+                                keyed = true;
+                                keys.push(k);
+                            }
+                            vals.push(it);
+                        }
                     }
+                    fields = None;
                 }
-                [v] => vals.push(self.expr(v, None)),
+                [v] => {
+                    let key = stir_types::ShapeKey::Int(next_index);
+                    let vt = self.expr(v, expected_at(Some(&key)).as_ref());
+                    if let Some(fs) = &mut fields {
+                        set_shape_field(fs, key, vt.clone());
+                    }
+                    next_index += 1;
+                    vals.push(vt);
+                }
                 _ => {}
             }
         }
+        if let Some(fs) = fields
+            && fs.len() <= MAX_SHAPE_FIELDS
+            && !fs.is_empty()
+        {
+            return Ty::shape(fs, true);
+        }
         if keyed {
-            return Ty::array(
-                if keys.is_empty() {
-                    Ty::array_key()
-                } else {
-                    widen_literals(&Ty::union(keys))
-                },
-                if vals.is_empty() {
-                    Ty::mixed()
-                } else {
-                    widen_literals(&Ty::union(vals))
-                },
-            );
+            let key = if keys.is_empty() {
+                Ty::array_key()
+            } else {
+                widen_literals(&Ty::union(keys))
+            };
+            let value = if vals.is_empty() {
+                Ty::mixed()
+            } else {
+                widen_literals(&Ty::union(vals))
+            };
+            return if elems.is_empty() {
+                Ty::array(key, value)
+            } else {
+                Ty::non_empty_array(key, value)
+            };
         }
         Ty::list(if vals.is_empty() {
             Ty::never()
@@ -3802,7 +4086,21 @@ impl<'a, 'db> Checker<'a, 'db> {
                 &format!("argument `{}` of `{}`", param.name, sig.name),
             );
         }
-        let ret = inf.apply(&subst_cls(&sig.ret));
+        // what a conditional return type is about
+        for (index, id) in &sig.conditional_on {
+            let given = assigned
+                .iter()
+                .position(|p| *p == Some(*index))
+                .and_then(|a| arg_tys[a].clone());
+            let param = &sig.params[*index];
+            let t = given
+                .or_else(|| param.default.clone())
+                .unwrap_or_else(|| param.ty.clone());
+            inf.solved.insert(*id, inf.apply(&t));
+        }
+        let ret = self
+            .ctx
+            .decide_conditionals(&inf.apply(&subst_cls(&sig.ret)));
         self.last_solved.clone_from(&inf.solved);
         self.last_solved
             .extend(class_map.iter().map(|(k, v)| (*k, v.clone())));
@@ -4055,12 +4353,14 @@ impl<'a, 'db> Checker<'a, 'db> {
                             by_ref: false,
                             range: node.text_range(),
                             documented: false,
+                            default: None,
                         })
                         .collect(),
                     ret: f.ret.clone(),
                     ret_declared: true,
                     ret_documented: false,
                     external: false,
+                    conditional_on: Vec::new(),
                 };
                 self.check_args(node, &sig, &FxHashMap::default(), expected, &[])
             }
@@ -4203,6 +4503,9 @@ impl<'a, 'db> Checker<'a, 'db> {
             TyKind::Never => Ty::never(),
             TyKind::Class { .. } | TyKind::SelfType { .. } | TyKind::Intersection(_) => {
                 let cls = class_of(recv);
+                if let Some(t) = self.enum_property(&cls, name) {
+                    return t;
+                }
                 match self.ctx.find_property(&cls, name) {
                     Some(p) => {
                         let class = p.class.clone();
@@ -4249,6 +4552,28 @@ impl<'a, 'db> Checker<'a, 'db> {
                 );
                 Ty::error()
             }
+        }
+    }
+
+    /// `->name` and, on a backed enum, `->value`.
+    fn enum_property(&self, cls: &Ty, name: &str) -> Option<Ty> {
+        let TyKind::Class { name: class, .. } = cls.kind() else {
+            return None;
+        };
+        let c = self.ctx.class(class)?;
+        if c.kind() != ClassKind::Enum {
+            return None;
+        }
+        match name {
+            "name" => Some(Ty::string()),
+            "value" => {
+                let backing = c.def.enum_backing.as_ref()?;
+                Some(
+                    self.ctx
+                        .lower(backing, &LowerCx::default(), &mut Vec::new()),
+                )
+            }
+            _ => None,
         }
     }
 
@@ -5069,6 +5394,28 @@ impl<'a, 'db> Checker<'a, 'db> {
             self.frames = state;
         }
         result.unwrap_or_else(Ty::never)
+    }
+}
+
+/// Array literals with more keys than this are treated as arrays of what they hold.
+const MAX_SHAPE_FIELDS: usize = 64;
+
+/// The shape key a literal stands for.
+fn shape_key_of(t: &Ty) -> Option<stir_types::ShapeKey> {
+    match t.kind() {
+        TyKind::Literal(LitValue::Int(n)) => Some(stir_types::ShapeKey::Int(*n)),
+        TyKind::Literal(LitValue::String(s)) => Some(stir_types::ShapeKey::from_str_key(s)),
+        _ => None,
+    }
+}
+
+fn set_shape_field(fields: &mut Vec<stir_types::ShapeField>, key: stir_types::ShapeKey, ty: Ty) {
+    match fields.iter_mut().find(|f| f.key == key) {
+        Some(f) => {
+            f.ty = ty;
+            f.optional = false;
+        }
+        None => fields.push(stir_types::ShapeField::new(key, ty)),
     }
 }
 

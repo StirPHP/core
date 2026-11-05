@@ -3,7 +3,7 @@ mod common;
 use common::*;
 use pretty_assertions::assert_eq;
 use stir_types::{
-    EmptyEnv, FnParam, FnTy, MismatchReason, ShapeField, ShapeKey, Ty, Variance, check_assignable,
+    EmptyEnv, FnParam, FnTy, MismatchReason, ShapeField, Ty, Variance, check_assignable,
     is_assignable, is_equivalent,
 };
 
@@ -391,7 +391,8 @@ fn php_arrays_and_shapes() {
             (Ty::plain_array(), Ty::array(Ty::string(), Ty::int()), false),
             // shapes
             (a_int.clone(), opt_b.clone(), true),
-            (opt_b.clone(), a_int.clone(), false), // extra key `b` in a sealed target
+            // a shape only says what it has: as in PHPStan, more keys in the value are fine
+            (opt_b.clone(), a_int.clone(), true),
             (opt_b.clone(), shape(&[("a", Ty::int())], false), true),
             (
                 a_int.clone(),
@@ -400,7 +401,7 @@ fn php_arrays_and_shapes() {
             ),
             (shape(&[("a", Ty::lit_int(1))], true), a_int.clone(), true),
             (shape(&[("a", Ty::string())], true), a_int.clone(), false),
-            (shape(&[("a", Ty::int())], false), a_int.clone(), false),
+            (shape(&[("a", Ty::int())], false), a_int.clone(), true),
             (
                 Ty::shape(vec![ShapeField::optional("a", Ty::int())], true),
                 a_int.clone(),
@@ -429,13 +430,6 @@ fn php_arrays_and_shapes() {
                 true,
             ),
         ],
-    );
-    let err = check_assignable(&e, &opt_b, &a_int).unwrap_err();
-    assert_eq!(
-        err.reason,
-        MismatchReason::ShapeExtraKey {
-            key: ShapeKey::Str("b".into())
-        }
     );
 }
 

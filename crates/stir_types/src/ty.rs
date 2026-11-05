@@ -251,6 +251,17 @@ impl FnTy {
     }
 }
 
+/// A conditional type: `(T is X ? A : B)` or `($param is X ? A : B)`, where the parameter
+/// stands in as a type parameter of its own. It's decided at each call; until then it's
+/// either branch.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct ConditionalTy {
+    pub subject: Ty,
+    pub target: Ty,
+    pub then: Ty,
+    pub otherwise: Ty,
+}
+
 /// `static` or `$this`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum SelfKind {
@@ -358,6 +369,7 @@ pub enum TyKind {
         name: SmolStr,
         args: Vec<Ty>,
     },
+    Conditional(Box<ConditionalTy>),
     /// A generic type parameter.
     Param {
         id: ParamId,
@@ -794,6 +806,12 @@ impl Ty {
             }
             K::Class { args, .. } => args.iter().for_each(f),
             K::Union(ms) | K::Intersection(ms) => ms.iter().for_each(f),
+            K::Conditional(c) => {
+                f(&c.subject);
+                f(&c.target);
+                f(&c.then);
+                f(&c.otherwise);
+            }
             _ => {}
         }
     }
@@ -856,6 +874,12 @@ impl Ty {
             },
             K::Union(ms) => K::Union(TyList::new(ms.iter().map(&mut *f).collect())),
             K::Intersection(ms) => K::Intersection(TyList::new(ms.iter().map(&mut *f).collect())),
+            K::Conditional(c) => K::Conditional(Box::new(ConditionalTy {
+                subject: f(&c.subject),
+                target: f(&c.target),
+                then: f(&c.then),
+                otherwise: f(&c.otherwise),
+            })),
             _ => return self.clone(),
         };
         Ty::new(kind)

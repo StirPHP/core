@@ -375,7 +375,7 @@ fn hint_labels(text: &str) -> Vec<String> {
 fn inlay_hints_show_inferred_variable_types() {
     assert_eq!(
         hint_labels("<?php\n$a = 1;\n$b = 'x';\n$a = 2;\n$c = [1, 2];\n"),
-        ["$a: int", "$b: string", "$c: list<int>"]
+        ["$a: int", "$b: string", "$c: array{1, 2}"]
     );
 }
 

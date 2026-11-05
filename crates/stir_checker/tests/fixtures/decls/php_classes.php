@@ -46,7 +46,11 @@ enum Status: string
 
     public function label(): string
     {
-        // KNOWN FALSE ALARM: the value of a string-backed enum is a string.
+        return $this->value;
+    }
+
+    public function number(): int
+    {
         return $this->value; // error: SPHP0005
     }
 }

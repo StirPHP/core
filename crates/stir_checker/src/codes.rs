@@ -10,6 +10,7 @@ pub const UNDEFINED_CLASS: &str = "SPHP0008";
 pub const UNDEFINED_MEMBER: &str = "SPHP0009";
 pub const REASSIGN_IMMUTABLE: &str = "SPHP0010";
 pub const NULLABLE_ACCESS: &str = "SPHP0012";
+pub const UNNECESSARY_NULL_CHECK: &str = "SPHP0021";
 pub const ARGUMENT_COUNT: &str = "SPHP0014";
 pub const INVALID_OPERAND: &str = "SPHP0015";
 pub const NOT_CALLABLE: &str = "SPHP0018";

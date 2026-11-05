@@ -60,6 +60,8 @@ pub struct ParamDef {
     pub has_default: bool,
     /// `= null`: a PHP parameter with this default implicitly accepts null.
     pub default_is_null: bool,
+    /// The type of the default value, when it's a literal.
+    pub default_ty: Option<TypeRef>,
     pub variadic: bool,
     pub by_ref: bool,
     /// Constructor promotion: `private int $x`.
@@ -492,6 +494,7 @@ impl Lowerer {
                 doc_ty: None,
                 has_default: true,
                 default_is_null: false,
+                default_ty: None,
                 variadic: true,
                 by_ref: false,
                 promoted: None,
@@ -597,6 +600,7 @@ impl Lowerer {
             default_is_null: p.children().any(|c| {
                 c.kind() == NAME_EXPR && c.text().to_string().trim().eq_ignore_ascii_case("null")
             }),
+            default_ty: p.children().find_map(|c| literal_type_ref(&c)),
             variadic: p.has_token(ELLIPSIS),
             by_ref: p.has_token(AMP),
             promoted,
@@ -809,6 +813,7 @@ impl Lowerer {
                             doc_ty: mp.ty.as_ref().map(|t| dcx.lower(t)),
                             has_default: mp.default.is_some(),
                             default_is_null: false,
+                            default_ty: None,
                             variadic: mp.variadic,
                             by_ref: mp.by_ref,
                             promoted: None,
@@ -949,6 +954,31 @@ impl Lowerer {
             _ => {}
         }
     }
+}
+
+/// The type of a literal default value.
+fn literal_type_ref(node: &SyntaxNode) -> Option<TypeRef> {
+    let text = node.text().to_string();
+    let text = text.trim();
+    let kind = match node.kind() {
+        NAME_EXPR => match text.to_ascii_lowercase().as_str() {
+            "true" => TypeRefKind::Php(crate::type_ref::PhpBuiltin::True),
+            "false" => TypeRefKind::Php(crate::type_ref::PhpBuiltin::False),
+            "null" => TypeRefKind::Php(crate::type_ref::PhpBuiltin::Null),
+            _ => return None,
+        },
+        STRING_LITERAL => TypeRefKind::Literal(crate::type_ref::Literal::String(SmolStr::new(
+            unquote(text),
+        ))),
+        LITERAL => TypeRefKind::Literal(crate::type_ref::Literal::Int(crate::type_ref::parse_int(
+            text,
+        )?)),
+        _ => return None,
+    };
+    Some(TypeRef {
+        kind,
+        range: node.text_range(),
+    })
 }
 
 /// Replaces the native supertype that `doc` (an `@extends`/`@implements` type)

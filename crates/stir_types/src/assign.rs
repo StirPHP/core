@@ -58,10 +58,6 @@ pub enum MismatchReason {
     ShapeMissingKey { key: ShapeKey },
     /// The key is optional in the source but required in the target.
     ShapeOptionalKey { key: ShapeKey },
-    /// The source shape has a key the sealed target does not.
-    ShapeExtraKey { key: ShapeKey },
-    /// The source shape is unsealed but the target is sealed.
-    ShapeUnsealed,
     /// The source may be empty but the target is `non-empty-*`.
     MaybeEmpty,
     /// A function-type parameter is not assignable (contravariantly).
@@ -152,14 +148,6 @@ impl fmt::Display for Mismatch {
                     key_str(key),
                     self.to
                 )
-            }
-            R::ShapeExtraKey { key } => {
-                base(f)?;
-                write!(f, ": unexpected key `{}`", key_str(key))
-            }
-            R::ShapeUnsealed => {
-                base(f)?;
-                write!(f, ": {} may contain extra keys", self.from)
             }
             R::MaybeEmpty => {
                 base(f)?;
@@ -343,6 +331,13 @@ impl<'a> Checker<'a> {
         use MismatchReason as R;
         if from == to {
             return Ok(());
+        }
+        // undecided, it's either branch
+        if let K::Conditional(c) = from.kind() {
+            return self.check(&Ty::union([c.then.clone(), c.otherwise.clone()]), to);
+        }
+        if let K::Conditional(c) = to.kind() {
+            return self.check(from, &Ty::union([c.then.clone(), c.otherwise.clone()]));
         }
         match (from.kind(), to.kind()) {
             (K::Error, _) | (_, K::Error) | (K::Never, _) => return Ok(()),
@@ -762,20 +757,7 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        if b.sealed {
-            if !a.sealed {
-                return Err(Mismatch::new(from, to, R::ShapeUnsealed));
-            }
-            if let Some(extra) = a.fields.iter().find(|af| b.field(&af.key).is_none()) {
-                return Err(Mismatch::new(
-                    from,
-                    to,
-                    R::ShapeExtraKey {
-                        key: extra.key.clone(),
-                    },
-                ));
-            }
-        }
+        // like PHPStan, a shape only says what it has: more keys in the value are fine
         Ok(())
     }
 
