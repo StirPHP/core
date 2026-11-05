@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/tests/parser.rs
-expression: "check_ok(concat!\n(\"<?php\\n\",\n\"#[Attr(1)]\\nfinal readonly class A extends B implements C, D {\\n    use T1, T2 { T1::m insteadof T2; m as protected n; }\\n    public const int X = 1, Y = 2;\\n    private static ?array $p = null, $q;\\n    public private(set) string $name { get => $this->name; set(string $v) { $this->name = $v; } }\\n    public function __construct(private readonly int $id = 0, protected ...$rest) {}\\n    abstract protected function &m(int|string $a, (A&B)|null $b, Foo &$c): static;\\n}\\n\"),\nDialect :: Php)"
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"#[Attr(1)]\\nfinal readonly class A extends B implements C, D {\\n    use T1, T2 { T1::m insteadof T2; m as protected n; }\\n    public const int X = 1, Y = 2;\\n    private static ?array $p = null, $q;\\n    public private(set) string $name { get => $this->name; set(string $v) { $this->name = $v; } }\\n    public function __construct(private readonly int $id = 0, protected ...$rest) {}\\n    abstract protected function &m(int|string $a, (A&B)|null $b, Foo &$c): static;\\n}\\n\"))"
 ---
 SOURCE_FILE
   OPEN_TAG "<?php\n"

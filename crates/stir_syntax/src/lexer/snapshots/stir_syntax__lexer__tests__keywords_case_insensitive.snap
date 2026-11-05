@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/src/lexer/tests.rs
-expression: "dump(\"<?php FUNCTION foo() { RETURN NULL; }\", Dialect :: Php)"
+expression: "dump(\"<?php FUNCTION foo() { RETURN NULL; }\")"
 ---
 OPEN_TAG "<?php "
 FUNCTION_KW "FUNCTION"

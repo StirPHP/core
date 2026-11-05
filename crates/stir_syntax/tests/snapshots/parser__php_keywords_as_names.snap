@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/tests/parser.rs
-expression: "check_ok(concat!\n(\"<?php\\n\",\n\"$a->list(); A::class; $a->default; Foo::new(); function list2() {} class X { function print() {} const FOREACH = 1; }\"),\nDialect :: Php)"
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"$a->list(); A::class; $a->default; Foo::new(); function list2() {} class X { function print() {} const FOREACH = 1; }\"))"
 ---
 SOURCE_FILE
   OPEN_TAG "<?php\n"

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use rowan::ast::SyntaxNodePtr;
 use smol_str::SmolStr;
-use stir_syntax::{StirLanguage, SyntaxKind, SyntaxKind::*, SyntaxNode, TextRange, TextSize};
+use stir_syntax::{PhpLanguage, SyntaxKind, SyntaxKind::*, SyntaxNode, TextRange, TextSize};
 
 use stir_phpdoc::{DocBlock, TagKind};
 
@@ -14,7 +14,7 @@ use crate::doc::{self, Aliases, DocCx};
 use crate::name::{Fqn, Scope, UseKind};
 use crate::type_ref::{TypeCtx, TypeRef, TypeRefKind, unquote};
 
-pub type NodePtr = SyntaxNodePtr<StirLanguage>;
+pub type NodePtr = SyntaxNodePtr<PhpLanguage>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Variance {

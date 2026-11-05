@@ -67,12 +67,11 @@ pub const DEFAULT_PHP_LEVEL: u8 = 5;
 /// How a workspace is checked (from `sphp.toml` and `phpstan.neon`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Settings {
-    /// PHPStan rule level (0..=10) `.php` files are checked at. `.sphp` files are
-    /// always fully checked.
+    /// PHPStan rule level (0..=10) files are checked at.
     pub php_level: u8,
     /// Target PHP version `(major, minor)`.
     pub php_version: (u8, u8),
-    /// PHPStan `ignoreErrors`, applied to diagnostics in `.php` files only.
+    /// PHPStan `ignoreErrors`, applied to diagnostics.
     pub ignore_errors: Vec<IgnoreRule>,
     /// PHPStan `paths`: if any, only `.php` files under these are reported.
     pub php_paths: Vec<PathBuf>,

@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/tests/parser.rs
-expression: "check_ok(concat!\n(\"<?php\\n\",\n\"if ($a) { echo 1; } elseif ($b) echo 2; else { echo 3; }\\nwhile ($i--) continue;\\ndo { $i++; } while ($i < 10);\\nfor ($i = 0, $j = 1; $i < 3; $i++) {}\\nforeach ($xs as $k => &$v) {}\\nforeach ($xs as [$a, $b]) {}\\nswitch ($x) { case 1: case 2: echo 'a'; break; default: echo 'b'; }\\ntry { f(); } catch (A|B $e) { } catch (C) { } finally { }\\n\"),\nDialect :: Php)"
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"if ($a) { echo 1; } elseif ($b) echo 2; else { echo 3; }\\nwhile ($i--) continue;\\ndo { $i++; } while ($i < 10);\\nfor ($i = 0, $j = 1; $i < 3; $i++) {}\\nforeach ($xs as $k => &$v) {}\\nforeach ($xs as [$a, $b]) {}\\nswitch ($x) { case 1: case 2: echo 'a'; break; default: echo 'b'; }\\ntry { f(); } catch (A|B $e) { } catch (C) { } finally { }\\n\"))"
 ---
 SOURCE_FILE
   OPEN_TAG "<?php\n"

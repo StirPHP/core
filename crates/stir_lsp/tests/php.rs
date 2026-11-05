@@ -348,7 +348,7 @@ fn completes_static_members() {
 }
 
 #[test]
-fn completes_php_keywords_not_superset_ones() {
+fn completes_php_keywords() {
     let f = Fixture::new("<?php\nfunction f(): void {\n    <|>\n}\n");
     let items = f.completions();
     assert!(has(&items, "foreach"), "{items:?}");

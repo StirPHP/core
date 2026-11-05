@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/src/lexer/tests.rs
-expression: "dump(\"<?php $x = <<<EOT\\n  Hello $name\\n  {$a[1]}\\n  EOT;\\n\", Dialect :: Php)"
+expression: "dump(\"<?php $x = <<<EOT\\n  Hello $name\\n  {$a[1]}\\n  EOT;\\n\")"
 ---
 OPEN_TAG "<?php "
 VARIABLE "$x"

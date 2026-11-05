@@ -130,12 +130,6 @@ pub fn resolve_type_name(
     if index.classes.contains_key(&key) {
         return Some(Def::Class(key));
     }
-
-    // a name resolves in `Stir\` as a last resort
-    let stir = SmolStr::new(format!("stir\\{key}"));
-    if index.classes.contains_key(&stir) {
-        return Some(Def::Class(stir));
-    }
     None
 }
 

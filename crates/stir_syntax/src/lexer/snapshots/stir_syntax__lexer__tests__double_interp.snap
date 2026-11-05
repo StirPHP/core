@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/src/lexer/tests.rs
-expression: "dump(r#\"<?php \"a $b c {$d->e['f']} ${g} $h[0] $i[k] $j[$l] $m->n $o[-1]\";\"#,\nDialect :: Php)"
+expression: "dump(r#\"<?php \"a $b c {$d->e['f']} ${g} $h[0] $i[k] $j[$l] $m->n $o[-1]\";\"#)"
 ---
 OPEN_TAG "<?php "
 DQUOTE "\""

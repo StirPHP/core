@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/src/lexer/tests.rs
-expression: "dump(\"<?php \\\\Foo\\\\Bar; Foo\\\\Bar; namespace\\\\Baz; foo;\", Dialect :: Php)"
+expression: "dump(\"<?php \\\\Foo\\\\Bar; Foo\\\\Bar; namespace\\\\Baz; foo;\")"
 ---
 OPEN_TAG "<?php "
 NAME_FULLY_QUALIFIED "\\Foo\\Bar"

@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/tests/parser.rs
-expression: "check_ok(concat!\n(\"<?php\\n\", \"declare(strict_types=1);\\ndeclare(ticks=1) { f(); }\\n\"), Dialect\n:: Php)"
+expression: "check_ok(concat!\n(\"<?php\\n\", \"declare(strict_types=1);\\ndeclare(ticks=1) { f(); }\\n\"))"
 ---
 SOURCE_FILE
   OPEN_TAG "<?php\n"

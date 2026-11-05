@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/tests/parser.rs
-expression: "check_ok(concat!\n(\"<?php\\n\",\n\"foo(1, ...$a, name: 2); $o->m()?->n; A::b(); A::$c; A::C; $a::class; strlen(...); new Foo; new Foo()->bar(); new $cls->prop(1);\"),\nDialect :: Php)"
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"foo(1, ...$a, name: 2); $o->m()?->n; A::b(); A::$c; A::C; $a::class; strlen(...); new Foo; new Foo()->bar(); new $cls->prop(1);\"))"
 ---
 SOURCE_FILE
   OPEN_TAG "<?php\n"

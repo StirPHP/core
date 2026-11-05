@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/src/lexer/tests.rs
-expression: "dump(r#\"<?php \"plain \\\" string\";\"#, Dialect :: Php)"
+expression: "dump(r#\"<?php \"plain \\\" string\";\"#)"
 ---
 OPEN_TAG "<?php "
 STRING_DOUBLE "\"plain \\\" string\""

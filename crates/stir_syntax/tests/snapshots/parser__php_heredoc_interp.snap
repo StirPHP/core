@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/tests/parser.rs
-expression: "check_ok(concat! (\"<?php\\n\", \"echo <<<HTML\\n<div>{$a['b']}</div>\\nHTML;\\n\"),\nDialect :: Php)"
+expression: "check_ok(concat! (\"<?php\\n\", \"echo <<<HTML\\n<div>{$a['b']}</div>\\nHTML;\\n\"))"
 ---
 SOURCE_FILE
   OPEN_TAG "<?php\n"

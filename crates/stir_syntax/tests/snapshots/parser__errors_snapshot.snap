@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/tests/parser.rs
-expression: "parse(\"<?php $a = ; if ($b { }\", Dialect::Php).debug_tree()"
+expression: "parse(\"<?php $a = ; if ($b { }\").debug_tree()"
 ---
 SOURCE_FILE
   OPEN_TAG "<?php "

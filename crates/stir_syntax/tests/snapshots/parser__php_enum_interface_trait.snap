@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/tests/parser.rs
-expression: "check_ok(concat!\n(\"<?php\\n\",\n\"enum Suit: string implements HasLabel { case Hearts = 'H'; case Spades = 'S'; const Wild = self::Spades; public function label(): string { return ucfirst($this->name); } }\\ninterface I extends J, K { public function f(); }\\ntrait T { abstract public function g(): void; }\"),\nDialect :: Php)"
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"enum Suit: string implements HasLabel { case Hearts = 'H'; case Spades = 'S'; const Wild = self::Spades; public function label(): string { return ucfirst($this->name); } }\\ninterface I extends J, K { public function f(); }\\ntrait T { abstract public function g(): void; }\"))"
 ---
 SOURCE_FILE
   OPEN_TAG "<?php\n"

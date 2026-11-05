@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/tests/parser.rs
-expression: "check_ok(concat!\n(\"<?php\\n\",\n\"namespace App\\\\Models;\\nuse Foo\\\\Bar, Baz as Q;\\nuse function strlen;\\nuse const Foo\\\\X;\\nuse Some\\\\{A, B as C, function d};\\nconst A = 1, B = 2;\\n\"),\nDialect :: Php)"
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"namespace App\\\\Models;\\nuse Foo\\\\Bar, Baz as Q;\\nuse function strlen;\\nuse const Foo\\\\X;\\nuse Some\\\\{A, B as C, function d};\\nconst A = 1, B = 2;\\n\"))"
 ---
 SOURCE_FILE
   OPEN_TAG "<?php\n"

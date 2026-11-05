@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/src/lexer/tests.rs
-expression: "dump(\"<html><?php echo 1; ?>\\n<b><?= $x ?></b>\", Dialect :: Php)"
+expression: "dump(\"<html><?php echo 1; ?>\\n<b><?= $x ?></b>\")"
 ---
 INLINE_HTML "<html>"
 OPEN_TAG "<?php "

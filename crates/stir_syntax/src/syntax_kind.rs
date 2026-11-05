@@ -473,9 +473,9 @@ impl From<SyntaxKind> for rowan::SyntaxKind {
 
 /// The rowan language tag for PHP trees.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum StirLanguage {}
+pub enum PhpLanguage {}
 
-impl rowan::Language for StirLanguage {
+impl rowan::Language for PhpLanguage {
     type Kind = SyntaxKind;
 
     fn kind_from_raw(raw: rowan::SyntaxKind) -> SyntaxKind {
@@ -487,6 +487,6 @@ impl rowan::Language for StirLanguage {
     }
 }
 
-pub type SyntaxNode = rowan::SyntaxNode<StirLanguage>;
-pub type SyntaxToken = rowan::SyntaxToken<StirLanguage>;
-pub type SyntaxElement = rowan::SyntaxElement<StirLanguage>;
+pub type SyntaxNode = rowan::SyntaxNode<PhpLanguage>;
+pub type SyntaxToken = rowan::SyntaxToken<PhpLanguage>;
+pub type SyntaxElement = rowan::SyntaxElement<PhpLanguage>;

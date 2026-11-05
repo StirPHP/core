@@ -10,7 +10,7 @@ use rowan::GreenNode;
 pub use lexer::{LexError, Lexed, Token, lex};
 pub use parser::SyntaxError;
 pub use rowan::{TextRange, TextSize};
-pub use syntax_kind::{StirLanguage, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
+pub use syntax_kind::{PhpLanguage, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 /// Whether `path` has a PHP source file extension.
 pub fn is_php_path(path: &std::path::Path) -> bool {

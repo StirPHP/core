@@ -28,7 +28,7 @@ function php_offset_may_be_missing(array $m): bool {
 }
 
 function php_known_non_null(string $s): string {
-    // KNOWN GAP: a pointless `??` on a non-null value should warn with SPHP0021.
+    // KNOWN GAP: a pointless `??` on a non-null value should warn.
     return $s ?? "";
 }
 

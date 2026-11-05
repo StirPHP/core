@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/tests/parser.rs
-expression: "check_ok(concat!\n(\"<?php\\n\",\n\"$f = function &($a) use ($b, &$c): int { return 1; };\\n$g = static fn(int $x): int => $x * 2;\\n$h = #[Pure] fn() => 1;\\n\"),\nDialect :: Php)"
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"$f = function &($a) use ($b, &$c): int { return 1; };\\n$g = static fn(int $x): int => $x * 2;\\n$h = #[Pure] fn() => 1;\\n\"))"
 ---
 SOURCE_FILE
   OPEN_TAG "<?php\n"

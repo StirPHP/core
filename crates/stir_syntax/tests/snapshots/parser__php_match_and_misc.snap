@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/tests/parser.rs
-expression: "check_ok(concat!\n(\"<?php\\n\",\n\"$r = match ($x) { 1, 2 => 'a', default => throw new E() };\\nlist($a, , $b) = $arr; [$a, [$b]] = $c; ['k' => $v] = $d;\\nisset($a, $b['c']); empty($x); exit(1); die; print 'x';\\n$a = (int) $b; @f(); yield $k => $v; yield from g(); $x = yield;\\nglobal $a, $b; static $s = 1; unset($a[0]); goto end; end:\\n__halt_compiler();raw stuff\"),\nDialect :: Php)"
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"$r = match ($x) { 1, 2 => 'a', default => throw new E() };\\nlist($a, , $b) = $arr; [$a, [$b]] = $c; ['k' => $v] = $d;\\nisset($a, $b['c']); empty($x); exit(1); die; print 'x';\\n$a = (int) $b; @f(); yield $k => $v; yield from g(); $x = yield;\\nglobal $a, $b; static $s = 1; unset($a[0]); goto end; end:\\n__halt_compiler();raw stuff\"))"
 ---
 SOURCE_FILE
   OPEN_TAG "<?php\n"

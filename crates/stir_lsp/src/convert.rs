@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn utf16_round_trip() {
-        let text = "val a = \"é𝄞\"\nval b = 1\n";
+        let text = "$abcd = \"é𝄞\"\n$abcd = 1\n";
         let map = LineMap::new(text, Encoding::Utf16);
         let off = TextSize::from(text.find("\"\n").unwrap() as u32);
         let pos = map.position(off);

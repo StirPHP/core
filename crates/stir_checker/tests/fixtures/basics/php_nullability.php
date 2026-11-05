@@ -27,7 +27,7 @@ function nullable_argument(?string $s): void {
     wants_string($s ?? "");
 }
 
-// KNOWN GAP: calling a method on a nullable value should be SPHP0012.
+// KNOWN GAP: calling a method on a nullable value should be an error.
 function nullable_member_access(?Account $a): string {
     return $a->label();
 }
