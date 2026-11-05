@@ -1,0 +1,8 @@
+=== action: Add return type `int`
+=== no-offer
+=== input
+<?php
+/** @return string */
+function f‸() {
+    return 1;
+}

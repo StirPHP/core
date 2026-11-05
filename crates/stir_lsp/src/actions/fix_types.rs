@@ -448,6 +448,23 @@ pub fn inferred_returns(cx: &Cx<'_>, function: &SyntaxNode) -> Option<Returns> {
     )))
 }
 
+/// What a function's PHPDoc says it returns, if it says.
+fn documented_return(cx: &Cx<'_>, function: &SyntaxNode) -> Option<Ty> {
+    let sig = match function.kind() {
+        METHOD_DECL => &method_of(cx, function)?.1.sig,
+        FUNCTION_DECL => {
+            let at = function.text_range();
+            &file_items(cx.db, cx.file)
+                .functions
+                .iter()
+                .find(|f| f.ptr.text_range() == at)?
+                .sig
+        }
+        _ => return None,
+    };
+    Some(cx.ctx().lower_plain(sig.doc_ret.as_ref()?))
+}
+
 /// A subclass that overrides this without a return type would stop compiling.
 fn return_type_blockers(cx: &Cx<'_>, function: &SyntaxNode) -> Option<()> {
     if function.kind() != METHOD_DECL {
@@ -535,11 +552,21 @@ fn return_type_offers<'c>(
         let Some(returns) = inferred_returns(cx, function) else {
             return;
         };
+        let documented = documented_return(cx, function);
         match returns {
             Returns::Nothing => (Some("void".to_owned()), None),
             Returns::Generator => (Some(namer.class("Generator")), None),
             Returns::Value(ty) => match native(cx, &mut namer, &ty) {
-                Some(w) => (Some(w.native), w.doc),
+                Some(w) => {
+                    // what the doc comment says has to fit in it, or that's an error of its own
+                    if let Some(doc) = &documented {
+                        match native(cx, &mut namer, doc) {
+                            Some(d) if d.native == w.native => {}
+                            _ => return,
+                        }
+                    }
+                    (Some(w.native), w.doc)
+                }
                 None => (None, doc_type(&mut namer, &ty)),
             },
         }

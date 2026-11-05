@@ -1,0 +1,9 @@
+=== action: Change to `created`
+=== no-offer
+=== input
+<?php
+class M {
+    public static function created(callable $c): void {}
+    public static function __callStatic(string $name, array $args): mixed { return null; }
+}
+M::creat‸e(['a' => 1]);

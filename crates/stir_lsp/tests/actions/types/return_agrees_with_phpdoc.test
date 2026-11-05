@@ -1,0 +1,13 @@
+=== action: Add return type `array`
+=== input
+<?php
+/** @return list<int> */
+function f‸() {
+    return [1];
+}
+=== output
+<?php
+/** @return list<int> */
+function f(): array {
+    return [1];
+}

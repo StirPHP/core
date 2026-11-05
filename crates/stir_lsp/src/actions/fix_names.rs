@@ -488,9 +488,18 @@ fn member_typo<'c>(cx: &'c Cx<'c>, d: &Found, method: bool, out: &mut Vec<Offer<
         return;
     }
     let bare = written.trim_start_matches('$');
-    let Some((ty, _)) = receiver_class(cx, &fetch) else {
+    let Some((ty, is_static_access)) = receiver_class(cx, &fetch) else {
         return;
     };
+    // what's magic is there, by whatever name: a near one wasn't necessarily meant
+    let magic = match (method, is_static_access || fetch.kind() == CLASS_CONST_FETCH_EXPR) {
+        (true, true) => "__callStatic",
+        (true, false) => "__call",
+        (false, _) => "__get",
+    };
+    if cx.ctx().find_method(&ty, magic).is_some() {
+        return;
+    }
     let own = enclosing_class_key(cx, cx.file, &fetch);
     // a method that couldn't be called with what's passed isn't what was meant
     let passed = fetch
