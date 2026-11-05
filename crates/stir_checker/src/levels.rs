@@ -6,7 +6,9 @@
 //! | 0 | unknown classes/functions/constants/variables, members on `$this`, wrong argument counts on it, static access, syntax |
 //! | 2 | the same on any other value, PHPDoc validation (PHPDoc vs native types, generic arity, bounds, variance), visibility, invalid operators and callables |
 //! | 3 | return types, property types, other assignments, PHPDoc types of overrides, iterating and indexing, writes to readonly properties |
+//! | 4 | code nothing can reach, and conditions and comparisons that can only go one way |
 //! | 5 | argument types |
+//! | 6 | types left out: of parameters, returns and properties, and of what arrays hold |
 //! | 7 | what can be right but isn't always: unions with a right member, `object` for a class, `string` for a `non-empty-string` |
 //! | 8 | nullable values, as arguments and when reached through |
 //! | 9 | explicit `mixed` |
@@ -58,6 +60,10 @@ pub fn level_of(code: &str) -> u8 {
         | codes::GENERICS_NOT_SUBTYPE
         | codes::GENERICS_VARIANCE => 2,
         codes::CONSTANT_NOT_FOUND | codes::NULL_COALESCE_VARIABLE => 1,
+        codes::MISSING_TYPE_ITERABLE_VALUE
+        | codes::MISSING_TYPE_PARAMETER
+        | codes::MISSING_TYPE_PROPERTY
+        | codes::MISSING_TYPE_RETURN => 6,
         // unknown symbols, argument counts, what PHP itself refuses
         _ => 0,
     }

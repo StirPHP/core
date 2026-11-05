@@ -126,6 +126,9 @@ pub struct Settings {
     /// Report the use of what's deprecated as warnings: `parameters.stirphp.deprecations`, or
     /// PHPStan's rules for it being installed. Editors mark it either way.
     pub deprecations: bool,
+    /// PHPStan's `treatPhpDocTypesAsCertain`. Without it, what only PHPDoc says can't be taken to
+    /// make a condition always go one way.
+    pub treat_phpdoc_types_as_certain: bool,
 }
 
 impl Default for Settings {
@@ -140,6 +143,7 @@ impl Default for Settings {
             pending_install: None,
             declared_extensions: None,
             deprecations: false,
+            treat_phpdoc_types_as_certain: true,
         }
     }
 }

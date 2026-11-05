@@ -3,6 +3,8 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+mod checks;
+
 use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
 use stir_db::{Diagnostic, FileOrigin, SourceFile};
@@ -100,6 +102,10 @@ pub struct Checker<'a, 'db> {
     pub diags: Vec<Diagnostic>,
     /// The current point can't be reached: a `return`, `throw` or the like came before it.
     dead: bool,
+    /// In a member of a trait: what's known depends on the class using it.
+    in_trait_member: bool,
+    /// The last condition of a chain of `elseif`s: there, always being true is the point.
+    last_condition: Option<TextRange>,
     /// Enclosing loops and `switch`es, for `break` and `continue`.
     loops: Vec<LoopExits>,
     /// In a first pass over a loop body, which only finds what the loop's variables hold.
@@ -246,6 +252,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             items: ctx.items(file),
             diags: Vec::new(),
             dead: false,
+            in_trait_member: false,
+            last_condition: None,
             loops: Vec::new(),
             prepass: 0,
             probing: 0,
@@ -773,12 +781,11 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     fn stmt_list(&mut self, parent: &SyntaxNode) {
         for child in parent.children() {
-            if is_stmt_kind(child.kind()) {
-                self.stmt(&child);
-            } else if is_expr_kind(child.kind()) {
+            if is_expr_kind(child.kind()) {
                 self.expr(&child, None);
             }
         }
+        self.run_stmts(parent);
     }
 
     // ------------------------------------------------------------ statements
@@ -883,7 +890,9 @@ impl<'a, 'db> Checker<'a, 'db> {
             EXPR_STMT => {
                 if let Some(e) = exprs_of(node).first() {
                     let t = self.expr(e, None);
-                    if t.is_never() || matches!(e.kind(), THROW_EXPR | EXIT_EXPR) {
+                    if (t.is_never() && can_end_a_path(e))
+                        || matches!(e.kind(), THROW_EXPR | EXIT_EXPR)
+                    {
                         self.dead = true;
                     }
                 }
@@ -904,7 +913,9 @@ impl<'a, 'db> Checker<'a, 'db> {
             BREAK_STMT => self.jump(node, true),
             CONTINUE_STMT => self.jump(node, false),
             GOTO_STMT => self.dead = true,
-            LABEL_STMT | EMPTY_STMT | INLINE_HTML_STMT | USE_DECL | HALT_COMPILER_STMT => {}
+            // `goto` can land here, whatever came before
+            LABEL_STMT => self.dead = false,
+            EMPTY_STMT | INLINE_HTML_STMT | USE_DECL | HALT_COMPILER_STMT => {}
             TRY_STMT => self.try_stmt(node),
             GLOBAL_STMT => {
                 for v in node.descendants().filter(|d| d.kind() == VARIABLE_EXPR) {
@@ -975,24 +986,19 @@ impl<'a, 'db> Checker<'a, 'db> {
     }
 
     fn block_stmts(&mut self, block: &SyntaxNode) {
-        let stmts: Vec<SyntaxNode> = block
-            .children()
-            .filter(|c| is_stmt_kind(c.kind()))
-            .collect();
-        for s in stmts {
-            self.stmt(&s);
-        }
+        self.run_stmts(block);
     }
 
     fn run_stmts(&mut self, parent: &SyntaxNode) {
-        for s in parent.children().filter(|c| is_stmt_kind(c.kind())) {
-            self.stmt(&s);
-        }
+        self.run_list(parent.children().filter(|c| is_stmt_kind(c.kind())));
     }
 
     fn if_stmt(&mut self, node: &SyntaxNode) {
         let cond = exprs_of(node).into_iter().next();
         let (t, f) = cond.as_ref().map(|c| self.condition(c)).unwrap_or_default();
+        if let Some(c) = &cond {
+            self.check_constant_condition(c, "if", "If condition", false);
+        }
         let entry_dead = self.dead;
         let after_cond = self.snapshot();
         let mut ends = Vec::new();
@@ -1005,11 +1011,22 @@ impl<'a, 'db> Checker<'a, 'db> {
         self.dead = entry_dead;
         self.apply_facts(&f);
         let mut has_else = false;
+        // always true: nothing gets past it without going through it
+        let always_true = !entry_dead
+            && cond
+                .as_ref()
+                .is_some_and(|c| self.condition_is_always_true(c));
         for clause in node.children() {
             match clause.kind() {
                 ELSEIF_CLAUSE => {
                     let c = exprs_of(&clause).into_iter().next();
+                    let last = is_last_elseif(node, &clause);
+                    self.last_condition = c.as_ref().filter(|_| last).map(|c| c.text_range());
                     let (t2, f2) = c.as_ref().map(|c| self.condition(c)).unwrap_or_default();
+                    self.last_condition = None;
+                    if let Some(c) = &c {
+                        self.check_constant_condition(c, "elseif", "Elseif condition", last);
+                    }
                     let before = self.snapshot();
                     self.apply_facts(&t2);
                     self.run_stmts(&clause);
@@ -1030,7 +1047,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 _ => {}
             }
         }
-        if !has_else {
+        if !has_else && !always_true {
             ends.push(self.snapshot());
         }
         if entry_dead {
@@ -1668,12 +1685,20 @@ impl<'a, 'db> Checker<'a, 'db> {
                 .iter()
                 .map(|p| (p.name.clone(), p.ty.clone())),
         );
-        self.function_body(node, &sig, None);
+        let what = format!("Function {}()", items.functions[idx].name);
+        self.check_missing_signature_types(
+            items.functions[idx].name_range,
+            &what,
+            items.functions[idx].name.short(),
+            &items.functions[idx].sig,
+            &sig,
+        );
+        self.function_body(node, &sig, None, &what);
         self.lower_cx = saved_cx;
     }
 
     /// Checks a function/method body against its signature.
-    fn function_body(&mut self, node: &SyntaxNode, sig: &FnSig, this: Option<Ty>) {
+    fn function_body(&mut self, node: &SyntaxNode, sig: &FnSig, this: Option<Ty>, what: &str) {
         let saved_frames = std::mem::replace(&mut self.frames, vec![FxHashMap::default()]);
         let saved_dynamic_vars = self.dynamic_vars_fn.take();
         let saved_dead = std::mem::replace(&mut self.dead, false);
@@ -1723,6 +1748,12 @@ impl<'a, 'db> Checker<'a, 'db> {
         if let Some(block) = node.child(BLOCK) {
             self.block_stmts(&block);
         }
+        let ret = self
+            .fns
+            .last()
+            .map(|f| f.ret.clone())
+            .unwrap_or_else(Ty::error);
+        self.check_missing_return(node, what, &ret, sig.ret_declared);
         self.dynamic_vars_fn = saved_dynamic_vars;
         self.dead = saved_dead;
         self.loops = saved_loops;
@@ -1878,9 +1909,14 @@ impl<'a, 'db> Checker<'a, 'db> {
         } else {
             Some(Ty::this_of(context.self_ty()))
         };
+        let what = format!("Method {}::{}()", model.name, m.name);
+        let in_trait = model.kind() == ClassKind::Trait;
+        self.check_missing_signature_types(m.name_range, &what, &m.name, &m.sig, &sig);
+        let saved_in_trait = std::mem::replace(&mut self.in_trait_member, in_trait);
         if m.has_body {
-            self.function_body(node, &sig, this);
+            self.function_body(node, &sig, this, &what);
         }
+        self.in_trait_member = saved_in_trait;
         self.in_ctor = false;
         self.lower_cx = saved_cx;
     }
@@ -1900,8 +1936,11 @@ impl<'a, 'db> Checker<'a, 'db> {
                     );
                 }
             }
+            let ptr = stir_hir::NodePtr::new(&elem);
+            if let Some(def) = model.def.properties.iter().find(|p| p.ptr == ptr) {
+                self.check_missing_property_type(elem.text_range(), model, def);
+            }
         }
-        let _ = model;
     }
 
     // ------------------------------------------------------------ conditions
@@ -2480,11 +2519,15 @@ impl<'a, 'db> Checker<'a, 'db> {
                 stir_hir::AssertWhen::Always => {}
                 stir_hir::AssertWhen::IfTrue => {
                     when_true.narrow.push((name.clone(), yes));
-                    when_false.narrow.push((name, no));
+                    if !assert.equality {
+                        when_false.narrow.push((name, no));
+                    }
                 }
                 stir_hir::AssertWhen::IfFalse => {
-                    when_true.narrow.push((name.clone(), no));
-                    when_false.narrow.push((name, yes));
+                    when_false.narrow.push((name.clone(), yes));
+                    if !assert.equality {
+                        when_true.narrow.push((name, no));
+                    }
                 }
             }
         }
@@ -2736,6 +2779,12 @@ impl<'a, 'db> Checker<'a, 'db> {
                     return Ty::error();
                 }
                 let (t, f) = self.condition(&es[0]);
+                self.check_constant_condition(
+                    &es[0],
+                    "ternary",
+                    "Ternary operator condition",
+                    false,
+                );
                 let snap = self.snapshot();
                 self.apply_facts(&t);
                 let a = self.expr(&es[1], expected);
@@ -2755,6 +2804,12 @@ impl<'a, 'db> Checker<'a, 'db> {
                     return Ty::error();
                 }
                 let l = self.expr(&es[0], expected.map(|e| e.clone().nullable()).as_ref());
+                self.check_constant_condition(
+                    &es[0],
+                    "ternary",
+                    "Short ternary operator condition",
+                    false,
+                );
                 let r = self.expr(&es[1], expected);
                 stir_types::join(self.ctx, &l, &r)
             }
@@ -3108,6 +3163,8 @@ impl<'a, 'db> Checker<'a, 'db> {
                 Some((FLOAT_NUMBER, _)) => float,
                 _ => Ty::untyped(),
             },
+            // what PHP's own constants are depends on where it's running
+            STRING_LITERAL if loc.file.origin(self.ctx.db) == FileOrigin::Stub => Ty::string(),
             STRING_LITERAL => match unquoted_literal(&node) {
                 Some(value) => Ty::literal(LitValue::String(value.into())),
                 None => Ty::string(),
@@ -3158,10 +3215,12 @@ impl<'a, 'db> Checker<'a, 'db> {
         let (l, r) = match op {
             AMP2 | AND_KW | PIPE2 | OR_KW => {
                 let l = self.expr(&es[0], None);
+                self.check_logical_side(node, op, &es[0], true);
                 let (t, f) = self.facts(&es[0]);
                 let snap = self.snapshot();
                 self.apply_facts(if matches!(op, AMP2 | AND_KW) { &t } else { &f });
                 let r = self.expr(&es[1], None);
+                self.check_logical_side(node, op, &es[1], false);
                 self.restore_narrowing(&snap);
                 (l, r)
             }
@@ -3184,6 +3243,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                 }
                 _ => Ty::error(),
             };
+        }
+        if matches!(op, EQ3 | NEQ2) {
+            self.check_identical(node, op, &l, &r);
         }
         match op {
             PLUS | MINUS | STAR | SLASH | PERCENT | POW => self.arith_result(op, &l, &r),
@@ -3308,6 +3370,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         match op.kind() {
             BANG => {
                 self.expr(e, None);
+                self.check_negation(node, e);
                 Ty::bool()
             }
             MINUS | PLUS => {
@@ -3380,7 +3443,7 @@ impl<'a, 'db> Checker<'a, 'db> {
     fn assign(&mut self, node: &SyntaxNode) -> Ty {
         let t = self.assign_inner(node);
         // a failed path doesn't assign: `$x = throw ...`
-        if t.is_never() {
+        if t.is_never() && exprs_of(node).last().is_some_and(can_end_a_path) {
             self.dead = true;
         }
         t
@@ -5749,6 +5812,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             .find(|c| c.kind() != ARG_LIST)
             .is_some_and(|c| c.kind() == NAME_EXPR && text_of(&c).eq_ignore_ascii_case("static"));
         if is_static && matches!(t.kind(), TyKind::Class { .. }) {
+            self.check_new_static(node);
             Ty::static_of(t)
         } else {
             t
@@ -6030,6 +6094,9 @@ impl<'a, 'db> Checker<'a, 'db> {
             if let Some(b) = node.child(BLOCK) {
                 self.block_stmts(&b);
             }
+            if !infer {
+                self.check_missing_return(node, "Anonymous function", &ret, true);
+            }
             let fcx = self.fns.pop().unwrap();
             if infer && is_generator(node) {
                 Ty::class("Generator", Vec::new())
@@ -6278,6 +6345,42 @@ fn is_generator(function: &SyntaxNode) -> bool {
         })
     }
     has_yield(function)
+}
+
+/// Can an expression of type `never` end a path because of what it runs? A variable narrowed to
+/// nothing is a mistake about the variable, and says nothing about the path.
+fn can_end_a_path(node: &SyntaxNode) -> bool {
+    match node.kind() {
+        PAREN_EXPR => exprs_of(node).first().is_some_and(can_end_a_path),
+        CALL_EXPR
+        | METHOD_CALL_EXPR
+        | NULLSAFE_METHOD_CALL_EXPR
+        | STATIC_CALL_EXPR
+        | NEW_EXPR
+        | THROW_EXPR
+        | EXIT_EXPR
+        | ASSIGN_EXPR
+        | MATCH_EXPR => true,
+        _ => false,
+    }
+}
+
+/// Is `clause` the last `elseif` of `node`, with nothing after it or only a `throw`?
+fn is_last_elseif(node: &SyntaxNode, clause: &SyntaxNode) -> bool {
+    let clauses = node
+        .children()
+        .filter(|c| matches!(c.kind(), ELSEIF_CLAUSE | ELSE_CLAUSE));
+    let mut after = clauses.skip_while(|c| c != clause).skip(1);
+    match after.next() {
+        None => true,
+        Some(c) if c.kind() == ELSE_CLAUSE => {
+            let body = c.child(BLOCK).unwrap_or(c);
+            let stmts: Vec<_> = body.children().filter(|s| is_stmt_kind(s.kind())).collect();
+            matches!(stmts.as_slice(), [one] if one.kind() == EXPR_STMT
+                && exprs_of(one).first().is_some_and(|e| e.kind() == THROW_EXPR))
+        }
+        Some(_) => false,
+    }
 }
 
 fn in_generator(node: &SyntaxNode) -> bool {

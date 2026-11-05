@@ -509,6 +509,7 @@ async fn settings_from(
         return (settings, ignore_notice(skipped, &php));
     };
     settings.deprecations = project.config.deprecations || config.deprecation_rules;
+    settings.treat_phpdoc_types_as_certain = config.treat_phpdoc_types_as_certain != Some(false);
     settings.php_paths = config.paths.clone();
     settings.php_excludes = config
         .exclude_paths

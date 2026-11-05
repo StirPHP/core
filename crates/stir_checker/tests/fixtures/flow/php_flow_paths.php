@@ -234,7 +234,7 @@ function name_only(): string {
 
 abstract class Makes {
     protected static string $builder = "x";
-    public static function make(): static { return new static(); }
+    public static function make(): static { return new static(); } // error: new.static
     public static function wrong(): self { return new self(); } // error: new.abstract
     public function other(): object { return new static::$builder(); }
     public function test(mixed $x): bool { return $x instanceof static::$builder || $x instanceof self::$builder; }
@@ -304,7 +304,7 @@ class Caches {
 }
 
 // `new self` on a trait used by an anonymous class is that class
-trait MakesItself { public static function make(): static { return new static(); } }
+trait MakesItself { public static function make(): static { return new static(); } } // error: new.static
 function anonymous_uses_trait(): object {
     return new class { use MakesItself; };
 }

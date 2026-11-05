@@ -71,6 +71,13 @@ pub fn is_nullable(env: &dyn TypeEnv, ty: &Ty) -> bool {
 /// the two if one is assignable to the other, otherwise their union (never widened to
 /// `mixed`).
 pub fn join(env: &dyn TypeEnv, a: &Ty, b: &Ty) -> Ty {
+    // what's not known fits anything, which doesn't make the other what it is
+    if a.is_error() || b.is_error() {
+        return Ty::error();
+    }
+    if a.is_untyped() || b.is_untyped() {
+        return Ty::untyped();
+    }
     let mut ck = Checker::new(env);
     // a plain `Closure` fits any `Closure(A): R`, but says less
     let plain_closure = matches!(a.kind(), K::Class { name, .. } if is_closure_name(name));

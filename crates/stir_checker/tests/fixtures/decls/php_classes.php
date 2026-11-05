@@ -13,7 +13,7 @@ abstract class Base implements Named
 
     public static function make(): static
     {
-        return new static();
+        return new static(); // error: new.static
     }
 
     public function id(): int

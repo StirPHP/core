@@ -118,6 +118,8 @@ pub struct AssertDef {
     pub ty: TypeRef,
     /// `!Type`
     pub negated: bool,
+    /// `=Type`: it says nothing when the condition doesn't hold.
+    pub equality: bool,
     pub when: AssertWhen,
 }
 
@@ -814,6 +816,7 @@ impl Lowerer {
                                 }),
                                 ty: self.doc_cx(&names).lower(&a.ty),
                                 negated: a.negated,
+                                equality: a.equality,
                                 when: match a.kind {
                                     stir_phpdoc::AssertKind::IfTrue => AssertWhen::IfTrue,
                                     stir_phpdoc::AssertKind::IfFalse => AssertWhen::IfFalse,

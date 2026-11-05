@@ -8,6 +8,9 @@
 //! Fixture-level settings are comments anywhere in the fixture's files:
 //! `// @level N` (PHPStan level for `.php` files, default: everything) and `// @php 8.1` or
 //! `// @php 8.1..8.3` (the PHP versions the project runs on, default: the latest).
+//!
+//! `missingType.*`, which would be all over fixtures about something else, only counts in a fixture
+//! that expects one.
 
 use std::path::{Path, PathBuf};
 
@@ -42,6 +45,7 @@ fn expected(text: &str) -> Vec<(usize, String, String)> {
         }
     }
     out.sort();
+    out.dedup();
     out
 }
 
@@ -108,8 +112,10 @@ fn run(paths: &[PathBuf]) -> Result<(), Failed> {
 fn check_one(db: &RootDatabase, ws: Workspace, file: SourceFile, text: &str) -> Result<(), String> {
     let diags = stir_checker::check_file(db, ws, file);
     let line_of = |off: u32| text[..off as usize].matches('\n').count() + 1;
+    let about_types = text.contains(": missingType.");
     let mut actual: Vec<(usize, String, String)> = diags
         .iter()
+        .filter(|d| about_types || !d.code.starts_with("missingType."))
         .map(|d| {
             let sev = match d.severity {
                 Severity::Error => "error",

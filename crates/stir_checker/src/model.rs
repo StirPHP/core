@@ -247,8 +247,14 @@ impl<'db> Ctx<'db> {
                 || subject.is_error()
                 || subject.is_untyped()
                 || matches!(subject.kind(), TyKind::Mixed);
-            Some(if unknown {
+            // `non-empty-mixed` and the like are lowered to `mixed`, which says nothing here; and
+            // an array with a key isn't an empty one, though it'd fit where one's expected
+            let extra_key = matches!((subject.kind(), target.kind()), (TyKind::Shape(a), TyKind::Shape(b))
+                if b.sealed && a.fields.iter().any(|f| !f.optional && b.field(&f.key).is_none()));
+            Some(if unknown || matches!(target.kind(), TyKind::Mixed) {
                 both()
+            } else if extra_key {
+                self.decide_conditionals(&c.otherwise)
             } else if stir_types::is_assignable(self, subject, target) {
                 self.decide_conditionals(&c.then)
             } else if stir_types::meet(self, subject, target).is_never() {
