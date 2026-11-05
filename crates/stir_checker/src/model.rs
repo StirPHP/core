@@ -243,8 +243,13 @@ impl<'db> Ctx<'db> {
         outer: &LowerCx,
         sink: &mut Vec<LowerError>,
     ) -> Vec<GenericParam> {
-        let params: Vec<GenericParam> = defs
-            .iter()
+        let params = self.declare_params(owner, defs);
+        self.lower_bounds(&params, defs, outer, sink);
+        params
+    }
+
+    fn declare_params(&self, owner: &str, defs: &[TypeParamDef]) -> Vec<GenericParam> {
+        defs.iter()
             .map(|d| {
                 let id = self.param_id(owner, &d.name);
                 GenericParam {
@@ -258,7 +263,16 @@ impl<'db> Ctx<'db> {
                     ty: Ty::param(id, d.name.clone()),
                 }
             })
-            .collect();
+            .collect()
+    }
+
+    fn lower_bounds(
+        &self,
+        params: &[GenericParam],
+        defs: &[TypeParamDef],
+        outer: &LowerCx,
+        sink: &mut Vec<LowerError>,
+    ) {
         let mut cx = outer.clone();
         cx.generics
             .extend(params.iter().map(|p| (p.name.clone(), p.ty.clone())));
@@ -268,7 +282,6 @@ impl<'db> Ctx<'db> {
                 self.set_bound(p.id, b);
             }
         }
-        params
     }
 
     // ---------------------------------------------------------------- classes
@@ -280,6 +293,14 @@ impl<'db> Ctx<'db> {
         }
         let model = self.build_class(&key).map(Rc::new);
         self.classes.borrow_mut().insert(key, model.clone());
+        // After the class is cached, because a bound can name the class itself.
+        if let Some(c) = &model {
+            let cx = LowerCx {
+                dialect: Some(c.def.dialect),
+                ..LowerCx::default()
+            };
+            self.lower_bounds(&c.params, &c.def.type_params, &cx, &mut Vec::new());
+        }
         model
     }
 
@@ -288,12 +309,7 @@ impl<'db> Ctx<'db> {
         let items = self.items(loc.file);
         let def = &items.classes[loc.index as usize];
         let scope = items.scope(def.scope).clone();
-        let mut sink = Vec::new();
-        let cx = LowerCx {
-            dialect: Some(def.dialect),
-            ..LowerCx::default()
-        };
-        let params = self.generic_params(key, &def.type_params, &cx, &mut sink);
+        let params = self.declare_params(key, &def.type_params);
         Some(ClassModel {
             key: key.clone(),
             name: def.name.0.clone(),
