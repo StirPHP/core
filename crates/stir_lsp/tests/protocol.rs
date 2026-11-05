@@ -513,8 +513,7 @@ async fn baselines_and_ignore_rules_apply_as_in_the_cli() {
 
 const NO_ECHO: &str = r#"fn visit_echo(node, ctx) { ctx.error("no echo", "app.noEcho"); }"#;
 
-/// Whether a question is out, or the server's said something else about the rules: what's come in
-/// so far shows, and the next `publishDiagnostics` for `uri` has `count` diagnostics.
+/// Waits for a `publishDiagnostics` for `uri` with `count` diagnostics of the code `code`.
 async fn diagnostics_settle(c: &mut Client, uri: &str, code: &str, count: usize) -> Vec<Value> {
     for _ in 0..20 {
         let diags = c.diagnostics(uri).await;

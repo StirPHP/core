@@ -487,6 +487,13 @@ impl Server {
             texts.push((script, text));
         }
         self.write(|s| {
+            // what's changed hasn't been allowed: it mustn't run before that's decided
+            if texts
+                .iter()
+                .any(|(script, text)| script.text(&s.db) != text)
+            {
+                s.set_rules_running(false);
+            }
             for (script, text) in texts {
                 if script.text(&s.db) != &text {
                     let _ = script.set_text(&mut s.db).to(text);

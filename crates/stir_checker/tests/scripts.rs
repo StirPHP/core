@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use salsa::{Event, EventKind, Setter as _, Storage};
-use stir_checker::{check_file, script, script_diagnostics, typed_file};
+use stir_checker::{check_file, script_diagnostics, typed_file};
 use stir_db::{Db, FileOrigin, ScriptFile, Settings, SourceFile, Workspace};
 
 /// A database that remembers which queries ran.
@@ -569,7 +569,6 @@ fn queries_stay_reachable_from_other_threads() {
     for t in threads {
         assert_eq!(t.join().unwrap(), ["app.noEcho"]);
     }
-    let _ = script::script_index(&s.db, s.ws);
 }
 
 #[test]

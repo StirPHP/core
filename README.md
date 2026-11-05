@@ -248,9 +248,9 @@ read or doesn't compile is `SPHP0071`. `print` goes to the log (`STIRPHP_LOG=sti
 through `window/showMessageRequest`, and without an answer the scripts stay off. An editor that knows a workspace isn't
 trusted passes `"workspaceTrusted": false` in `initializationOptions`, and then they never run.
 
-On the corpus, one rule on every function call and one return type hook add under 2% to the time of a run, at about 20
-microseconds per call of CPU time. So the editor runs them as part of its diagnostics, per file, without a pass of their
-own.
+On Laravel's framework, Symfony and PHPStan's source, one rule on every function call and one return type hook add under
+3% to the time of a run, and a rule call costs 14 to 34 microseconds of CPU time. So the editor runs them as part of its
+diagnostics, per file, without a pass of their own.
 
 ## PHP versions
 
