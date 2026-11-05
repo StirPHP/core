@@ -882,3 +882,79 @@ async fn hooks_and_magic_members_reach_hover_and_completion() {
     assert!(labels.contains(&"title"), "{labels:?}");
     assert!(labels.contains(&"publish"), "{labels:?}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn implementations_and_hierarchies() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    write(
+        &root.join("stirphp.neon"),
+        "parameters:\n    stirphp:\n        srcDir: src\n",
+    );
+    let path = root.join("src/a.php");
+    let text = "<?php\ninterface Job { public function run(): void; }\nclass Work implements Job { public function run(): void { helper(); } }\nfunction helper(): void {}\nfunction go(Job $j): void { $j->run(); }\n";
+    write(&path, text);
+    let doc = uri(&path);
+
+    let mut c = Client::start();
+    let init = c
+        .request(
+            "initialize",
+            json!({"processId": null, "rootUri": uri(&root), "capabilities": {
+                "textDocument": {"typeHierarchy": {"dynamicRegistration": true}}
+            }}),
+        )
+        .await;
+    assert_eq!(init["capabilities"]["implementationProvider"], true);
+    assert_eq!(init["capabilities"]["declarationProvider"], true);
+    assert_eq!(init["capabilities"]["callHierarchyProvider"], true);
+    c.notify("initialized", json!({})).await;
+    let registration = c.message("client/registerCapability").await;
+    assert_eq!(
+        registration["params"]["registrations"][0]["method"],
+        "textDocument/prepareTypeHierarchy"
+    );
+    c.respond(&registration, json!(null)).await;
+    c.notify(
+        "textDocument/didOpen",
+        json!({"textDocument": {"uri": doc, "languageId": "php", "version": 1, "text": text}}),
+    )
+    .await;
+
+    let at = |line: u32, character: u32| json!({"textDocument": {"uri": doc}, "position": {"line": line, "character": character}});
+    let impls = c.request("textDocument/implementation", at(1, 12)).await;
+    assert_eq!(impls[0]["range"]["start"]["line"], 2, "{impls}");
+    assert_eq!(impls[0]["uri"], json!(doc));
+
+    let decl = c.request("textDocument/declaration", at(2, 45)).await;
+    assert_eq!(decl["range"]["start"]["line"], 1, "{decl}");
+
+    let prepared = c
+        .request("textDocument/prepareCallHierarchy", at(2, 45))
+        .await;
+    let item = prepared[0].clone();
+    assert_eq!(item["name"], "run");
+    let incoming = c
+        .request("callHierarchy/incomingCalls", json!({"item": item}))
+        .await;
+    assert_eq!(incoming[0]["from"]["name"], "go", "{incoming}");
+    assert_eq!(incoming[0]["fromRanges"][0]["start"]["line"], 4);
+    let outgoing = c
+        .request("callHierarchy/outgoingCalls", json!({"item": item}))
+        .await;
+    assert_eq!(outgoing[0]["to"]["name"], "helper", "{outgoing}");
+
+    let types = c
+        .request("textDocument/prepareTypeHierarchy", at(2, 8))
+        .await;
+    let item = types[0].clone();
+    assert_eq!(item["name"], "Work");
+    let up = c
+        .request("typeHierarchy/supertypes", json!({"item": item}))
+        .await;
+    assert_eq!(up[0]["name"], "Job", "{up}");
+    let down = c
+        .request("typeHierarchy/subtypes", json!({"item": up[0]}))
+        .await;
+    assert_eq!(down[0]["name"], "Work", "{down}");
+}

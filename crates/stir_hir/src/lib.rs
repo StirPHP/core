@@ -111,5 +111,26 @@ pub fn trait_uses(db: &dyn Db, ws: Workspace) -> Arc<FxHashMap<SmolStr, Vec<Smol
     Arc::new(uses)
 }
 
+/// By lowercase name, the classes that extend, implement or use a class-like directly, sorted.
+/// Everything in the workspace counts: vendor classes and stubs implement interfaces too.
+#[salsa::tracked(returns(ref))]
+pub fn direct_subtypes(db: &dyn Db, ws: Workspace) -> Arc<FxHashMap<SmolStr, Vec<SmolStr>>> {
+    let mut subs: FxHashMap<SmolStr, Vec<SmolStr>> = FxHashMap::default();
+    for &file in ws.files(db) {
+        for c in &file_items(db, file).classes {
+            for t in c.extends.iter().chain(&c.implements).chain(&c.traits) {
+                if let type_ref::TypeRefKind::Named(name, _) = &t.kind {
+                    subs.entry(name.key()).or_default().push(c.name.key());
+                }
+            }
+        }
+    }
+    for list in subs.values_mut() {
+        list.sort();
+        list.dedup();
+    }
+    Arc::new(subs)
+}
+
 #[cfg(test)]
 mod tests;

@@ -25,7 +25,7 @@ use tower_lsp_server::{Client, LanguageServer};
 
 use crate::convert::{Encoding, LineMap};
 use crate::trust::{self, TrustStore};
-use crate::{complete, hints, hover, nav, symbols, tokens};
+use crate::{complete, hierarchy, hints, hover, nav, symbols, tokens};
 
 /// Delay between an edit and the diagnostics run it triggers.
 const DIAGNOSTICS_DELAY: Duration = Duration::from_millis(150);
@@ -68,7 +68,8 @@ impl State {
             ws,
             files,
             open: FxHashMap::default(),
-            foreign: vendor.into_iter().collect(),
+            // a stub opened from the cache directory stays a dependency
+            foreign: vendor.into_iter().chain([stub_dir()]).collect(),
             root,
             rules: Vec::new(),
         }
@@ -253,6 +254,9 @@ pub struct Server {
     diagnostics: Arc<Notify>,
     workspace_folder: Mutex<Option<PathBuf>>,
     watch_dynamic: Mutex<bool>,
+    /// The client can have a type hierarchy registered, which is the only way to offer one: the
+    /// server capabilities of the protocol's types have no field for it.
+    type_hierarchy_dynamic: Mutex<bool>,
     /// What the user was last told about the project, so that a reload doesn't repeat it.
     notices: Mutex<Vec<String>>,
     rules: RulesTrust,
@@ -303,6 +307,7 @@ impl Server {
             diagnostics: Arc::new(Notify::new()),
             workspace_folder: Mutex::new(None),
             watch_dynamic: Mutex::new(false),
+            type_hierarchy_dynamic: Mutex::new(false),
             notices: Mutex::new(Vec::new()),
             rules: RulesTrust {
                 store: trust.store,
@@ -791,6 +796,94 @@ fn valid_identifier(name: &str) -> bool {
         && chars.all(|c| c.is_alphanumeric() || c == '_' || !c.is_ascii())
 }
 
+/// A place in a workspace file a client hands back to us later: its path may be `stubs://`, which
+/// no URI says.
+fn hierarchy_data(db: &dyn Db, file: SourceFile, offset: TextSize) -> serde_json::Value {
+    serde_json::json!({
+        "path": file.path(db).to_string_lossy(),
+        "offset": u32::from(offset),
+    })
+}
+
+/// The file and offset of [`hierarchy_data`].
+fn from_hierarchy_data(
+    db: &dyn Db,
+    ws: Workspace,
+    data: Option<&serde_json::Value>,
+) -> Option<(SourceFile, TextSize)> {
+    let data = data?;
+    let path = Path::new(data.get("path")?.as_str()?);
+    let offset = u32::try_from(data.get("offset")?.as_u64()?).ok()?;
+    let file = ws.files(db).iter().find(|f| f.path(db) == path)?;
+    Some((*file, offset.into()))
+}
+
+fn call_item(db: &dyn Db, item: &hierarchy::CallItem, enc: Encoding) -> Option<CallHierarchyItem> {
+    let map = LineMap::new(item.file.text(db), enc);
+    let kind = match item.kind {
+        hierarchy::CallKind::Function => SymbolKind::FUNCTION,
+        hierarchy::CallKind::Method => SymbolKind::METHOD,
+        hierarchy::CallKind::Constructor => SymbolKind::CONSTRUCTOR,
+        hierarchy::CallKind::File => SymbolKind::FILE,
+    };
+    let mut data = hierarchy_data(db, item.file, item.focus_range.start());
+    data["end"] = serde_json::json!(u32::from(item.full_range.end()));
+    data["start"] = serde_json::json!(u32::from(item.full_range.start()));
+    data["top"] = serde_json::json!(item.kind == hierarchy::CallKind::File);
+    Some(CallHierarchyItem {
+        name: item.name.clone(),
+        kind,
+        tags: None,
+        detail: item.detail.clone(),
+        uri: file_uri(db, item.file)?,
+        range: map.range(item.full_range),
+        selection_range: map.range(item.focus_range),
+        data: Some(data),
+    })
+}
+
+fn type_kind(kind: stir_hir::ClassKind) -> SymbolKind {
+    match kind {
+        stir_hir::ClassKind::Class => SymbolKind::CLASS,
+        stir_hir::ClassKind::Interface => SymbolKind::INTERFACE,
+        stir_hir::ClassKind::Trait => SymbolKind::CLASS,
+        stir_hir::ClassKind::Enum => SymbolKind::ENUM,
+    }
+}
+
+fn type_hierarchy_item(
+    db: &dyn Db,
+    item: &hierarchy::TypeItem,
+    enc: Encoding,
+) -> Option<TypeHierarchyItem> {
+    let map = LineMap::new(item.file.text(db), enc);
+    Some(TypeHierarchyItem {
+        name: item.name.clone(),
+        kind: type_kind(item.kind),
+        tags: None,
+        detail: item.detail.clone(),
+        uri: file_uri(db, item.file)?,
+        range: map.range(item.full_range),
+        selection_range: map.range(item.focus_range),
+        data: Some(serde_json::json!({ "key": item.key.as_str() })),
+    })
+}
+
+fn type_key(item: &TypeHierarchyItem) -> Option<String> {
+    Some(item.data.as_ref()?.get("key")?.as_str()?.to_owned())
+}
+
+fn scalar_or_array(locations: Vec<Location>) -> Option<GotoDefinitionResponse> {
+    match locations.len() {
+        0 => None,
+        1 => locations
+            .into_iter()
+            .next()
+            .map(GotoDefinitionResponse::Scalar),
+        _ => Some(GotoDefinitionResponse::Array(locations)),
+    }
+}
+
 impl LanguageServer for Server {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let utf8 = params
@@ -833,6 +926,13 @@ impl LanguageServer for Server {
             .and_then(|w| w.did_change_watched_files.as_ref())
             .and_then(|d| d.dynamic_registration)
             .unwrap_or(false);
+        *self.type_hierarchy_dynamic.lock().unwrap() = params
+            .capabilities
+            .text_document
+            .as_ref()
+            .and_then(|t| t.type_hierarchy.as_ref())
+            .and_then(|t| t.dynamic_registration)
+            .unwrap_or(false);
 
         let legend = SemanticTokensLegend {
             token_types: tokens::TOKEN_TYPES
@@ -866,6 +966,9 @@ impl LanguageServer for Server {
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
+                declaration_provider: Some(DeclarationCapability::Simple(true)),
+                implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
+                call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
                 type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
                 references_provider: Some(OneOf::Left(true)),
                 document_highlight_provider: Some(OneOf::Left(true)),
@@ -903,6 +1006,27 @@ impl LanguageServer for Server {
 
     async fn initialized(&self, _: InitializedParams) {
         self.load().await;
+        if *self.type_hierarchy_dynamic.lock().unwrap() {
+            let selector = DocumentFilter {
+                language: Some("php".into()),
+                scheme: None,
+                pattern: None,
+            };
+            let options = TypeHierarchyRegistrationOptions {
+                text_document_registration_options: TextDocumentRegistrationOptions {
+                    document_selector: Some(vec![selector]),
+                },
+                ..Default::default()
+            };
+            let registration = Registration {
+                id: "stirphp-type-hierarchy".into(),
+                method: "textDocument/prepareTypeHierarchy".into(),
+                register_options: serde_json::to_value(options).ok(),
+            };
+            if let Err(error) = self.client.register_capability(vec![registration]).await {
+                tracing::warn!(%error, "cannot offer a type hierarchy");
+            }
+        }
         if *self.watch_dynamic.lock().unwrap() {
             let watchers = [
                 "**/*.php",
@@ -1132,6 +1256,164 @@ impl LanguageServer for Server {
                 )?))
             },
         )
+        .await
+    }
+
+    async fn goto_declaration(
+        &self,
+        params: request::GotoDeclarationParams,
+    ) -> Result<Option<request::GotoDeclarationResponse>> {
+        let pos = params.text_document_position_params.position;
+        let enc = self.encoding();
+        self.read(
+            &params.text_document_position_params.text_document.uri,
+            move |db, ws, file, map| {
+                let (_, def) = nav::def_at(db, ws, file, map.offset(pos))?;
+                let locations = hierarchy::declarations(db, ws, file, &def)
+                    .into_iter()
+                    .filter_map(|t| location(db, t.file, t.focus_range, enc))
+                    .collect();
+                scalar_or_array(locations)
+            },
+        )
+        .await
+    }
+
+    async fn goto_implementation(
+        &self,
+        params: request::GotoImplementationParams,
+    ) -> Result<Option<request::GotoImplementationResponse>> {
+        let pos = params.text_document_position_params.position;
+        let enc = self.encoding();
+        self.read(
+            &params.text_document_position_params.text_document.uri,
+            move |db, ws, file, map| {
+                let (_, def) = nav::def_at(db, ws, file, map.offset(pos))?;
+                let locations = hierarchy::implementations(db, ws, file, &def)
+                    .into_iter()
+                    .filter_map(|t| location(db, t.file, t.focus_range, enc))
+                    .collect();
+                Some(GotoDefinitionResponse::Array(locations))
+            },
+        )
+        .await
+    }
+
+    async fn prepare_call_hierarchy(
+        &self,
+        params: CallHierarchyPrepareParams,
+    ) -> Result<Option<Vec<CallHierarchyItem>>> {
+        let pos = params.text_document_position_params.position;
+        let enc = self.encoding();
+        self.read(
+            &params.text_document_position_params.text_document.uri,
+            move |db, ws, file, map| {
+                let (_, item) = hierarchy::callable_at(db, ws, file, map.offset(pos))?;
+                Some(vec![call_item(db, &item, enc)?])
+            },
+        )
+        .await
+    }
+
+    async fn incoming_calls(
+        &self,
+        params: CallHierarchyIncomingCallsParams,
+    ) -> Result<Option<Vec<CallHierarchyIncomingCall>>> {
+        let data = params.item.data;
+        self.read_ws(move |db, ws, enc| {
+            let (file, offset) = from_hierarchy_data(db, ws, data.as_ref())?;
+            let (def, _) = hierarchy::callable_at(db, ws, file, offset)?;
+            let calls = hierarchy::incoming_calls(db, ws, &def)
+                .into_iter()
+                .filter_map(|(caller, ranges)| {
+                    let map = LineMap::new(caller.file.text(db), enc);
+                    Some(CallHierarchyIncomingCall {
+                        from: call_item(db, &caller, enc)?,
+                        from_ranges: ranges.into_iter().map(|r| map.range(r)).collect(),
+                    })
+                })
+                .collect();
+            Some(calls)
+        })
+        .await
+    }
+
+    async fn outgoing_calls(
+        &self,
+        params: CallHierarchyOutgoingCallsParams,
+    ) -> Result<Option<Vec<CallHierarchyOutgoingCall>>> {
+        let data = params.item.data;
+        self.read_ws(move |db, ws, enc| {
+            let (file, _) = from_hierarchy_data(db, ws, data.as_ref())?;
+            let at = |key: &str| {
+                data.as_ref()?
+                    .get(key)?
+                    .as_u64()
+                    .and_then(|v| u32::try_from(v).ok())
+            };
+            let range = TextRange::new(at("start")?.into(), at("end")?.into());
+            let map = LineMap::new(file.text(db), enc);
+            let calls = hierarchy::outgoing_calls(db, ws, file, range)
+                .into_iter()
+                .filter_map(|(callee, ranges)| {
+                    Some(CallHierarchyOutgoingCall {
+                        to: call_item(db, &callee, enc)?,
+                        from_ranges: ranges.into_iter().map(|r| map.range(r)).collect(),
+                    })
+                })
+                .collect();
+            Some(calls)
+        })
+        .await
+    }
+
+    async fn prepare_type_hierarchy(
+        &self,
+        params: TypeHierarchyPrepareParams,
+    ) -> Result<Option<Vec<TypeHierarchyItem>>> {
+        let pos = params.text_document_position_params.position;
+        let enc = self.encoding();
+        self.read(
+            &params.text_document_position_params.text_document.uri,
+            move |db, ws, file, map| {
+                let item = hierarchy::type_at(db, ws, file, map.offset(pos))?;
+                Some(vec![type_hierarchy_item(db, &item, enc)?])
+            },
+        )
+        .await
+    }
+
+    async fn supertypes(
+        &self,
+        params: TypeHierarchySupertypesParams,
+    ) -> Result<Option<Vec<TypeHierarchyItem>>> {
+        let key = type_key(&params.item);
+        self.read_ws(move |db, ws, enc| {
+            let items = hierarchy::supertypes(db, ws, &key?);
+            Some(
+                items
+                    .iter()
+                    .filter_map(|i| type_hierarchy_item(db, i, enc))
+                    .collect(),
+            )
+        })
+        .await
+    }
+
+    async fn subtypes(
+        &self,
+        params: TypeHierarchySubtypesParams,
+    ) -> Result<Option<Vec<TypeHierarchyItem>>> {
+        let key = type_key(&params.item);
+        self.read_ws(move |db, ws, enc| {
+            let items = hierarchy::subtypes(db, ws, &key?);
+            Some(
+                items
+                    .iter()
+                    .filter_map(|i| type_hierarchy_item(db, i, enc))
+                    .collect(),
+            )
+        })
         .await
     }
 

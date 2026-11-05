@@ -6,6 +6,7 @@ use std::sync::Arc;
 use smol_str::SmolStr;
 use stir_checker::{Def, MemberKind, typed_file};
 use stir_db::{Db, FileOrigin, SourceFile, Workspace};
+use stir_hir::name::{Fqn, UseKind};
 use stir_hir::{ClassDef, ItemLoc, NodePtr, file_items};
 use stir_syntax::{SyntaxKind::*, SyntaxNode, SyntaxToken, TextRange, TextSize};
 
@@ -133,7 +134,7 @@ pub fn resolve_type_name(
     None
 }
 
-/// Class names outside expressions: types, supertypes, `use` imports, `catch`.
+/// Class names outside expressions: types, supertypes, `catch`, and what `use` imports.
 fn type_refs(
     db: &dyn Db,
     ws: Workspace,
@@ -141,27 +142,89 @@ fn type_refs(
     root: &SyntaxNode,
 ) -> Vec<(TextRange, Def)> {
     let mut out = Vec::new();
-    for node in root.descendants().filter(|n| n.kind() == NAME_REF) {
+    for node in root.descendants() {
+        if node.kind() == USE_DECL {
+            use_refs(db, ws, &node, &mut out);
+            continue;
+        }
+        if node.kind() != NAME_REF {
+            continue;
+        }
         let Some(parent) = node.parent() else {
             continue;
         };
-        let imported = match parent.kind() {
-            NAMED_TYPE | EXTENDS_CLAUSE | IMPLEMENTS_CLAUSE | CATCH_CLAUSE | TRAIT_USE
-            | ATTRIBUTE => false,
-            USE_CLAUSE => true,
-            _ => continue,
-        };
-        // `use App\{A, B}` groups and function/const imports aren't classes
-        if imported && parent.parent().is_some_and(|g| g.kind() != USE_DECL) {
+        if !matches!(
+            parent.kind(),
+            NAMED_TYPE | EXTENDS_CLAUSE | IMPLEMENTS_CLAUSE | CATCH_CLAUSE | TRAIT_USE | ATTRIBUTE
+        ) {
             continue;
         }
         let text = node.text().to_string();
         let range = node.text_range();
-        if let Some(def) = resolve_type_name(db, ws, file, range.start(), &text, imported) {
+        if let Some(def) = resolve_type_name(db, ws, file, range.start(), &text, false) {
             out.push((range, def));
         }
     }
     out
+}
+
+/// What the names of a `use` declaration import: classes, functions and constants, in groups too.
+fn use_refs(db: &dyn Db, ws: Workspace, decl: &SyntaxNode, out: &mut Vec<(TextRange, Def)>) {
+    let index = stir_hir::def_index(db, ws);
+    let kind_of = |n: &SyntaxNode| {
+        if n.children_with_tokens().any(|e| e.kind() == FUNCTION_KW) {
+            Some(UseKind::Function)
+        } else if n.children_with_tokens().any(|e| e.kind() == CONST_KW) {
+            Some(UseKind::Const)
+        } else {
+            None
+        }
+    };
+    let name_text = |n: &SyntaxNode| {
+        n.children()
+            .find(|c| c.kind() == NAME_REF)
+            .map(|name| (name.text_range(), name.text().to_string().trim().to_owned()))
+    };
+    let mut add = |range: TextRange, kind: UseKind, full: &str| {
+        let fqn = Fqn::new(full);
+        let def = match kind {
+            UseKind::Class => index
+                .classes
+                .contains_key(&fqn.key())
+                .then(|| Def::Class(fqn.key())),
+            UseKind::Function => index
+                .functions
+                .get(&fqn.key())
+                .and_then(|l| l.first())
+                .map(|l| Def::Function(*l)),
+            UseKind::Const => index
+                .consts
+                .get(fqn.as_str())
+                .and_then(|l| l.first())
+                .map(|l| Def::Const(*l)),
+        };
+        if let Some(def) = def {
+            out.push((range, def));
+        }
+    };
+    let decl_kind = kind_of(decl);
+    for clause in decl.children().filter(|c| c.kind() == USE_CLAUSE) {
+        let Some((range, prefix)) = name_text(&clause) else {
+            continue;
+        };
+        let kind = kind_of(&clause).or(decl_kind).unwrap_or(UseKind::Class);
+        let Some(group) = clause.children().find(|c| c.kind() == USE_GROUP) else {
+            add(range, kind, &prefix);
+            continue;
+        };
+        for inner in group.children().filter(|c| c.kind() == USE_CLAUSE) {
+            let Some((range, name)) = name_text(&inner) else {
+                continue;
+            };
+            let kind = kind_of(&inner).or(decl_kind).unwrap_or(UseKind::Class);
+            add(range, kind, &format!("{prefix}\\{name}"));
+        }
+    }
 }
 
 /// The resolved name under `offset`, with its range.
@@ -305,4 +368,21 @@ pub fn enclosing_function(node: &SyntaxNode) -> Option<SyntaxNode> {
             FUNCTION_DECL | METHOD_DECL | CLOSURE_EXPR | ARROW_FN_EXPR
         )
     })
+}
+
+/// A stub of an extension that isn't PHP's own is only offered if Composer's files mention the
+/// extension, or there aren't any. It's still known to the checker: code can test for it.
+pub fn extension_is_offered(db: &dyn Db, ws: Workspace, file: SourceFile) -> bool {
+    let Some(declared) = &ws.settings(db).declared_extensions else {
+        return true;
+    };
+    if file.origin(db) != stir_db::FileOrigin::Stub {
+        return true;
+    }
+    let path = file.path(db).to_string_lossy();
+    let path = path.strip_prefix("stubs://").unwrap_or(&path);
+    let extension = path.split('/').next().unwrap_or_default();
+    stir_stubs::ships_with_php(extension)
+        || extension == "override"
+        || declared.iter().any(|d| d.eq_ignore_ascii_case(extension))
 }

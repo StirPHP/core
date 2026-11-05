@@ -6,6 +6,7 @@
 
 pub mod complete;
 pub mod convert;
+pub mod hierarchy;
 pub mod hints;
 pub mod hover;
 pub mod nav;
