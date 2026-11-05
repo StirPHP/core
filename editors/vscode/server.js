@@ -1,5 +1,5 @@
 // @ts-check
-// Downloads, verifies and installs `sphp` from GitHub Releases. Independent of
+// Downloads, verifies and installs `stirphp` from GitHub Releases. Independent of
 // the VS Code API, so it can be tested with plain Node.
 
 import { createHash } from 'node:crypto';
@@ -16,7 +16,7 @@ const run = promisify(execFile);
 /** @typedef {'stable' | 'nightly'} Channel */
 
 /**
- * A release of `sphp` for this platform.
+ * A release of `stirphp` for this platform.
  * @typedef {object} Release
  * @property {string} id         Identifies the build: the tag for stable, the commit for nightly
  * @property {string} label      Human-readable version
@@ -31,10 +31,10 @@ const run = promisify(execFile);
  * @property {Channel} channel
  * @property {string} id
  * @property {string} label
- * @property {string} path       The `sphp` executable
+ * @property {string} path       The `stirphp` executable
  */
 
-/** The Rust target `sphp` is built for on this machine, or null if there's no build. */
+/** The Rust target `stirphp` is built for on this machine, or null if there's no build. */
 export function targetTriple(platform = process.platform, arch = process.arch) {
   /** @type {Record<string, string>} */
   const targets = {
@@ -69,9 +69,9 @@ export async function latestRelease(channel, target) {
   /** @type {{ tag_name: string, target_commitish: string, assets?: { name: string, browser_download_url: string }[] }} */
   const release = /** @type {any} */ (await (await fetchOk(api, 'application/vnd.github+json')).json());
   const assets = release.assets ?? [];
-  const archive = assets.find((a) => a.name.startsWith('sphp-') && a.name.includes(`-${target}.`));
+  const archive = assets.find((a) => a.name.startsWith('stirphp-') && a.name.includes(`-${target}.`));
   const sums = assets.find((a) => a.name === 'SHA256SUMS');
-  if (!archive || !sums) throw new Error(`${release.tag_name} has no sphp build for ${target}`);
+  if (!archive || !sums) throw new Error(`${release.tag_name} has no stirphp build for ${target}`);
   // nightlies reuse their tag: the commit identifies the build
   const id = channel === 'nightly' ? String(release.target_commitish) : String(release.tag_name);
   const label = channel === 'nightly' ? `nightly (${id.slice(0, 7)})` : String(release.tag_name).replace(/^v/, '');
@@ -107,9 +107,9 @@ export async function install(release, channel, dir, { verify = true } = {}) {
   await rm(staging, { recursive: true, force: true });
   await mkdir(staging, { recursive: true });
 
-  // Windows builds come as .zip with sphp.exe
+  // Windows builds come as .zip with stirphp.exe
   const zip = release.archiveName.endsWith('.zip');
-  const exe = zip ? 'sphp.exe' : 'sphp';
+  const exe = zip ? 'stirphp.exe' : 'stirphp';
   if (zip) {
     const files = unzipSync(new Uint8Array(archive), { filter: (f) => f.name.endsWith(`/${exe}`) || f.name === exe });
     const entry = Object.entries(files)[0];
@@ -118,7 +118,7 @@ export async function install(release, channel, dir, { verify = true } = {}) {
   } else {
     const archivePath = join(staging, release.archiveName);
     await writeFile(archivePath, archive);
-    // the archive holds one directory: sphp-<name>-<target>/sphp
+    // the archive holds one directory: stirphp-<name>-<target>/stirphp
     await tar.x({ file: archivePath, cwd: staging, strip: 1, filter: (p) => p.endsWith(`/${exe}`) });
     await rm(archivePath);
   }

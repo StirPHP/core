@@ -1,7 +1,7 @@
 {
   "name": "stirphp",
   "displayName": "StirPHP",
-  "description": "StirPHP language support: diagnostics, completion, navigation and highlighting via the sphp language server.",
+  "description": "Type checking, completion and navigation for plain PHP, from the StirPHP language server.",
   "version": "0.1.21",
   "publisher": "stirphp",
   "license": "MIT",
@@ -19,35 +19,15 @@
     "onLanguage:php"
   ],
   "contributes": {
-    "languages": [
-      {
-        "id": "sphp",
-        "aliases": [
-          "StirPHP",
-          "sphp"
-        ],
-        "extensions": [
-          ".sphp"
-        ],
-        "configuration": "./language-configuration.json"
-      }
-    ],
-    "grammars": [
-      {
-        "language": "sphp",
-        "scopeName": "source.sphp",
-        "path": "./syntaxes/sphp.tmLanguage.json"
-      }
-    ],
     "configuration": {
       "title": "StirPHP",
       "properties": {
-        "sphp.server.path": {
+        "stirphp.server.path": {
           "type": "string",
           "default": "",
-          "markdownDescription": "The `sphp` binary to run (started as `sphp lsp`): a path, or a command on the `PATH`. Leave empty to let the extension download and update `sphp` itself."
+          "markdownDescription": "The `stirphp` binary to run (started as `stirphp lsp`): a path, or a command on the `PATH`. Leave empty to let the extension download and update `stirphp` itself."
         },
-        "sphp.server.channel": {
+        "stirphp.server.channel": {
           "type": "string",
           "enum": [
             "stable",
@@ -58,14 +38,14 @@
             "Built from every commit on main; may be broken."
           ],
           "default": "stable",
-          "markdownDescription": "Which builds of `sphp` the extension downloads (when `sphp.server.path` is empty)."
+          "markdownDescription": "Which builds of `stirphp` the extension downloads (when `stirphp.server.path` is empty)."
         },
-        "sphp.server.autoUpdate": {
+        "stirphp.server.autoUpdate": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Look for a newer `sphp` every few hours and install it (when `sphp.server.path` is empty). **StirPHP: Check for Updates** checks at any time."
+          "markdownDescription": "Look for a newer `stirphp` every few hours and install it (when `stirphp.server.path` is empty). **StirPHP: Check for Updates** checks at any time."
         },
-        "sphp.trace.server": {
+        "stirphp.trace.server": {
           "type": "string",
           "enum": [
             "off",
@@ -73,46 +53,85 @@
             "verbose"
           ],
           "default": "off",
-          "description": "Trace the communication between VS Code and the language server."
+          "markdownDescription": "How much of the communication with the language server to log: `verbose` adds message contents. It's logged once the log level of the **StirPHP** output channel is Trace."
         }
       }
     },
     "commands": [
       {
-        "command": "sphp.restartServer",
+        "command": "stirphp.restartServer",
         "title": "Restart Language Server",
         "category": "StirPHP"
       },
       {
-        "command": "sphp.checkForUpdates",
+        "command": "stirphp.checkForUpdates",
         "title": "Check for Updates",
         "category": "StirPHP"
-      }
-    ],
-    "semanticTokenModifiers": [
-      {
-        "id": "mutable",
-        "description": "A mutable binding (`var $x`, `mut x`)."
       }
     ],
     "semanticTokenScopes": [
       {
         "language": "php",
         "scopes": {
+          "namespace": [
+            "entity.name.type.namespace.php"
+          ],
+          "type": [
+            "keyword.other.type.php"
+          ],
+          "typeParameter": [
+            "support.class.php"
+          ],
+          "class": [
+            "support.class.php"
+          ],
+          "class.declaration": [
+            "entity.name.type.class.php"
+          ],
+          "class.defaultLibrary": [
+            "support.class.builtin.php"
+          ],
+          "interface": [
+            "support.class.php"
+          ],
+          "interface.declaration": [
+            "entity.name.type.interface.php"
+          ],
+          "enum": [
+            "support.class.php"
+          ],
+          "enum.declaration": [
+            "entity.name.type.enum.php"
+          ],
+          "enumMember": [
+            "constant.enum.php"
+          ],
+          "function": [
+            "entity.name.function.php"
+          ],
+          "function.defaultLibrary": [
+            "support.function.basic_functions.php"
+          ],
+          "method": [
+            "entity.name.function.php"
+          ],
+          "parameter": [
+            "variable.other.php"
+          ],
+          "variable": [
+            "variable.other.php"
+          ],
           "variable.readonly": [
-            "variable.other.constant.sphp"
+            "constant.other.php"
           ],
-          "parameter.readonly": [
-            "variable.parameter.sphp"
+          "property": [
+            "variable.other.property.php"
           ],
-          "variable.mutable": [
-            "variable.other.readwrite.sphp"
+          "property.static": [
+            "variable.other.class.php"
           ],
-          "parameter.mutable": [
-            "variable.parameter.mutable.sphp"
-          ],
-          "property.mutable": [
-            "variable.other.property.mutable.sphp"
+          "property.readonly.static": [
+            "constant.other.class.php"
           ]
         }
       }
