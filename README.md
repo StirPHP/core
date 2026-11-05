@@ -1,214 +1,252 @@
 # StirPHP
 
-StirPHP is to PHP what TypeScript is to JavaScript: a strictly typed superset
-of PHP that is type-checked and transpiled to plain PHP (with PHPStan-compatible
-PHPDoc). Plain `.php` files typed with PHPStan PHPDoc are first-class, the way
-TypeScript treats `.js` + JSDoc.
+StirPHP is a type checker and language server for plain PHP. It reads your `.php` files, their PHPDoc and your Composer
+setup as they are. There's nothing to migrate to and no required configuration.
 
-The toolchain is written in Rust; the binary is `sphp`.
+The goal is the best open source language server for PHP, as good as PhpStorm's engine. Type safety shouldn't depend on
+being able to pay for a licence, and it should work live in the editor. It isn't there yet: see [Current state](#current-state).
+
+It's written in Rust, and the command is `stirphp`.
 
 ## Install
 
-Linux and macOS:
+Linux and macOS, to `~/.local/bin/stirphp`:
 
 ```sh
 curl -fsSL https://stirphp.github.io/core/install.sh | sh
 ```
 
-Windows (PowerShell):
+Windows (PowerShell), to `%LOCALAPPDATA%\Programs\stirphp\bin\stirphp.exe`:
 
 ```powershell
 irm https://stirphp.github.io/core/install.ps1 | iex
 ```
 
-This installs the latest release for your platform, after checking it against the
-release's `SHA256SUMS`, and needs no admin rights. Set `SPHP_VERSION` to a version
-or to `nightly`, and `SPHP_INSTALL_DIR` to choose where it goes. The scripts are
-[`install.sh`](install.sh) and [`install.ps1`](install.ps1); archives for every
-platform are on the [releases page](https://github.com/StirPHP/core/releases).
+These install the latest release for your platform, after checking it against the release's `SHA256SUMS`, and need no
+admin rights. Set `STIRPHP_VERSION` to a version or to `nightly`, and `STIRPHP_INSTALL_DIR` to choose where it goes. On
+Windows the script adds that folder to your user `PATH`, unless `STIRPHP_NO_MODIFY_PATH` is set. The scripts are
+[`install.sh`](install.sh) and [`install.ps1`](install.ps1). Archives for every platform are on the
+[releases page](https://github.com/StirPHP/core/releases).
 
-To build from source:
+To build from source (Rust 1.96 or newer):
 
 ```sh
 git submodule update --init --depth 1 crates/stir_stubs/phpstorm-stubs
 cargo install --path crates/stir_cli
 ```
 
-## Usage
+For VS Code, see [`editors/vscode`](editors/vscode). The extension downloads `stirphp` itself.
+
+## Quick start
+
+From a project's folder, with no configuration:
 
 ```sh
-sphp init                  # create sphp.toml and src/main.sphp (interactive; --yes for defaults)
-sphp check                 # type-check the project (--format json, --max-errors N)
-sphp build                 # transpile src/ to build/ (+ source maps)
-sphp build --watch         # rebuild on changes
-sphp build --inline-extensions
-sphp lsp                   # language server over stdin/stdout
+composer install    # if it's a Composer project; StirPHP reads the result and never runs Composer
+stirphp check
 ```
 
-`sphp.toml`:
-
-```toml
-srcDir = "src"
-outDir = "build"
-allowPhp = true          # load .php files from srcDir
-checkPhp = false         # also check them (or opt in per file with `// @sphp-check`)
-inlineExtensions = false
-strictTypes = true       # generate declare(strict_types=1); turn off while porting code that relies on coercion
-copyAssets = false       # also copy non-PHP files from srcDir, so outDir is a complete tree
-# phpstan = "phpstan.neon"   # level and ignoreErrors apply to .php files
+```text
+error[return.type]: type mismatch in return value: 'not an int' is not assignable to int
+    ╭─[ src/main.php:16:12 ]
+    │
+ 16 │     return 'not an int';
+    │            ──────┬─────
+    │                  ╰─────── type mismatch in return value: 'not an int' is not assignable to int
+────╯
+1 error, 0 warnings in 1 file (checked 2 files)
 ```
 
-Generated code targets PHP 8.4. Non-inlined calls into the standard library
-`require_once` a generated `build/stir-runtime.php`.
+Without configuration it checks every `.php` file under the folder except `vendor/`, at level 5. It exits with 1 if it
+reports errors, and with 0 otherwise.
 
-## Editor support
+## `stirphp check`
 
-`sphp lsp` is a language server for `.sphp` and `.php` files. It finds the
-project from the workspace folder's `sphp.toml` (or uses defaults), and offers:
-
-- diagnostics for every project file, updated as you type
-- hover with types (narrowed by smart casts), signatures and doc comments
-- go to definition / type definition, including into the stdlib and PHP stubs
-- find references, highlights and rename (keeping `$` on mutable names)
-- completion of members after `->`/`::` (extension functions included), locals,
-  functions, classes and keywords
-- signature help, inlay type hints for `val`/`var` and lambda parameters
-- semantic highlighting (immutable bindings are `readonly`, mutable ones carry
-  a `mutable` modifier), document/workspace symbols, folding and selection ranges
-
-VS Code: the extension in [`editors/vscode`](editors/vscode) registers `.sphp`
-files and starts `sphp lsp` (see its README to build and install it).
-
-Neovim (0.11+):
-
-```lua
-vim.filetype.add({ extension = { sphp = "sphp" } })
-vim.lsp.config("sphp", {
-  cmd = { "sphp", "lsp" },
-  filetypes = { "sphp", "php" },
-  root_markers = { "sphp.toml", ".git" },
-})
-vim.lsp.enable("sphp")
+```sh
+stirphp check                       # the whole project
+stirphp check src/Foo.php tests     # report only for these paths
+stirphp check --level 8             # rule level, 0 to 10, over the one in the configuration
+stirphp check -c ci.neon            # use this configuration
+stirphp check --generate-baseline   # accept what's reported now
+stirphp check --format json         # one JSON array of diagnostics
+stirphp check --max-errors 20       # show at most 20; all are still counted
+stirphp check --no-vendor           # don't load Composer's packages
 ```
 
-Helix (`languages.toml`):
+The levels follow PHPStan's, 0 to 10, and `level: max` in a configuration means 10.
 
-```toml
-[language-server.sphp]
-command = "sphp"
-args = ["lsp"]
+`--generate-baseline` writes `identifier`, `path` and `count` entries to `stirphp-baseline.neon` next to the configuration,
+or to the path you give it, and makes `parameters.stirphp.baseline` name the file. It creates `stirphp.neon` if there's no
+configuration. From then on an error is reported once a file has more of that identifier than its count, and a warning
+says which entries have fewer than their count and can go. Errors PHP itself can't run past, such as syntax errors, can't
+be put in a baseline or ignored.
 
-[[language]]
-name = "sphp"
-scope = "source.sphp"
-file-types = ["sphp"]
-roots = ["sphp.toml"]
-language-servers = ["sphp"]
+A file with `// @stirphp-nocheck` in its leading comments isn't checked for types, though its declarations are still known.
+
+`stirphp lsp` runs the language server, and `stirphp init` writes a configuration, as below.
+
+## Configuration
+
+All of it is optional. StirPHP looks in the current folder and its parents for `stirphp.neon`, then for PHPStan's
+`phpstan.neon`, `phpstan.neon.dist` and `phpstan.dist.neon`, and reads the first it finds.
+
+Its own settings go under `parameters.stirphp`, and all of them are optional:
+
+```neon
+parameters:
+    stirphp:
+        srcDir: src                 # where the sources are; default: the project folder
+        include: ['**/*.php']       # globs of source files, relative to srcDir
+        exclude: ['vendor/**']      # globs left out
+        composer: ../composer.json  # default: composer.json in the project folder
+        baseline: stirphp-baseline.neon
 ```
 
-Any other LSP client works the same way: run `sphp lsp` for `.sphp` files.
+An unknown key is an error. `rules` is accepted as well, and `stirphp init` writes an empty one, but nothing runs those
+rules yet.
 
-## The language in one screen
+PHPStan's parameters work in `stirphp.neon` too, so a project can keep its settings there and include PHPStan's:
 
-```
-namespace App
+```neon
+includes:
+    - phpstan.neon
 
-val name: String = "world"          // immutable: no `$`
-var $count = 0                       // mutable: always written with `$`
-$count += 1
-
-function greet(name: String, mut times: Int = 1): String {   // params are immutable unless `mut`
-    var $out = ""
-    while (times > 0) {
-        $out = $out . "Hello, ${name}! "   // templates: only `${...}`, no `$` inside
-        times -= 1
-    }
-    return $out
-}
-
-function double(x: Int): Int = x * 2      // expression bodies
-
-// StirPHP types (`Int`, `String`, `List<T>`, ...) never coerce and have methods;
-// PHP types (`int`, `string`, ...) keep PHP semantics. Int → int is fine, int → Int is not.
-val n: Int = strlen(name)
-
-// Null safety; untyped PHP values are `Any!` and must be narrowed
-val maybe: String? = null
-echo maybe?->length() ?: 0
-val raw = json_decode("{}")         // Any!
-if (raw is Map<String, Int>) { echo raw->size() }
-
-// `unknown` holds any value (PHP's `mixed`), and can't be used until it's narrowed
-function describe(v: unknown): String = if (v is String) v else "other"
-
-// `resource` is PHP's stream or handle. PHP has no native type for it, so it's checked here but not at runtime
-function firstLine(stream: resource): String = fgets(stream) as String
-
-// Generics with bounds and variance
-interface Source<out T> { function next(): T }
-interface Shape { function area(): Float }
-function <T of Shape> biggest(a: T, b: T): T = if (a->area() > b->area()) a else b
-
-// Records are C-like structs (structural, copied by value) and lower to arrays
-record Point { x: Int; y: Int }
-var $p = Point { x = 1, y = 2 }
-$p->x = 10
-
-// Classes: primary constructors, final by default, `open` to extend
-open class Base(val id: Int)
-data class User(val id: Int, val name: String)
-sealed interface Result<out T>
-data class Ok<T>(val value: T) : Result<T>
-data class Err(val msg: String) : Result<Nothing>
-
-function show(r: Result<Int>): String = when (r) {   // exhaustive over sealed types
-    is Ok -> "ok ${r->value}"
-    is Err -> "err ${r->msg}"
-}
-
-// Lambdas, trailing lambdas, `it`, extension functions (inlinable by construction)
-val doubled = listOf(1, 2, 3)->map { it * 2 }
-function String.shout(): String = this->uppercase() . "!"
-val pair = "a" to 1
+parameters:
+    stirphp:
+        srcDir: src
 ```
 
-See `stdlib/` for the standard library (methods on `String`, `Int`, `List`, `Map`, ...),
-all written in StirPHP.
+Or keep everything in `phpstan.neon`. PHPStan rejects parameters it doesn't know, so declare this one in
+`parametersSchema`. `stirphp init` does that for you when the project has a PHPStan configuration, and
+`stirphp init --phpstan` creates `phpstan.neon` if it doesn't:
+
+```neon
+parameters:
+    level: 5
+    paths:
+        - src
+    stirphp:
+        baseline: stirphp-baseline.neon
+
+parametersSchema:
+    ?stirphp: mixed()
+```
+
+Real PHPStan accepts this. Don't put StirPHP's baseline in PHPStan's `includes`: PHPStan would apply its entries too, and
+they'd hide its own errors.
+
+## PHPStan compatibility
+
+StirPHP is its own engine. It doesn't run PHPStan, and it doesn't need PHP installed. What's shared:
+
+- **Configuration:** `level`, `paths`, `excludePaths`, `ignoreErrors`, `phpVersion` and `includes` are read from NEON.
+  Includes written in PHP are skipped, because reading them would run your code.
+- **PHPDoc:** PHPStan's types and tags, such as generics, array shapes, `@template` and `@phpstan-*` tags.
+- **Identifiers:** a check that means the same as a PHPStan rule reports PHPStan's identifier, such as `return.type` or
+  `function.notFound`. Checks only StirPHP has report codes such as `SPHP0061`. Rule levels come from these.
+- **Ignoring:** `@phpstan-ignore return.type` on the line or the line before, `@phpstan-ignore-line` and
+  `@phpstan-ignore-next-line` all work. As in PHPStan, an identifier that doesn't match doesn't silence the line.
+
+Ignore rules and baselines match on identifier, path and count, and never on the message, because StirPHP's messages
+differ from PHPStan's. So:
+
+- An `ignoreErrors` entry with `identifier`, `path` and `count` works, and so does one with only an `identifier`.
+- A PHPStan baseline applies: its entries have all of these, and the message is ignored.
+- An entry with only a `message`, or a `message` and an `identifier` but no `path`, is skipped, and a notice gives the
+  number skipped.
+
+The limits:
+
+- PHPStan extensions and custom rules are PHP code, which can't run in this engine. A project that relies on them, such
+  as framework extensions or strict rules, should run PHPStan alongside StirPHP. Until the rules that describe a
+  framework's magic have an equivalent here, expect errors PHPStan's extensions would have explained away.
+- The checks don't all exist yet, and those that exist don't always agree with PHPStan.
+
+## PHP versions
+
+The project's PHP version comes from the first of these that's set:
+
+1. PHPStan's `phpVersion`: `80100`, or a range such as `{min: 80100, max: 80400}`
+2. Composer's `config.platform.php`
+3. Composer's `require.php`, using the lowest version it allows
+4. Otherwise, the latest
+
+Syntax and library functions are checked against it:
+
+```text
+error[classConstant.nativeTypeNotSupported]: PHP 8.3 added typed class constants, but this project targets PHP 8.2
+error[SPHP0061]: PHP 8.4 added `array_find()`, but this project targets PHP 8.2
+```
+
+## Composer
+
+StirPHP reads `composer.json` and what `composer install` leaves in `vendor/`, including autoload rules and the list of
+installed packages. It never runs Composer.
+
+If packages are declared but not installed, or aren't up to date, it says so and tells you to run `composer install`.
+Until then, errors about what those packages would declare are held back, so you don't get an error for each missing
+class. Other errors are still reported. `stirphp check` prints this notice and the number held back, and the language
+server shows it in the editor.
+
+## Editors
+
+`stirphp lsp` is a language server over stdin and stdout. It offers:
+
+- diagnostics for the project's files, updated as you type
+- hover with types and doc comments
+- completion of members, variables, functions, classes and keywords
+- signature help and inlay hints for inferred types
+- go to definition and type definition, including into packages and PHP's own stubs
+- find references, highlights and rename
+- semantic highlighting, document and workspace symbols, folding and selection ranges
+
+The [VS Code extension](editors/vscode) is the only client this has been tested with. Any editor that can start an LSP
+server for PHP files should work with the command `stirphp lsp`, but that's untested.
+
+## Current state
+
+This is early, and accuracy against PHPStan is still being improved. On Laravel's framework, Symfony and PHPStan's own
+source, each with its own configuration, it reports about 8500, 1300 and 700 problems, in about 4 to 5 seconds each. Those
+include false alarms, at a rate nobody has measured yet. Reducing them is the current work. If `stirphp check` is wrong
+about your code, please [open an issue](https://github.com/StirPHP/core/issues) with a small example.
+
+Not there yet: formatting, quick fixes and refactoring beyond rename, framework support, and custom rules.
 
 ## Layout
 
 | Crate | Purpose |
 |---|---|
-| `stir_syntax` | lexer (logos) and error-tolerant parser → lossless rowan tree, PHP 8.5 + StirPHP |
-| `stir_phpdoc` | PHPStan PHPDoc parser |
-| `stir_neon` | NEON / `phpstan.neon` loader |
-| `stir_types` | type representation and relations (assignability, comparability, narrowing) |
-| `stir_db` | salsa database: file inputs, parsing, diagnostics, settings |
-| `stir_hir` | declarations, name resolution, PHPDoc and phpstorm-stubs attribute lowering |
-| `stir_stubs` | embedded phpstorm-stubs and the StirPHP stdlib |
+| `stir_syntax` | lexer and error-tolerant parser, producing a lossless syntax tree |
+| `stir_phpdoc` | PHPDoc parser |
+| `stir_neon` | NEON and PHPStan configuration loader |
+| `stir_types` | type representation and relations |
+| `stir_db` | salsa database: files, parsing, diagnostics, settings |
+| `stir_hir` | declarations, name resolution, and PHPDoc and stub attribute lowering |
+| `stir_stubs` | embedded phpstorm-stubs |
 | `stir_checker` | the type checker |
-| `stir_emit` | PHP output AST, printer and the StirPHP → PHP lowering |
-| `stir_project` | `sphp.toml`, discovery, composer autoload, `init`, workspace loading |
-| `stir_lsp` | the language server (tower-lsp-server; the editor features build without it) |
-| `stir_wasm` | the checker and compiler for the browser (WebAssembly), for the docs playground |
-| `stir_cli` | the `sphp` binary |
+| `stir_composer` | reads Composer's files |
+| `stir_project` | configuration, discovery, baselines, `init` and workspace loading |
+| `stir_lsp` | the language server |
+| `stir_wasm` | the checker, hover and completion for the browser (WebAssembly) |
+| `stir_cli` | the `stirphp` binary |
 
 ## Tests
 
 ```sh
 cargo test --workspace
-SPHP_TEST_PHP=php:8.4-cli cargo test -p stir_emit --test programs   # run transpiled programs with PHP in docker
-scripts/parse-corpus.sh                                              # parse Laravel/Symfony/PHPStan (git submodules)
+scripts/parse-corpus.sh                 # parse Laravel, Symfony and PHPStan (git submodules)
+scripts/check-corpus.sh <label>         # check them and write a summary to .corpus-results/<label>
+scripts/diff-corpus.py <label> <label>  # compare two summaries
 ```
 
-Checker fixtures live in `crates/stir_checker/tests/fixtures/` and mark expected
-diagnostics inline: `$x = "no" // error: SPHP0005`.
+Checker fixtures live in `crates/stir_checker/tests/fixtures/` and mark expected diagnostics inline:
+`return 1; // error: return.type`.
+
+`STIRPHP_LOG` sets the log level, on stderr, as in `STIRPHP_LOG=debug stirphp check`.
 
 ## License
 
 StirPHP is licensed under the [MIT license](LICENSE).
 
-The `sphp` binary embeds JetBrains'
-[phpstorm-stubs](https://github.com/JetBrains/phpstorm-stubs) (a git submodule
-of `crates/stir_stubs`), which are licensed under the
-[Apache License 2.0](crates/stir_stubs/phpstorm-stubs/LICENSE).
+The `stirphp` binary embeds JetBrains' [phpstorm-stubs](https://github.com/JetBrains/phpstorm-stubs) (a git submodule of
+`crates/stir_stubs`), which are licensed under the [Apache License 2.0](crates/stir_stubs/phpstorm-stubs/LICENSE).
