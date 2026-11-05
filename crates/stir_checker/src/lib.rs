@@ -19,6 +19,7 @@ mod infer;
 pub mod levels;
 mod model;
 pub mod model_api;
+pub mod php_version;
 mod typed;
 
 pub use body::{Checker, LocalKind};
@@ -38,6 +39,11 @@ pub fn check_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> Arc<Vec<Diagn
     let mut diags = stir_db::syntax_diagnostics(db, file).as_ref().clone();
     // Semantic errors on a broken tree are mostly noise: fix syntax first.
     if file.origin(db) == FileOrigin::Source && diags.is_empty() {
+        diags.extend(
+            php_version::syntax_version_diagnostics(db, ws, file)
+                .iter()
+                .cloned(),
+        );
         diags.extend(typed_file(db, ws, file).diags.iter().cloned());
     }
     levels::filter_php(&mut diags, settings);

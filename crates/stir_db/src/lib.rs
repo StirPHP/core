@@ -8,6 +8,10 @@ use std::sync::Arc;
 
 use stir_syntax::{Parse, TextRange};
 
+mod version;
+
+pub use version::{Availability, PhpVersion, PhpVersions};
+
 /// Marker trait for databases that can run StirPHP queries.
 #[salsa::db]
 pub trait Db: salsa::Database {}
@@ -47,17 +51,14 @@ pub struct SourceFile {
 }
 
 /// The set of files that make up a program (sources, vendor and stubs), plus the
-/// settings they are checked with.
-#[salsa::input(debug)]
+/// settings they are checked with. A database holds one.
+#[salsa::input(debug, singleton)]
 pub struct Workspace {
     #[returns(ref)]
     pub files: Vec<SourceFile>,
     #[returns(ref)]
     pub settings: Settings,
 }
-
-/// The PHP version stubs are interpreted for when nothing else is configured.
-pub const DEFAULT_PHP_VERSION: (u8, u8) = (8, 4);
 
 /// The highest PHPStan rule level (`max`).
 pub const MAX_PHP_LEVEL: u8 = 10;
@@ -69,8 +70,8 @@ pub const DEFAULT_PHP_LEVEL: u8 = 5;
 pub struct Settings {
     /// PHPStan rule level (0..=10) files are checked at.
     pub php_level: u8,
-    /// Target PHP version `(major, minor)`.
-    pub php_version: (u8, u8),
+    /// The PHP versions the project has to run on.
+    pub php_version: PhpVersions,
     /// PHPStan `ignoreErrors`, applied to diagnostics.
     pub ignore_errors: Vec<IgnoreRule>,
     /// PHPStan `paths`: if any, only `.php` files under these are reported.
@@ -83,7 +84,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             php_level: DEFAULT_PHP_LEVEL,
-            php_version: DEFAULT_PHP_VERSION,
+            php_version: PhpVersions::default(),
             ignore_errors: Vec::new(),
             php_paths: Vec::new(),
             php_excludes: Vec::new(),
@@ -109,6 +110,12 @@ pub struct IgnoreRule {
     pub identifiers: Vec<String>,
     /// Absolute paths or fnmatch globs; empty means every file.
     pub paths: Vec<PathBuf>,
+}
+
+/// The PHP versions the stubs are read for. Only a stub's declarations depend on them, which is
+/// why they aren't an argument of everything that reads a file's declarations.
+pub fn php_versions(db: &dyn Db) -> PhpVersions {
+    Workspace::try_get(db).map_or_else(PhpVersions::default, |ws| ws.settings(db).php_version)
 }
 
 #[salsa::tracked(returns(ref), no_eq)]
@@ -138,6 +145,8 @@ pub struct Diagnostic {
     /// The PHPStan rule level this diagnostic belongs to when reported in a
     /// `.php` file; `None` derives it from the code (see the checker's `levels`).
     pub php_level: Option<u8>,
+    /// The name the project doesn't declare, on an error about an unknown symbol.
+    pub symbol: Option<String>,
 }
 
 impl Diagnostic {
@@ -156,7 +165,14 @@ impl Diagnostic {
             labels: Vec::new(),
             notes: Vec::new(),
             php_level: None,
+            symbol: None,
         }
+    }
+
+    /// Says which name this is an unknown-symbol error about.
+    pub fn with_symbol(mut self, symbol: impl Into<String>) -> Self {
+        self.symbol = Some(symbol.into());
+        self
     }
 
     /// Sets the PHPStan rule level at which this is reported in `.php` files.

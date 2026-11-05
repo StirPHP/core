@@ -6,12 +6,15 @@
 //! A directory whose name ends in `.multi` is one fixture: all its files are
 //! loaded into one workspace and each is checked against its own expectations.
 //! Fixture-level settings are comments anywhere in the fixture's files:
-//! `// @level N` (PHPStan level for `.php` files, default: everything).
+//! `// @level N` (PHPStan level for `.php` files, default: everything) and `// @php 8.1` or
+//! `// @php 8.1..8.3` (the PHP versions the project runs on, default: the latest).
 
 use std::path::{Path, PathBuf};
 
 use libtest_mimic::{Arguments, Failed, Trial};
-use stir_db::{FileOrigin, RootDatabase, Settings, Severity, SourceFile, Workspace};
+use stir_db::{
+    FileOrigin, PhpVersion, PhpVersions, RootDatabase, Settings, Severity, SourceFile, Workspace,
+};
 
 fn stubs(db: &RootDatabase) -> Vec<SourceFile> {
     stir_stubs::stub_files()
@@ -42,7 +45,7 @@ fn expected(text: &str) -> Vec<(usize, String, String)> {
     out
 }
 
-/// Fixture-level settings from `// @level N` comments.
+/// Fixture-level settings from `// @level N` and `// @php 8.1` comments.
 fn settings(texts: &[String]) -> Settings {
     let mut settings = Settings {
         php_level: stir_db::MAX_PHP_LEVEL,
@@ -53,6 +56,17 @@ fn settings(texts: &[String]) -> Settings {
             if let Some(pos) = line.find("// @level ") {
                 let v = line[pos + 10..].trim();
                 settings.php_level = if v == "max" { 10 } else { v.parse().unwrap() };
+            }
+            if let Some(pos) = line.find("// @php ") {
+                let v = line[pos + 8..].trim();
+                let version = |s| PhpVersion::parse(s).unwrap();
+                settings.php_version = match v.split_once("..") {
+                    Some((min, max)) => PhpVersions {
+                        min: version(min),
+                        max: version(max),
+                    },
+                    None => PhpVersions::exactly(version(v)),
+                };
             }
         }
     }

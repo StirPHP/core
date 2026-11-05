@@ -6,10 +6,11 @@ use rowan::ast::SyntaxNodePtr;
 use smol_str::SmolStr;
 use stir_syntax::{PhpLanguage, SyntaxKind, SyntaxKind::*, SyntaxNode, TextRange, TextSize};
 
+use stir_db::{Availability, PhpVersion, PhpVersions};
 use stir_phpdoc::{DocBlock, TagKind};
 
 use crate::ast::NodeExt;
-use crate::attrs::{StubAttrs, stub_attrs};
+use crate::attrs::{StubAttrs, stub_attrs, version_tags};
 use crate::doc::{self, Aliases, DocCx};
 use crate::name::{Fqn, Scope, UseKind};
 use crate::type_ref::{TypeCtx, TypeRef, TypeRefKind, unquote};
@@ -223,6 +224,8 @@ pub struct ClassDef {
     pub mixins: Vec<TypeRef>,
     /// `use T { method as alias; }`: by alias, the method it stands for.
     pub trait_aliases: Vec<(SmolStr, SmolStr)>,
+    /// Members of a stub class not on every target version.
+    pub limited_members: Vec<LimitedMember>,
     pub doc: Option<DocText>,
     pub ptr: NodePtr,
     pub name_range: TextRange,
@@ -243,6 +246,36 @@ pub struct ConstDef {
     pub range: TextRange,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LimitedKind {
+    Class,
+    Function,
+    Const,
+}
+
+/// A stub's declaration not on every target version: without it, or having it only for now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LimitedItem {
+    pub kind: LimitedKind,
+    pub name: Fqn,
+    pub availability: Availability,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LimitedMemberKind {
+    Method,
+    Property,
+    Const,
+}
+
+/// The same for a member of a stub class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LimitedMember {
+    pub kind: LimitedMemberKind,
+    pub name: SmolStr,
+    pub availability: Availability,
+}
+
 /// All declarations of one file.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FileItems {
@@ -251,6 +284,8 @@ pub struct FileItems {
     pub functions: Vec<FunctionDef>,
     pub classes: Vec<ClassDef>,
     pub consts: Vec<ConstDef>,
+    /// Declarations of a stub that aren't on every target version.
+    pub limited: Vec<LimitedItem>,
     pub strict_types: bool,
 }
 
@@ -266,10 +301,37 @@ impl FileItems {
     }
 }
 
-pub(crate) fn lower_file(root: &SyntaxNode, php_version: (u8, u8)) -> FileItems {
+/// How the version attributes and tags of a file are read.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct StubVersions {
+    versions: PhpVersions,
+    /// Do `@since` and `@removed` tags speak of PHP versions?
+    tags: bool,
+}
+
+impl StubVersions {
+    /// For the stub at `stubs://<extension>/...`.
+    pub(crate) fn for_stub(path: &std::path::Path, versions: PhpVersions) -> Self {
+        let path = path.to_string_lossy();
+        let path = path.strip_prefix("stubs://").unwrap_or(&path);
+        let extension = path.split('/').next().unwrap_or_default();
+        StubVersions {
+            versions,
+            tags: stir_stubs::ships_with_php(extension),
+        }
+    }
+}
+
+/// The interfaces every enum has: they're there for the checker's model of an enum, on a target
+/// without enums too, where the enum itself is what's reported.
+fn is_language_class(name: &str) -> bool {
+    name.eq_ignore_ascii_case("UnitEnum") || name.eq_ignore_ascii_case("BackedEnum")
+}
+
+pub(crate) fn lower_file(root: &SyntaxNode, versions: StubVersions) -> FileItems {
     let mut l = Lowerer {
         hash: None,
-        php_version,
+        versions,
         out: FileItems::default(),
         scope: Scope::default(),
         aliases: Aliases::default(),
@@ -288,8 +350,8 @@ enum ClassName<'a> {
 struct Lowerer {
     /// Hash of the file's text, once needed.
     hash: Option<u64>,
-    /// Target version for the phpstorm-stubs attributes.
-    php_version: (u8, u8),
+    /// The target for the phpstorm-stubs attributes.
+    versions: StubVersions,
     out: FileItems,
     scope: Scope,
     /// Type aliases of the class being lowered.
@@ -324,7 +386,43 @@ impl Lowerer {
     }
 
     fn attrs(&self, node: &SyntaxNode) -> StubAttrs {
-        stub_attrs(node, self.cur_scope(), self.php_version)
+        stub_attrs(node, self.cur_scope(), self.target())
+    }
+
+    fn target(&self) -> PhpVersion {
+        self.versions.versions.target()
+    }
+
+    /// Which versions have the element `node`, by its attributes and doc comment.
+    fn availability(&self, node: &SyntaxNode, attrs: &StubAttrs) -> Availability {
+        let mut out = attrs.availability;
+        if self.versions.tags
+            && let Some(doc) = node.doc_comment()
+        {
+            let tags = version_tags(doc.text());
+            out.since = out.since.or(tags.since);
+            out.removed = out.removed.or(tags.removed);
+        }
+        out
+    }
+
+    /// Notes a global declaration that isn't on every target version. False if the target
+    /// doesn't have it, so that it's not declared at all.
+    fn on_target(&mut self, node: &SyntaxNode, kind: LimitedKind, name: Fqn) -> bool {
+        let attrs = self.attrs(node);
+        let availability = self.availability(node, &attrs);
+        if availability.covers(self.versions.versions) {
+            return true;
+        }
+        if kind == LimitedKind::Class && is_language_class(name.as_str()) {
+            return true;
+        }
+        self.out.limited.push(LimitedItem {
+            kind,
+            name,
+            availability,
+        });
+        availability.includes(self.target())
     }
 
     /// The `#[LanguageLevelTypeAware]` type, if any (`Some(None)`: no native type).
@@ -392,13 +490,14 @@ impl Lowerer {
             FUNCTION_DECL => self.function(node),
             CLASS_DECL | INTERFACE_DECL | TRAIT_DECL | ENUM_DECL => self.class(node),
             CONST_DECL => {
-                if self.attrs(node).unavailable {
-                    return;
-                }
                 for elem in node.children_of(CONST_ELEM) {
                     if let Some(name) = elem.name_text() {
+                        let name = Fqn::join(&self.scope.namespace, &name);
+                        if !self.on_target(node, LimitedKind::Const, name.clone()) {
+                            continue;
+                        }
                         self.out.consts.push(ConstDef {
-                            name: Fqn::join(&self.scope.namespace, &name),
+                            name,
                             scope: self.scope_id(),
                             value: value_ptr(&elem),
                             range: elem.text_range(),
@@ -442,9 +541,12 @@ impl Lowerer {
         let Some(lit) = name_arg.child(STRING_LITERAL) else {
             return;
         };
-        let name = unquote(lit.text().to_string().trim());
+        let name = Fqn::new(&unquote(lit.text().to_string().trim()));
+        if !self.on_target(node, LimitedKind::Const, name.clone()) {
+            return;
+        }
         self.out.consts.push(ConstDef {
-            name: Fqn::new(&name),
+            name,
             scope: self.scope_id(),
             value: args
                 .get(1)
@@ -583,7 +685,7 @@ impl Lowerer {
             .iter()
             .filter_map(|p| {
                 let attrs = self.attrs(p);
-                if attrs.unavailable {
+                if !attrs.availability.includes(self.target()) {
                     return None;
                 }
                 let mut def = self.param(p, names, ctor);
@@ -689,14 +791,15 @@ impl Lowerer {
         let Some(name_node) = node.child(NAME) else {
             return;
         };
-        if self.attrs(node).unavailable {
+        let name = name_node.text().to_string();
+        let name = Fqn::join(&self.scope.namespace, name.trim());
+        if !self.on_target(node, LimitedKind::Function, name.clone()) {
             return;
         }
-        let name = name_node.text().to_string().trim().to_owned();
         let doc = self.doc_block(node);
         let sig = self.signature(node, &[], false, doc.as_ref());
         self.out.functions.push(FunctionDef {
-            name: Fqn::join(&self.scope.namespace, &name),
+            name,
             scope: self.scope_id(),
             sig,
             doc: doc_of(node),
@@ -732,7 +835,9 @@ impl Lowerer {
         let Some(name_node) = node.child(NAME) else {
             return;
         };
-        if self.attrs(node).unavailable {
+        let name = name_node.text().to_string();
+        let name = Fqn::join(&self.scope.namespace, name.trim());
+        if !self.on_target(node, LimitedKind::Class, name) {
             return;
         }
         let doc = self.doc_block(node);
@@ -852,6 +957,7 @@ impl Lowerer {
             aliases: self.aliases.clone(),
             mixins: Vec::new(),
             trait_aliases: Vec::new(),
+            limited_members: Vec::new(),
             doc: doc_of(node),
             ptr: NodePtr::new(node),
             name_range: match &name {
@@ -983,8 +1089,36 @@ impl Lowerer {
             .map(|x| member_mods(&x))
             .unwrap_or_default();
         let attrs = self.attrs(m);
-        if attrs.unavailable {
-            return;
+        let availability = self.availability(m, &attrs);
+        if !availability.covers(self.versions.versions) {
+            let names = match m.kind() {
+                METHOD_DECL => m
+                    .name_text()
+                    .map_or_else(Vec::new, |n| vec![(LimitedMemberKind::Method, n)]),
+                PROPERTY_DECL => m
+                    .children_of(PROPERTY_ELEM)
+                    .iter()
+                    .filter_map(|e| e.token(VARIABLE))
+                    .map(|v| (LimitedMemberKind::Property, v.text()[1..].to_owned()))
+                    .collect(),
+                CLASS_CONST_DECL => m
+                    .children_of(CONST_ELEM)
+                    .iter()
+                    .filter_map(|e| e.name_text())
+                    .map(|n| (LimitedMemberKind::Const, n))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            class
+                .limited_members
+                .extend(names.into_iter().map(|(kind, name)| LimitedMember {
+                    kind,
+                    name: SmolStr::new(name),
+                    availability,
+                }));
+            if !availability.includes(self.target()) {
+                return;
+            }
         }
         let doc = self.doc_block(m);
         match m.kind() {

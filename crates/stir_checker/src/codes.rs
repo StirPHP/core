@@ -21,3 +21,9 @@ pub const VISIBILITY: &str = "SPHP0024";
 pub const VARIANCE: &str = "SPHP0027";
 pub const TYPE_BOUND: &str = "SPHP0028";
 pub const INCOMPATIBLE_OVERRIDE: &str = "SPHP0031";
+/// Syntax newer than the project's PHP version.
+pub const PHP_SYNTAX_VERSION: &str = "SPHP0060";
+/// Something of PHP's library that isn't on the project's PHP version.
+pub const PHP_LIBRARY_VERSION: &str = "SPHP0061";
+/// Fine on the project's PHP version, but deprecated there.
+pub const PHP_DEPRECATED: &str = "SPHP0062";

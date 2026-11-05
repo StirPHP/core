@@ -2,7 +2,7 @@
 
 use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
-use stir_db::{FileOrigin, SourceFile};
+use stir_db::{Availability, FileOrigin, SourceFile};
 
 /// Where a declaration lives: a file and its index in that file's item list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -19,6 +19,11 @@ pub struct DefIndex {
     pub functions: FxHashMap<SmolStr, Vec<ItemLoc>>,
     /// FQN (case-sensitive) → constants
     pub consts: FxHashMap<SmolStr, Vec<ItemLoc>>,
+    /// The stubs' declarations not on every target version, by the same keys: those missing
+    /// above are there on another version of PHP, not unknown.
+    pub limited_classes: FxHashMap<SmolStr, Availability>,
+    pub limited_functions: FxHashMap<SmolStr, Availability>,
+    pub limited_consts: FxHashMap<SmolStr, Availability>,
     /// Files by origin, for diagnostics filtering.
     pub origins: FxHashMap<SourceFile, FileOrigin>,
     /// Files by precedence when declarations collide (lower wins).

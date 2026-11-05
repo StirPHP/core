@@ -1,6 +1,7 @@
 //! The phpstorm-stubs attributes that change declarations depending on the
 //! target PHP version (see the `stir_stubs` crate docs).
 
+use stir_db::{Availability, PhpVersion};
 use stir_syntax::{SyntaxKind::*, SyntaxNode, TextSize};
 
 use crate::ast::NodeExt;
@@ -10,15 +11,15 @@ use crate::type_ref::unquote;
 /// What the version-dependent attributes of one declaration say.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StubAttrs {
-    /// `#[PhpStormStubsElementAvailable]` excludes the element on the target.
-    pub unavailable: bool,
+    /// `#[PhpStormStubsElementAvailable]`: the versions with the element.
+    pub availability: Availability,
     /// `#[LanguageLevelTypeAware]`: the type string for the target and its
     /// offset; an empty string means "no native type".
     pub type_aware: Option<(String, TextSize)>,
 }
 
 /// Reads the attributes written directly on `node`.
-pub fn stub_attrs(node: &SyntaxNode, scope: &Scope, version: (u8, u8)) -> StubAttrs {
+pub fn stub_attrs(node: &SyntaxNode, scope: &Scope, version: PhpVersion) -> StubAttrs {
     let mut out = StubAttrs::default();
     for list in node.children_of(ATTRIBUTE_LIST) {
         for group in list.children_of(ATTRIBUTE_GROUP) {
@@ -32,9 +33,15 @@ pub fn stub_attrs(node: &SyntaxNode, scope: &Scope, version: (u8, u8)) -> StubAt
                 match short.as_str() {
                     "phpstormstubselementavailable" => {
                         let (from, to) = args.map(|a| available_args(&a)).unwrap_or_default();
-                        if !stir_stubs::is_available(from.as_deref(), to.as_deref(), version) {
-                            out.unavailable = true;
-                        }
+                        // both bounds are inclusive and optional; one that isn't a version
+                        // is ignored
+                        out.availability = Availability {
+                            since: from.as_deref().and_then(PhpVersion::parse),
+                            removed: to
+                                .as_deref()
+                                .and_then(PhpVersion::parse)
+                                .map(PhpVersion::next),
+                        };
                     }
                     "languageleveltypeaware" => {
                         if let Some(a) = args {
@@ -95,17 +102,26 @@ fn available_args(args: &SyntaxNode) -> (Option<String>, Option<String>) {
     (from, to)
 }
 
-fn parse_version(s: &str) -> Option<(u8, u8)> {
-    let mut parts = s.trim().split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next().map_or(Some(0), |m| m.parse().ok())?;
-    Some((major, minor))
+/// What `@since` and `@removed` in a doc comment say. `@removed X` isn't on `X` itself.
+pub fn version_tags(doc: &str) -> Availability {
+    let earliest = |tag: &str| {
+        doc.match_indices(tag)
+            .filter_map(|(at, _)| {
+                let rest = doc[at + tag.len()..].trim_start_matches([' ', '\t']);
+                PhpVersion::parse(rest.split_whitespace().next()?)
+            })
+            .min()
+    };
+    Availability {
+        since: earliest("@since"),
+        removed: earliest("@removed"),
+    }
 }
 
 /// `(['8.0' => 'T1', …], default: 'T0')`: the entry with the greatest version
 /// `<=` target, else `default`.
-fn type_aware(args: &SyntaxNode, version: (u8, u8)) -> Option<(String, TextSize)> {
-    let mut best: Option<((u8, u8), (String, TextSize))> = None;
+fn type_aware(args: &SyntaxNode, version: PhpVersion) -> Option<(String, TextSize)> {
+    let mut best: Option<(PhpVersion, (String, TextSize))> = None;
     let mut default = None;
     for a in args.children() {
         match a.kind() {
@@ -121,7 +137,7 @@ fn type_aware(args: &SyntaxNode, version: (u8, u8)) -> Option<(String, TextSize)
                     let (Some((key, _)), Some(value)) = (string_of(k), string_of(v)) else {
                         continue;
                     };
-                    let Some(ver) = parse_version(&key) else {
+                    let Some(ver) = PhpVersion::parse(&key) else {
                         continue;
                     };
                     if ver <= version && best.as_ref().is_none_or(|(b, _)| ver > *b) {

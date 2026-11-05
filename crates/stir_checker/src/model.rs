@@ -142,6 +142,8 @@ pub struct LowerError {
     pub range: TextRange,
     pub code: &'static str,
     pub message: String,
+    /// The class this says is unknown.
+    pub symbol: Option<SmolStr>,
 }
 
 /// What a type is lowered against.
@@ -771,6 +773,7 @@ impl<'db> Ctx<'db> {
                 range,
                 code: codes::UNKNOWN_TYPE,
                 message: format!("unknown class `{class}` in `@phpstan-import-type`"),
+                symbol: Some(SmolStr::new(class)),
             });
             return Ty::error();
         };
@@ -779,6 +782,7 @@ impl<'db> Ctx<'db> {
                 range,
                 code: codes::UNKNOWN_TYPE,
                 message: format!("`{}` has no type alias `{name}`", c.name),
+                symbol: None,
             });
             return Ty::error();
         };
@@ -822,6 +826,7 @@ impl<'db> Ctx<'db> {
                     range: doc.range,
                     code: PHPDOC_MISMATCH,
                     message: format!("PHPDoc type `{d}` is not a subtype of the native type `{n}`"),
+                    symbol: None,
                 });
                 Some(n)
             }
@@ -861,6 +866,7 @@ impl<'db> Ctx<'db> {
                         c.params.len(),
                         args.len()
                     ),
+                    symbol: None,
                 });
                 return Ty::error();
             }
@@ -870,6 +876,7 @@ impl<'db> Ctx<'db> {
             range,
             code: codes::UNKNOWN_TYPE,
             message: format!("unknown type `{name}`"),
+            symbol: Some(SmolStr::new(name)),
         });
         Ty::error()
     }
@@ -1319,6 +1326,30 @@ impl<'db> Ctx<'db> {
             }
         }
         None
+    }
+
+    /// A member that `ty` or an ancestor has in the stubs on some versions of PHP, with those
+    /// versions.
+    pub fn limited_member(
+        &self,
+        ty: &Ty,
+        kind: stir_hir::LimitedMemberKind,
+        name: &str,
+    ) -> Option<stir_db::Availability> {
+        self.ancestors(ty).iter().find_map(|anc| {
+            let TyKind::Class { name: cname, .. } = anc.kind() else {
+                return None;
+            };
+            let c = self.class(cname)?;
+            let m = c.def.limited_members.iter().find(|m| {
+                m.kind == kind
+                    && match kind {
+                        stir_hir::LimitedMemberKind::Method => m.name.eq_ignore_ascii_case(name),
+                        _ => m.name == name,
+                    }
+            })?;
+            Some(m.availability)
+        })
     }
 
     pub fn function(&self, name: &str) -> Option<ItemLoc> {

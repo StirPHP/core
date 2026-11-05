@@ -31,8 +31,7 @@
 //!   parameter, or class constant exists only for versions in the inclusive
 //!   range. Both bounds are optional. The same function may be declared twice
 //!   with disjoint ranges, or have two parameters with the same name. Drop
-//!   any element for which [`is_available`] returns `false`, *before* checking
-//!   for duplicates.
+//!   any element not available on the target, *before* checking for duplicates.
 //! - `#[LanguageLevelTypeAware(['8.0' => 'T1', '8.1' => 'T2'], default: 'T0')]`
 //!   on a parameter, return, or property: the native type is the entry with
 //!   the greatest version `<=` target, else `default`. An empty string means
@@ -54,15 +53,15 @@
 //!   `#[ReturnTypeContract]`, `#[TypeContract]` and `#[FileReference]` are
 //!   IDE hints and may be ignored or mapped where convenient.
 //!
-//! PHPDoc tags (`@return`, `@param`, `@since`, `@removed X.Y`, ...) carry the
-//! richer types; `@removed` should be treated like `to:` one minor version
-//! below the given one.
+//! PHPDoc tags (`@return`, `@param`, ...) carry the richer types. `@since X.Y` and
+//! `@removed X.Y` say which PHP versions have an element in the extensions for which
+//! [`ships_with_php`] holds: elsewhere those numbers are the extension's own versions.
 //!
 //! [JetBrains/phpstorm-stubs]: https://github.com/JetBrains/phpstorm-stubs
 
 mod extensions;
 
-pub use extensions::EXTENSIONS;
+pub use extensions::{EXTENSIONS, PHP_EXTENSIONS};
 
 /// The functions the `phpstan/phpstan` package declares inside its PHAR, where no source
 /// scan finds them: for projects that have that package installed.
@@ -101,22 +100,9 @@ pub fn stub_file(path: &str) -> Option<StubFile> {
     FILES.iter().find(|f| f.path == path).copied()
 }
 
-/// Whether an element annotated with
-/// `#[PhpStormStubsElementAvailable(from: ..., to: ...)]` exists on PHP
-/// version `target` (`(major, minor)`). Both bounds are inclusive and
-/// optional; a bound that is not a `major.minor` version is ignored.
-pub fn is_available(from: Option<&str>, to: Option<&str>, target: (u8, u8)) -> bool {
-    let from = from.and_then(parse_version);
-    let to = to.and_then(parse_version);
-    from.is_none_or(|v| target >= v) && to.is_none_or(|v| target <= v)
-}
-
-fn parse_version(s: &str) -> Option<(u8, u8)> {
-    let s = s.trim().trim_matches(|c| c == '\'' || c == '"');
-    let mut parts = s.split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next().map_or(Some(0), |m| m.parse().ok())?;
-    Some((major, minor))
+/// Is `extension` developed and versioned with PHP itself?
+pub fn ships_with_php(extension: &str) -> bool {
+    PHP_EXTENSIONS.contains(&extension)
 }
 
 #[cfg(test)]
@@ -124,17 +110,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn availability_ranges() {
-        assert!(is_available(None, None, (8, 3)));
-        assert!(is_available(Some("8.0"), None, (8, 3)));
-        assert!(!is_available(Some("8.4"), None, (8, 3)));
-        assert!(is_available(Some("8.3"), Some("8.3"), (8, 3)));
-        assert!(!is_available(Some("5.3"), Some("7.4"), (8, 3)));
-        assert!(is_available(None, Some("8.5"), (8, 3)));
-        assert!(!is_available(None, Some("8.2"), (8, 3)));
-        assert!(is_available(Some("'8.0'"), None, (8, 3)));
-        assert!(is_available(Some("8"), None, (8, 0)));
-        assert!(is_available(Some("garbage"), None, (8, 3)));
+    fn php_extensions_are_embedded() {
+        for ext in PHP_EXTENSIONS {
+            assert!(EXTENSIONS.contains(ext), "{ext} isn't embedded");
+        }
     }
 
     #[test]

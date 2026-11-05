@@ -13,7 +13,7 @@ use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
 use std::sync::Arc;
 
-use stir_db::{Db, SourceFile, Workspace};
+use stir_db::{Db, FileOrigin, SourceFile, Workspace};
 
 pub use index::{DefIndex, ItemLoc};
 pub use items::*;
@@ -22,10 +22,12 @@ pub use items::*;
 #[salsa::tracked(returns(ref))]
 pub fn file_items(db: &dyn Db, file: SourceFile) -> Arc<FileItems> {
     let parse = stir_db::parse(db, file);
-    Arc::new(items::lower_file(
-        &parse.syntax(),
-        stir_db::DEFAULT_PHP_VERSION,
-    ))
+    let versions = if file.origin(db) == FileOrigin::Stub {
+        items::StubVersions::for_stub(file.path(db), stir_db::php_versions(db))
+    } else {
+        items::StubVersions::default()
+    };
+    Arc::new(items::lower_file(&parse.syntax(), versions))
 }
 
 /// Every declaration in the workspace.
@@ -36,6 +38,16 @@ pub fn def_index(db: &dyn Db, ws: Workspace) -> Arc<DefIndex> {
         index.origins.insert(file, file.origin(db));
         index.ranks.insert(file, DefIndex::rank(file.origin(db)));
         let items = file_items(db, file);
+        for limited in &items.limited {
+            let (map, key) = match limited.kind {
+                LimitedKind::Class => (&mut index.limited_classes, limited.name.key()),
+                LimitedKind::Function => (&mut index.limited_functions, limited.name.key()),
+                LimitedKind::Const => (&mut index.limited_consts, limited.name.0.clone()),
+            };
+            map.entry(key)
+                .and_modify(|a| *a = a.either(limited.availability))
+                .or_insert(limited.availability);
+        }
         for (i, c) in items.classes.iter().enumerate() {
             index
                 .classes

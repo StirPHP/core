@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
-use stir_db::{Diagnostic, SourceFile};
+use stir_db::{Diagnostic, FileOrigin, SourceFile};
 use stir_hir::ast::NodeExt;
 use stir_hir::name::Scope;
 use stir_hir::type_ref::{parse_int, unquote};
@@ -15,7 +15,7 @@ use stir_types::{LitValue, Ty, TyKind};
 
 use crate::codes;
 use crate::infer::{Inference, widen_literals};
-use crate::model::{ClassModel, Ctx, FnSig, LowerCx};
+use crate::model::{ClassModel, Ctx, FnSig, LowerCx, LowerError};
 use crate::typed::{Def, MemberKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -309,6 +309,95 @@ impl<'a, 'db> Checker<'a, 'db> {
             .push(Diagnostic::error(self.path.clone(), range, code, msg));
     }
 
+    /// Reports what lowering a type found. A class the stubs have on other versions than these
+    /// isn't unknown.
+    fn lowered_error(&mut self, e: LowerError) {
+        if let Some(symbol) = &e.symbol {
+            let key = symbol.trim_start_matches('\\').to_ascii_lowercase();
+            if let Some(&available) = self.index().limited_classes.get(key.as_str()) {
+                return self.report_limited(e.range, &format!("`{symbol}`"), available);
+            }
+            self.diags.push(
+                Diagnostic::error(self.path.clone(), e.range, e.code, e.message)
+                    .with_symbol(symbol.as_str()),
+            );
+            return;
+        }
+        self.error(e.range, e.code, e.message);
+    }
+
+    fn index(&self) -> &'db stir_hir::DefIndex {
+        stir_hir::def_index(self.ctx.db, self.ctx.ws)
+    }
+
+    /// The versions the code at `range` can run on. `None`: none of those of the project.
+    fn versions_at(&self, range: TextRange) -> Option<stir_db::PhpVersions> {
+        let db = self.ctx.db;
+        let base = crate::php_version::file_versions(
+            self.file.text(db),
+            self.ctx.ws.settings(db).php_version,
+        );
+        let root = stir_db::parse(db, self.file).syntax();
+        if !root.text_range().contains_range(range) {
+            return Some(base);
+        }
+        let node = match root.covering_element(range) {
+            stir_syntax::SyntaxElement::Node(n) => n,
+            stir_syntax::SyntaxElement::Token(t) => t.parent()?,
+        };
+        crate::php_version::versions_at(&node, base)
+    }
+
+    /// Reports `what` of the stubs, if it isn't there on every version the code at `range` can
+    /// run on.
+    fn report_limited(&mut self, range: TextRange, what: &str, available: stir_db::Availability) {
+        let Some(versions) = self.versions_at(range) else {
+            return;
+        };
+        if !available.covers(versions) {
+            let message = crate::php_version::library_message(what, available, versions);
+            self.error(range, codes::PHP_LIBRARY_VERSION, message);
+        }
+    }
+
+    /// With a real range of versions: reports a declaration of the stubs that's on the lowest
+    /// of them, but not on all.
+    fn report_going_away(
+        &mut self,
+        range: TextRange,
+        what: &str,
+        file: SourceFile,
+        limited: &FxHashMap<SmolStr, stir_db::Availability>,
+        key: &str,
+    ) {
+        if !self.ctx.ws.settings(self.ctx.db).php_version.is_single()
+            && file.origin(self.ctx.db) == FileOrigin::Stub
+            && let Some(&available) = limited.get(key)
+        {
+            self.report_limited(range, what, available);
+        }
+    }
+
+    /// A member that `class` or an ancestor has in the stubs, on other versions than the
+    /// target. Reported if the code here can run on those; true either way: it isn't unknown.
+    fn limited_member(
+        &mut self,
+        range: TextRange,
+        class: &Ty,
+        kind: stir_hir::LimitedMemberKind,
+        name: &str,
+    ) -> bool {
+        let Some(available) = self.ctx.limited_member(class, kind, name) else {
+            return false;
+        };
+        let owner = match class.kind() {
+            TyKind::Class { name, .. } => name.to_string(),
+            _ => class.to_string(),
+        };
+        self.report_limited(range, &format!("`{owner}::{name}`"), available);
+        true
+    }
+
     /// An override's types are mostly PHPDoc, which PHP doesn't enforce: PHPStan's
     /// `checkPhpDocMethodSignatures`, from level 3.
     fn tag_php_override(&mut self) {
@@ -350,7 +439,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         let mut sink = Vec::new();
         let ty = self.ctx.lower(&tr, &self.lower_cx, &mut sink);
         for e in sink {
-            self.error(e.range, e.code, e.message);
+            self.lowered_error(e);
         }
         self.check_type_bounds(node.text_range(), &ty);
         ty
@@ -599,7 +688,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 &mut sink,
             );
             for e in sink {
-                self.error(e.range, e.code, e.message);
+                self.lowered_error(e);
             }
         }
     }
@@ -652,7 +741,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             let mut sink = Vec::new();
             let ty = self.ctx.lower(&tr, &self.lower_cx, &mut sink);
             for e in sink {
-                self.error(e.range, e.code, e.message);
+                self.lowered_error(e);
                 self.tag_level(2);
             }
             out.push((name, ty));
@@ -1634,7 +1723,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             self.ctx.lower(t, &cx, &mut sink);
         }
         for e in sink {
-            self.error(e.range, e.code, e.message);
+            self.lowered_error(e);
         }
     }
 
@@ -1659,7 +1748,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             &mut sink,
         );
         for e in sink {
-            self.error(e.range, e.code, e.message);
+            self.lowered_error(e);
         }
         let saved_cx = self.lower_cx.clone();
         self.lower_cx.generics.extend(
@@ -2849,14 +2938,38 @@ impl<'a, 'db> Checker<'a, 'db> {
         match loc {
             Some(loc) => {
                 self.def(node.text_range(), Def::Const(loc));
+                if !self.guarded_by("defined", &text) {
+                    let name = text.trim_start_matches('\\');
+                    self.report_going_away(
+                        node.text_range(),
+                        &format!("`{name}`"),
+                        loc.file,
+                        &self.index().limited_consts,
+                        resolved
+                            .fallback
+                            .as_ref()
+                            .unwrap_or(&resolved.primary)
+                            .as_str(),
+                    );
+                }
                 self.const_type(loc)
             }
             None if self.guarded_by("defined", &text) => Ty::untyped(),
             None => {
-                self.error(
-                    node.text_range(),
-                    codes::UNDEFINED_VARIABLE,
-                    format!("unknown name `{text}`"),
+                let global = resolved.fallback.as_ref().unwrap_or(&resolved.primary);
+                if let Some(&available) = self.index().limited_consts.get(global.as_str()) {
+                    let what = format!("`{}`", global.as_str());
+                    self.report_limited(node.text_range(), &what, available);
+                    return Ty::untyped();
+                }
+                self.diags.push(
+                    Diagnostic::error(
+                        self.path.clone(),
+                        node.text_range(),
+                        codes::UNDEFINED_VARIABLE,
+                        format!("unknown name `{text}`"),
+                    )
+                    .with_symbol(global.as_str()),
                 );
                 Ty::error()
             }
@@ -4293,15 +4406,36 @@ impl<'a, 'db> Checker<'a, 'db> {
                     self.check_args_untyped(node);
                     return Ty::untyped();
                 }
-                self.error(
-                    callee.text_range(),
-                    codes::UNDEFINED_FUNCTION,
-                    format!("unknown function `{text}`"),
+                let global = r.fallback.as_ref().unwrap_or(&r.primary);
+                if let Some(&available) = self.index().limited_functions.get(global.key().as_str())
+                {
+                    let what = format!("`{}()`", global.as_str());
+                    self.report_limited(callee.text_range(), &what, available);
+                    self.check_args_untyped(node);
+                    return Ty::untyped();
+                }
+                self.diags.push(
+                    Diagnostic::error(
+                        self.path.clone(),
+                        callee.text_range(),
+                        codes::UNDEFINED_FUNCTION,
+                        format!("unknown function `{text}`"),
+                    )
+                    .with_symbol(global.as_str()),
                 );
                 self.check_args_untyped(node);
                 return Ty::error();
             };
             self.def(callee.text_range(), Def::Function(loc));
+            if !self.guarded_by("function_exists", &text) {
+                self.report_going_away(
+                    callee.text_range(),
+                    &format!("`{}()`", fqn.as_str()),
+                    loc.file,
+                    &self.index().limited_functions,
+                    fqn.key().as_str(),
+                );
+            }
             // several declarations: overloaded stubs, or a PHP conditional declaration
             let overloads = self.ctx.function_overloads(fqn.as_str());
             if overloads.len() > 1 {
@@ -4678,6 +4812,14 @@ impl<'a, 'db> Checker<'a, 'db> {
                             self.tag_level(1);
                             return Ty::untyped();
                         }
+                        if self.limited_member(
+                            range,
+                            &cls,
+                            stir_hir::LimitedMemberKind::Property,
+                            name,
+                        ) {
+                            return Ty::untyped();
+                        }
                         if self.class_known(&cls) {
                             self.error(
                                 range,
@@ -4964,6 +5106,10 @@ impl<'a, 'db> Checker<'a, 'db> {
             return Ty::untyped();
         }
         let cls = class_of(recv);
+        if self.limited_member(range, &cls, stir_hir::LimitedMemberKind::Method, name) {
+            self.check_args_untyped(node);
+            return Ty::untyped();
+        }
         if self.class_known(&cls) || !matches!(cls.kind(), TyKind::Class { .. }) {
             self.error(
                 range,
@@ -5078,6 +5224,17 @@ impl<'a, 'db> Checker<'a, 'db> {
         match self.ctx.class(fqn.as_str()) {
             Some(c) => {
                 self.def(node.text_range(), Def::Class(c.key.clone()));
+                if self.lookup(&format!("?class::{}", fqn.key())).is_none()
+                    && !self.only_names_a_class(node)
+                {
+                    self.report_going_away(
+                        node.text_range(),
+                        &format!("`{}`", c.name),
+                        c.file,
+                        &self.index().limited_classes,
+                        c.key.as_str(),
+                    );
+                }
                 Ty::class(
                     c.name.clone(),
                     c.params.iter().map(|p| p.ty.clone()).collect(),
@@ -5085,16 +5242,35 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             None => {
                 // `class_exists()` said it's there
-                if self.lookup(&format!("?class::{}", fqn.key())).is_none() {
-                    self.error(
+                if self.lookup(&format!("?class::{}", fqn.key())).is_some() {
+                    return Ty::error();
+                }
+                if let Some(&available) = self.index().limited_classes.get(fqn.key().as_str()) {
+                    if !self.only_names_a_class(node) {
+                        let what = format!("`{}`", fqn.as_str());
+                        self.report_limited(node.text_range(), &what, available);
+                    }
+                    return Ty::error();
+                }
+                self.diags.push(
+                    Diagnostic::error(
+                        self.path.clone(),
                         node.text_range(),
                         codes::UNDEFINED_CLASS,
                         format!("unknown class `{text}`"),
-                    );
-                }
+                    )
+                    .with_symbol(fqn.as_str()),
+                );
                 Ty::error()
             }
         }
+    }
+
+    /// `catch (X $e)` and `$a instanceof X`: PHP doesn't load the class, and code for several
+    /// versions of PHP can test for what only some have.
+    fn only_names_a_class(&self, node: &SyntaxNode) -> bool {
+        node.parent()
+            .is_some_and(|p| matches!(p.kind(), CATCH_CLAUSE | INSTANCEOF_EXPR))
     }
 
     /// The class on the left of `::`.
@@ -5220,6 +5396,15 @@ impl<'a, 'db> Checker<'a, 'db> {
                     self.check_args_untyped(node);
                     return Ty::untyped();
                 }
+                if self.limited_member(
+                    name_node.text_range(),
+                    &cls,
+                    stir_hir::LimitedMemberKind::Method,
+                    &name,
+                ) {
+                    self.check_args_untyped(node);
+                    return Ty::untyped();
+                }
                 if self.has_magic(&cls, "__callStatic") {
                     self.error(
                         name_node.text_range(),
@@ -5277,6 +5462,14 @@ impl<'a, 'db> Checker<'a, 'db> {
                 p.ty
             }
             None => {
+                if self.limited_member(
+                    var.text_range(),
+                    &cls,
+                    stir_hir::LimitedMemberKind::Property,
+                    &name,
+                ) {
+                    return Ty::untyped();
+                }
                 if self.class_known(&cls) {
                     self.error(
                         var.text_range(),
@@ -5328,6 +5521,14 @@ impl<'a, 'db> Checker<'a, 'db> {
                 t
             }
             None => {
+                if self.limited_member(
+                    name_node.text_range(),
+                    &cls,
+                    stir_hir::LimitedMemberKind::Const,
+                    &name,
+                ) {
+                    return Ty::untyped();
+                }
                 if self.class_known(&cls) {
                     self.error(
                         name_node.text_range(),
