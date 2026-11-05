@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Type-checks the PHP corpora in corpus/ (git submodules, never executed) and
+# writes one summary per project to .corpus-results/<label>/, for comparing
+# diagnostic counts and timing between revisions.
+#   git submodule update --init --depth 1
+#   scripts/check-corpus.sh <label> [project...]
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+label="${1:?usage: check-corpus.sh <label> [project...]}"
+shift
+projects=("$@")
+if [ "${#projects[@]}" -eq 0 ]; then
+  projects=(framework phpstan-src symfony)
+fi
+
+(cd "$root" && cargo build -q --release -p stir_cli)
+bin="$root/target/release/sphp"
+out="$root/.corpus-results/$label"
+mkdir -p "$out"
+
+config=""
+cleanup() { if [ -n "$config" ]; then rm -f "$config"; fi; }
+trap cleanup EXIT
+
+for name in "${projects[@]}"; do
+  dir="$root/corpus/$name"
+  if [ ! -d "$dir/vendor" ]; then
+    # Scripts and plugins stay off, so installing runs none of the packages' code.
+    (cd "$dir" && composer install -q --no-interaction --no-scripts --no-plugins \
+      --no-progress --ignore-platform-reqs)
+  fi
+
+  config="$dir/sphp.toml"
+  printf 'srcDir = "."\noutDir = ".sphp-out"\ncheckPhp = true\n' > "$config"
+  start=$(date +%s.%N)
+  status=0
+  (cd "$dir" && "$bin" check --format json) > "$out/$name.json" 2> "$out/$name.stderr" || status=$?
+  end=$(date +%s.%N)
+  rm -f "$config"
+  config=""
+
+  {
+    echo "project: $name"
+    echo "commit: $(git -C "$dir" rev-parse --short HEAD)"
+    echo "exit: $status"
+    printf 'seconds: %.1f\n' "$(echo "$end - $start" | bc)"
+    tail -n 1 "$out/$name.stderr"
+    echo "by code:"
+    jq -r '.[] | "\(.severity) \(.code)"' "$out/$name.json" | sort | uniq -c | sort -rn
+  } | tee "$out/$name.summary"
+done
