@@ -623,12 +623,7 @@ impl<'a> Checker<'a> {
             }
             // PHP callables: `'strlen'`, `[$object, 'method']`
             (
-                K::String
-                | K::NonEmptyString
-                | K::ClassString(_)
-                | K::List { .. }
-                | K::Array { .. }
-                | K::Shape(_),
+                K::String | K::NonEmptyString | K::List { .. } | K::Array { .. } | K::Shape(_),
                 K::Callable { closure: false, .. },
             ) => return Ok(()),
             (K::Literal(LitValue::String(_)), K::Callable { closure: false, .. }) => {

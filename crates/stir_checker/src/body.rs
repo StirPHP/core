@@ -4659,12 +4659,20 @@ impl<'a, 'db> Checker<'a, 'db> {
                         p.ty
                     }
                     None => {
-                        if self.has_magic(&cls, "__get")
-                            || matches!(cls.kind(), TyKind::Class { name, .. } if name.eq_ignore_ascii_case("stdClass"))
+                        if matches!(cls.kind(), TyKind::Class { name, .. } if name.eq_ignore_ascii_case("stdClass"))
+                            || self.probing > 0
                         {
                             return Ty::untyped();
                         }
-                        if self.probing > 0 {
+                        // PHPStan's `reportMagicProperties`: fine at level 0, but from level 1
+                        // a property only `__get` knows of has to be declared with `@property`
+                        if self.has_magic(&cls, "__get") {
+                            self.error(
+                                range,
+                                codes::UNDEFINED_MEMBER,
+                                format!("`{recv}` has no property `{name}`, only `__get`"),
+                            );
+                            self.tag_level(1);
                             return Ty::untyped();
                         }
                         if self.class_known(&cls) {
@@ -4863,7 +4871,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             return;
         }
         for d in &mut self.diags[start..] {
-            if d.php_level.is_none()
+            if d.php_level.is_none_or(|l| l < 2)
                 && matches!(d.code, codes::UNDEFINED_MEMBER | codes::ARGUMENT_COUNT)
             {
                 d.php_level = Some(2);
@@ -4932,9 +4940,19 @@ impl<'a, 'db> Checker<'a, 'db> {
             self.record_asserts(node, &m.sig, &sig, cx);
             return resolve_self(&ret, recv);
         }
-        if matches!(cls.kind(), TyKind::Class { .. })
-            && (self.has_magic(&cls, "__call") || !self.class_known(&cls))
-        {
+        if matches!(cls.kind(), TyKind::Class { .. }) && !self.class_known(&cls) {
+            self.check_args_untyped(node);
+            return Ty::untyped();
+        }
+        // PHPStan's `reportMagicMethods`: fine at level 0, but from level 1 a method only
+        // `__call` knows of has to be declared with `@method`
+        if matches!(cls.kind(), TyKind::Class { .. }) && self.has_magic(&cls, "__call") {
+            self.error(
+                range,
+                codes::UNDEFINED_MEMBER,
+                format!("`{recv}` has no method `{name}`, only `__call`"),
+            );
+            self.tag_level(1);
             self.check_args_untyped(node);
             return Ty::untyped();
         }
@@ -5195,7 +5213,17 @@ impl<'a, 'db> Checker<'a, 'db> {
                 resolve_self(&ret, &recv)
             }
             None => {
-                if self.has_magic(&cls, "__callStatic") || !self.class_known(&cls) {
+                if !self.class_known(&cls) {
+                    self.check_args_untyped(node);
+                    return Ty::untyped();
+                }
+                if self.has_magic(&cls, "__callStatic") {
+                    self.error(
+                        name_node.text_range(),
+                        codes::UNDEFINED_MEMBER,
+                        format!("`{cls}` has no method `{name}`, only `__callStatic`"),
+                    );
+                    self.tag_level(1);
                     self.check_args_untyped(node);
                     return Ty::untyped();
                 }

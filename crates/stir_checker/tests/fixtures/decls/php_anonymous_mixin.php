@@ -42,7 +42,7 @@ class Generic1 {}
 class NoMagic {}
 
 function mixins(Forwards $f, NoMagic $n): int {
-    $f->anything();
+    $f->anything(); // error: SPHP0009
     $n->nope(); // error: SPHP0009
     $n->hidden(); // error: SPHP0009
     echo $n->count;
