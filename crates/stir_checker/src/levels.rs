@@ -32,7 +32,6 @@ pub fn min_level(d: &Diagnostic) -> u8 {
         codes::TYPE_MISMATCH if untyped => 9,
         codes::TYPE_MISMATCH if d.message.contains("in argument") => 5,
         codes::TYPE_MISMATCH | codes::RETURN_VALUE => 3,
-        codes::ANY_PLATFORM_ESCAPE => 9,
         codes::INVALID_OPERAND | codes::NOT_CALLABLE if untyped => 9,
         codes::INVALID_OPERAND
         | codes::NOT_CALLABLE

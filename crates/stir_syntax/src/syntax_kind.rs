@@ -238,8 +238,6 @@ pub enum SyntaxKind {
     INTERFACE_DECL,
     TRAIT_DECL,
     ENUM_DECL,
-    RECORD_DECL,
-    TYPEALIAS_DECL,
     BLOCK,
     EXPR_STMT,
     ECHO_STMT,
@@ -261,7 +259,6 @@ pub enum SyntaxKind {
     TRY_STMT,
     CATCH_CLAUSE,
     FINALLY_CLAUSE,
-    THROW_STMT,
     GLOBAL_STMT,
     STATIC_VAR_STMT,
     STATIC_VAR,
@@ -270,9 +267,6 @@ pub enum SyntaxKind {
     LABEL_STMT,
     HALT_COMPILER_STMT,
     EMPTY_STMT,
-    /// `val x: T = e` / `var $x: T = e`
-    VAL_DECL,
-    VAR_DECL,
 
     // declarations: parts
     MODIFIERS,
@@ -281,19 +275,9 @@ pub enum SyntaxKind {
     ATTRIBUTE,
     PARAM_LIST,
     PARAM,
-    TYPE_PARAM_LIST,
-    TYPE_PARAM,
-    WHERE_CLAUSE,
-    WHERE_PREDICATE,
     RETURN_TYPE,
-    /// Receiver type of an extension function: `String.` in `function String.isBlank()`.
-    RECEIVER_TYPE,
     EXTENDS_CLAUSE,
     IMPLEMENTS_CLAUSE,
-    /// StirPHP supertype list: `class A(...) : Base(), Iface`.
-    SUPERTYPE_LIST,
-    SUPERTYPE,
-    PRIMARY_CTOR,
     CLASS_BODY,
     PROPERTY_DECL,
     PROPERTY_ELEM,
@@ -306,11 +290,8 @@ pub enum SyntaxKind {
     TRAIT_ALIAS,
     TRAIT_PRECEDENCE,
     ENUM_CASE,
-    RECORD_FIELD,
-    LAMBDA_PARAM_LIST,
     CLOSURE_USE,
     CLOSURE_USE_VAR,
-    FUNCTION_BODY,
 
     // types
     NAMED_TYPE,
@@ -318,11 +299,6 @@ pub enum SyntaxKind {
     UNION_TYPE,
     INTERSECTION_TYPE,
     PAREN_TYPE,
-    GENERIC_ARG_LIST,
-    FUNCTION_TYPE,
-    FUNCTION_TYPE_PARAMS,
-    LITERAL_TYPE,
-    RECORD_TYPE,
 
     // expressions
     LITERAL,
@@ -346,13 +322,7 @@ pub enum SyntaxKind {
     TERNARY_EXPR,
     /// `a ?: b`
     SHORT_TERNARY_EXPR,
-    /// Postfix `!!`
-    NOT_NULL_EXPR,
     CAST_EXPR,
-    /// StirPHP `x as T`
-    AS_EXPR,
-    /// StirPHP `x is T` / `x !is T`
-    IS_EXPR,
     INSTANCEOF_EXPR,
     CALL_EXPR,
     ARG_LIST,
@@ -371,17 +341,9 @@ pub enum SyntaxKind {
     CLONE_EXPR,
     CLOSURE_EXPR,
     ARROW_FN_EXPR,
-    /// StirPHP `{ a, b -> ... }`
-    LAMBDA_EXPR,
     MATCH_EXPR,
     MATCH_ARM,
     MATCH_CONDITIONS,
-    /// StirPHP `when (x) { ... }`
-    WHEN_EXPR,
-    WHEN_ARM,
-    WHEN_CONDITION,
-    /// StirPHP `if` used as an expression.
-    IF_EXPR,
     ISSET_EXPR,
     EMPTY_EXPR,
     EVAL_EXPR,
@@ -393,15 +355,8 @@ pub enum SyntaxKind {
     THROW_EXPR,
     ERROR_SUPPRESS_EXPR,
     MAGIC_CONST,
-    /// StirPHP record literal `Point { x = 1, y = 2 }`.
-    RECORD_LITERAL,
-    RECORD_LITERAL_FIELD,
     /// First-class callable syntax `foo(...)`.
     CALLABLE_PLACEHOLDER,
-    /// StirPHP infix call `a to b` (`a->to(b)`).
-    INFIX_CALL_EXPR,
-    /// Explicit type arguments of a call: `listOf<Int>()`.
-    CALL_TYPE_ARGS,
 
     #[doc(hidden)]
     __LAST,

@@ -12,7 +12,6 @@ pub const REASSIGN_IMMUTABLE: &str = "SPHP0010";
 pub const ARGUMENT_COUNT: &str = "SPHP0014";
 pub const INVALID_OPERAND: &str = "SPHP0015";
 pub const NOT_CALLABLE: &str = "SPHP0018";
-pub const ANY_PLATFORM_ESCAPE: &str = "SPHP0019";
 pub const GENERIC_ARITY: &str = "SPHP0020";
 pub const RETURN_VALUE: &str = "SPHP0022";
 pub const INSTANTIATION: &str = "SPHP0023";

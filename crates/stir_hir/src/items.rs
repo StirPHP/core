@@ -78,7 +78,7 @@ pub struct PromotedProperty {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Signature {
-    /// Native type parameters followed by `@template` ones.
+    /// The `@template` type parameters.
     pub type_params: Vec<TypeParamDef>,
     pub params: Vec<ParamDef>,
     /// The native return type.
@@ -140,7 +140,7 @@ pub struct PropertyDef {
     /// Declared by a class-level `@property` tag.
     pub magic: bool,
     pub mods: MemberMods,
-    /// Can't be written: a `@property-read` tag, or `val x`, which the parser still accepts.
+    /// Can't be written: a `@property-read` tag.
     pub immutable: bool,
     pub has_default: bool,
     pub doc: Option<DocText>,
@@ -435,13 +435,6 @@ impl Lowerer {
         }
     }
 
-    fn type_params(&self, node: &SyntaxNode, outer: &[SmolStr]) -> Vec<TypeParamDef> {
-        let Some(list) = node.child(TYPE_PARAM_LIST) else {
-            return Vec::new();
-        };
-        self.type_params_from_list(&list, outer)
-    }
-
     fn signature(
         &self,
         node: &SyntaxNode,
@@ -449,16 +442,9 @@ impl Lowerer {
         ctor: bool,
         doc: Option<&DocBlock>,
     ) -> Signature {
-        // Type params may appear before the name (`function <T> f`) or after it.
-        let mut type_params = Vec::new();
-        for list in node.children_of(TYPE_PARAM_LIST) {
-            type_params.extend(self.type_params_from_list(&list, outer));
-        }
-
-        if let Some(doc) = doc {
-            let extra = doc::templates(doc, &type_params, outer, self.cur_scope(), &self.aliases);
-            type_params.extend(extra);
-        }
+        let type_params = doc.map_or_else(Vec::new, |doc| {
+            doc::templates(doc, outer, self.cur_scope(), &self.aliases)
+        });
         let names = names_of(&type_params, outer);
         let mut params = node
             .child(PARAM_LIST)
@@ -532,35 +518,6 @@ impl Lowerer {
         }
     }
 
-    fn type_params_from_list(&self, list: &SyntaxNode, outer: &[SmolStr]) -> Vec<TypeParamDef> {
-        let names: Vec<SmolStr> = list
-            .children_of(TYPE_PARAM)
-            .iter()
-            .filter_map(|tp| tp.name_text().map(SmolStr::new))
-            .chain(outer.iter().cloned())
-            .collect();
-        list.children_of(TYPE_PARAM)
-            .iter()
-            .filter_map(|tp| {
-                let name = SmolStr::new(tp.name_text()?);
-                let variance = if tp.has_ident("in") {
-                    Variance::In
-                } else if tp.has_ident("out") {
-                    Variance::Out
-                } else {
-                    Variance::Invariant
-                };
-                let bound = first_type(tp).map(|t| self.ctx(&names).lower(&t));
-                Some(TypeParamDef {
-                    name,
-                    variance,
-                    bound,
-                    range: tp.text_range(),
-                })
-            })
-            .collect()
-    }
-
     fn params(
         &self,
         list: &SyntaxNode,
@@ -594,22 +551,17 @@ impl Lowerer {
     }
 
     fn param(&self, p: &SyntaxNode, names: &[SmolStr], ctor: bool) -> ParamDef {
-        let var = p.token(VARIABLE);
-        let (name, name_range) = match (&var, p.child(NAME)) {
-            (Some(v), _) => (SmolStr::new(&v.text()[1..]), v.text_range()),
-            (None, Some(n)) => (SmolStr::new(n.text().to_string().trim()), n.text_range()),
-            (None, None) => (SmolStr::default(), p.text_range()),
+        let (name, name_range) = match p.token(VARIABLE) {
+            Some(v) => (SmolStr::new(&v.text()[1..]), v.text_range()),
+            None => (SmolStr::default(), p.text_range()),
         };
         let mods = p
             .child(MODIFIERS)
             .map(|m| member_mods(&m))
             .unwrap_or_default();
-        let has_mods = p.child(MODIFIERS).is_some();
-        let is_val = p.has_ident("val");
-        let is_var_kw = p.has_token(VAR_KW);
-        let promoted = if ctor && (has_mods || is_val || is_var_kw) {
+        let promoted = if ctor && p.child(MODIFIERS).is_some() {
             Some(PromotedProperty {
-                immutable: is_val || mods.is_readonly,
+                immutable: mods.is_readonly,
                 mods: mods.clone(),
             })
         } else {
@@ -711,11 +663,9 @@ impl Lowerer {
                 }
             }
         }
-        let mut type_params = self.type_params(node, &[]);
-        if let Some(d) = doc {
-            let extra = doc::templates(d, &type_params, &[], self.cur_scope(), &self.aliases);
-            type_params.extend(extra);
-        }
+        let type_params = doc.map_or_else(Vec::new, |d| {
+            doc::templates(d, &[], self.cur_scope(), &self.aliases)
+        });
         let names = names_of(&type_params, &[]);
         let ctx = self.ctx(&names);
         let types_in = |clause: SyntaxKind| -> Vec<TypeRef> {
@@ -903,28 +853,22 @@ impl Lowerer {
                     ty = t;
                 }
                 let doc_vars = doc.as_ref().map(|d| d.vars()).unwrap_or_default();
-                let immutable = m.has_ident("val");
                 for elem in m.children_of(PROPERTY_ELEM) {
-                    let name = match (elem.token(VARIABLE), elem.name_text()) {
-                        (Some(v), _) => SmolStr::new(&v.text()[1..]),
-                        (None, Some(n)) => SmolStr::new(n),
-                        _ => continue,
+                    let Some(var) = elem.token(VARIABLE) else {
+                        continue;
                     };
-                    // `val x: int`, which the parser still accepts, has it inside the element.
-                    let ty = ty
-                        .clone()
-                        .or_else(|| first_type(&elem).map(|t| self.ctx(names).lower(&t)));
+                    let name = SmolStr::new(&var.text()[1..]);
                     let doc_ty = doc_vars
                         .iter()
                         .find(|v| v.name.as_ref().is_none_or(|n| n.name == name))
                         .map(|v| self.doc_cx(names).lower(&v.ty));
                     class.properties.push(PropertyDef {
                         name,
-                        ty,
+                        ty: ty.clone(),
                         doc_ty,
                         magic: false,
                         mods: mods.clone(),
-                        immutable,
+                        immutable: false,
                         has_default: elem.has_token(EQ),
                         doc: doc_of(m),
                         range: elem.text_range(),
@@ -1018,13 +962,7 @@ fn use_kind_of(node: &SyntaxNode) -> Option<UseKind> {
 pub fn is_type_node(kind: SyntaxKind) -> bool {
     matches!(
         kind,
-        NAMED_TYPE
-            | NULLABLE_TYPE
-            | UNION_TYPE
-            | INTERSECTION_TYPE
-            | PAREN_TYPE
-            | FUNCTION_TYPE
-            | LITERAL_TYPE
+        NAMED_TYPE | NULLABLE_TYPE | UNION_TYPE | INTERSECTION_TYPE | PAREN_TYPE
     )
 }
 

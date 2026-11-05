@@ -449,13 +449,6 @@ impl<'db> Ctx<'db> {
             TypeRefKind::Intersection(members) => {
                 Ty::intersection(members.iter().map(|m| self.lower(m, cx, sink)))
             }
-            TypeRefKind::Function { params, ret } => Ty::simple_func(
-                params
-                    .iter()
-                    .map(|p| self.lower(p, cx, sink))
-                    .collect::<Vec<_>>(),
-                self.lower(ret, cx, sink),
-            ),
             TypeRefKind::Literal(lit) => {
                 let value = match lit {
                     LitRef::Int(i) => LitValue::Int(*i),

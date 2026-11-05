@@ -8,8 +8,6 @@ pub trait NodeExt {
     fn token(&self, kind: SyntaxKind) -> Option<SyntaxToken>;
     fn tokens(&self) -> Vec<SyntaxToken>;
     fn has_token(&self, kind: SyntaxKind) -> bool;
-    /// Direct `IDENT` token with the given text (contextual keywords).
-    fn has_ident(&self, text: &str) -> bool;
     /// Text of the direct `NAME` child.
     fn name_text(&self) -> Option<String>;
     /// The doc comment attached as the node's first token, if any.
@@ -40,12 +38,6 @@ impl NodeExt for SyntaxNode {
 
     fn has_token(&self, kind: SyntaxKind) -> bool {
         self.token(kind).is_some()
-    }
-
-    fn has_ident(&self, text: &str) -> bool {
-        self.children_with_tokens()
-            .filter_map(|e| e.into_token())
-            .any(|t| t.kind() == SyntaxKind::IDENT && t.text() == text)
     }
 
     fn name_text(&self) -> Option<String> {

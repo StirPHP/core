@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
-use stir_db::{Diagnostic, Severity, SourceFile};
+use stir_db::{Diagnostic, SourceFile};
 use stir_hir::ast::NodeExt;
 use stir_hir::name::Scope;
 use stir_hir::type_ref::{parse_int, unquote};
@@ -101,7 +101,6 @@ fn is_stmt_kind(k: SyntaxKind) -> bool {
             | BREAK_STMT
             | CONTINUE_STMT
             | TRY_STMT
-            | THROW_STMT
             | GLOBAL_STMT
             | STATIC_VAR_STMT
             | UNSET_STMT
@@ -150,7 +149,6 @@ pub fn is_expr_kind(k: SyntaxKind) -> bool {
             | TERNARY_EXPR
             | SHORT_TERNARY_EXPR
             | CAST_EXPR
-            | AS_EXPR
             | INSTANCEOF_EXPR
             | CALL_EXPR
             | METHOD_CALL_EXPR
@@ -274,12 +272,6 @@ impl<'a, 'db> Checker<'a, 'db> {
         if let Some(d) = self.diags.last_mut() {
             d.php_level = Some(7);
         }
-    }
-
-    fn warn(&mut self, range: TextRange, code: &'static str, msg: impl Into<String>) {
-        self.diags.push(
-            Diagnostic::error(self.path.clone(), range, code, msg).with_severity(Severity::Warning),
-        );
     }
 
     fn scope(&self, node: &SyntaxNode) -> Arc<Scope> {
@@ -516,7 +508,7 @@ impl<'a, 'db> Checker<'a, 'db> {
     /// Does this statement always leave the enclosing block?
     fn diverges(&self, node: &SyntaxNode) -> bool {
         match node.kind() {
-            RETURN_STMT | BREAK_STMT | CONTINUE_STMT | THROW_STMT | GOTO_STMT => true,
+            RETURN_STMT | BREAK_STMT | CONTINUE_STMT | GOTO_STMT => true,
             EXPR_STMT => node.children().next().is_some_and(|e| {
                 matches!(e.kind(), THROW_EXPR | EXIT_EXPR)
                     || self
@@ -1117,21 +1109,9 @@ impl<'a, 'db> Checker<'a, 'db> {
     fn property_decl(&mut self, node: &SyntaxNode, model: &Rc<ClassModel<'db>>) {
         let declared = stir_hir::first_type(node).map(|t| self.lower_type_node(&t));
         for elem in node.children_of(PROPERTY_ELEM) {
-            let ty = declared
-                .clone()
-                .or_else(|| stir_hir::first_type(&elem).map(|t| self.lower_type_node(&t)));
-            if let Some(t) = &ty
-                && t.contains_any_platform()
-            {
-                self.error(
-                    elem.text_range(),
-                    codes::ANY_PLATFORM_ESCAPE,
-                    "properties can't be untyped (`Any!`)",
-                );
-            }
             for e in exprs_of(&elem) {
-                let vt = self.expr(&e, ty.as_ref());
-                if let Some(t) = &ty {
+                let vt = self.expr(&e, declared.as_ref());
+                if let Some(t) = &declared {
                     self.check_assign(e.text_range(), &vt, t, "property initializer");
                 }
             }
@@ -1595,47 +1575,6 @@ impl<'a, 'db> Checker<'a, 'db> {
                 let l = self.expr(&es[0], expected.map(|e| e.clone().nullable()).as_ref());
                 let r = self.expr(&es[1], expected);
                 stir_types::join(self.ctx, &l, &r)
-            }
-            // `foreach ($xs as T as $x)`: the parser takes the first `as` for a cast
-            AS_EXPR => {
-                let es = exprs_of(node);
-                let src = es
-                    .first()
-                    .map(|e| self.expr(e, None))
-                    .unwrap_or_else(Ty::error);
-                let Some(tn) = stir_hir::first_type(node) else {
-                    return Ty::error();
-                };
-                let target = self.lower_type_node(&tn);
-                if !src.is_error() && !target.is_error() && !src.is_any_platform() {
-                    // array types overlap with each other (a map may hold a list)
-                    let arrays = |t: &Ty| {
-                        t.members().iter().all(|m| {
-                            stir_types::php_view(m)
-                                .or_else(|| Some(m.clone()))
-                                .is_some_and(|v| {
-                                    matches!(
-                                        v.kind(),
-                                        TyKind::Array { .. }
-                                            | TyKind::PhpList { .. }
-                                            | TyKind::Shape(_)
-                                    )
-                                })
-                        })
-                    };
-                    let overlap = (arrays(&src) && arrays(&target))
-                        || stir_types::is_assignable(self.ctx, &target, &src)
-                        || stir_types::is_assignable(self.ctx, &src, &target)
-                        || stir_types::are_comparable(self.ctx, &src, &target);
-                    if !overlap {
-                        self.warn(
-                            node.text_range(),
-                            codes::TYPE_MISMATCH,
-                            format!("cast from `{src}` to `{target}` can never succeed"),
-                        );
-                    }
-                }
-                target
             }
             INSTANCEOF_EXPR => {
                 if let Some(e) = exprs_of(node).first() {

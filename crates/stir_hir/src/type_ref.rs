@@ -70,10 +70,6 @@ pub enum TypeRefKind {
     Nullable(Box<TypeRef>),
     Union(Vec<TypeRef>),
     Intersection(Vec<TypeRef>),
-    Function {
-        params: Vec<TypeRef>,
-        ret: Box<TypeRef>,
-    },
     Literal(Literal),
     /// PHPStan `list<T>` / `non-empty-list<T>`.
     PhpList {
@@ -188,26 +184,6 @@ impl TypeCtx<'_> {
                 Some(inner) => return self.lower(&inner),
                 None => TypeRefKind::Error,
             },
-            FUNCTION_TYPE => {
-                let params = node
-                    .child(FUNCTION_TYPE_PARAMS)
-                    .map(|p| p.children().map(|c| self.lower(&c)).collect())
-                    .unwrap_or_default();
-                let ret = node
-                    .children()
-                    .filter(|c| c.kind() != FUNCTION_TYPE_PARAMS)
-                    .last()
-                    .map(|c| self.lower(&c))
-                    .unwrap_or(TypeRef {
-                        kind: TypeRefKind::Error,
-                        range,
-                    });
-                TypeRefKind::Function {
-                    params,
-                    ret: Box::new(ret),
-                }
-            }
-            LITERAL_TYPE => lower_literal(node),
             _ => TypeRefKind::Error,
         };
         TypeRef { kind, range }
@@ -219,60 +195,16 @@ impl TypeCtx<'_> {
         };
         let text = name.text().to_string();
         let text = text.trim();
-        let args: Vec<TypeRef> = node
-            .child(GENERIC_ARG_LIST)
-            .map(|a| a.children().map(|c| self.lower(&c)).collect())
-            .unwrap_or_default();
         if !text.contains('\\') {
             if self.type_params.iter().any(|p| p == text) {
                 return TypeRefKind::Param(SmolStr::new(text));
             }
             let php = PhpBuiltin::from_name(&text.to_ascii_lowercase());
-            // `array<K, V>` / `array<V>`, as in PHPDoc
-            if php == Some(PhpBuiltin::Array) && !args.is_empty() {
-                let mut args = args.into_iter();
-                let (key, value) = match (args.next(), args.next()) {
-                    (Some(key), Some(value)) => (Some(Box::new(key)), value),
-                    (Some(value), None) => (None, value),
-                    (None, _) => unreachable!("args isn't empty"),
-                };
-                return TypeRefKind::PhpArray {
-                    key,
-                    value: Box::new(value),
-                    non_empty: false,
-                };
-            }
             if let Some(b) = php {
                 return TypeRefKind::Php(b);
             }
         }
-        TypeRefKind::Named(self.scope.resolve_class(text), args)
-    }
-}
-
-fn lower_literal(node: &SyntaxNode) -> TypeRefKind {
-    let toks = node.tokens();
-    let negative = toks.first().is_some_and(|t| t.kind() == MINUS);
-    let Some(tok) = toks.last() else {
-        return TypeRefKind::Error;
-    };
-    match tok.kind() {
-        INT_NUMBER => match parse_int(tok.text()) {
-            Some(v) => TypeRefKind::Literal(Literal::Int(if negative { -v } else { v })),
-            None => TypeRefKind::Error,
-        },
-        FLOAT_NUMBER => {
-            let s = if negative {
-                format!("-{}", tok.text())
-            } else {
-                tok.text().to_owned()
-            };
-            TypeRefKind::Literal(Literal::Float(SmolStr::new(s)))
-        }
-        STRING_SINGLE | STRING_DOUBLE => {
-            TypeRefKind::Literal(Literal::String(SmolStr::new(unquote(tok.text()))))
-        }
-        _ => TypeRefKind::Error,
+        TypeRefKind::Named(self.scope.resolve_class(text), Vec::new())
     }
 }
 

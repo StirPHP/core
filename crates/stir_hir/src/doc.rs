@@ -349,16 +349,14 @@ pub fn lower_type_str(cx: &DocCx<'_>, text: &str, offset: TextSize) -> TypeRef {
 /// are skipped). Bounds may mention the templates themselves and `outer` names.
 pub fn templates(
     doc: &DocBlock,
-    existing: &[TypeParamDef],
     outer: &[SmolStr],
     scope: &Scope,
     aliases: &Aliases,
 ) -> Vec<TypeParamDef> {
     let tags = doc.templates();
-    let names: Vec<SmolStr> = existing
+    let names: Vec<SmolStr> = tags
         .iter()
-        .map(|t| t.name.clone())
-        .chain(tags.iter().map(|t| t.param.name.name.clone()))
+        .map(|t| t.param.name.name.clone())
         .chain(outer.iter().cloned())
         .collect();
     let cx = DocCx {
@@ -369,7 +367,7 @@ pub fn templates(
     let mut out: Vec<TypeParamDef> = Vec::new();
     for t in tags {
         let name = t.param.name.name.clone();
-        if existing.iter().chain(out.iter()).any(|e| e.name == name) {
+        if out.iter().any(|e| e.name == name) {
             continue;
         }
         out.push(TypeParamDef {
