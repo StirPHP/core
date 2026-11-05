@@ -4,7 +4,7 @@ use rustc_hash::FxHashMap;
 
 use crate::assign::{Checker, is_closure_name};
 use crate::env::TypeEnv;
-use crate::ty::{ParamId, Ty, TyKind as K};
+use crate::ty::{LitValue, ParamId, Ty, TyKind as K};
 
 /// Replaces type parameters according to `map` (parameters not in the map are kept).
 pub fn subst(ty: &Ty, map: &FxHashMap<ParamId, Ty>) -> Ty {
@@ -149,7 +149,8 @@ fn can_intersect(env: &dyn TypeEnv, a: &Ty, b: &Ty) -> bool {
     }
 }
 
-/// Splits `bool` into `true|false`, so that narrowing can work member by member.
+/// Splits types into the ones they stand for, so that narrowing can work member by member:
+/// `bool` into `true|false`, `array-key` into `int|string` and so on.
 fn expand(ty: &Ty) -> Vec<Ty> {
     let mut out = Vec::new();
     for m in ty.members() {
@@ -158,10 +159,84 @@ fn expand(ty: &Ty) -> Vec<Ty> {
                 out.push(Ty::lit_bool(true));
                 out.push(Ty::lit_bool(false));
             }
+            K::ArrayKey => {
+                out.push(Ty::int());
+                out.push(Ty::string());
+            }
+            K::Numeric => {
+                out.push(Ty::int());
+                out.push(Ty::float());
+                out.push(Ty::numeric_string());
+            }
+            K::Scalar => {
+                out.push(Ty::int());
+                out.push(Ty::float());
+                out.push(Ty::string());
+                out.push(Ty::lit_bool(true));
+                out.push(Ty::lit_bool(false));
+            }
+            K::Iterable { key, value } => {
+                out.push(Ty::array(
+                    if matches!(key.kind(), K::Mixed) {
+                        Ty::array_key()
+                    } else {
+                        key.clone()
+                    },
+                    value.clone(),
+                ));
+                out.push(Ty::class("Traversable", vec![key.clone(), value.clone()]));
+            }
             _ => out.push(m.clone()),
         }
     }
     out
+}
+
+/// What's left of `ty` when a value of it was found truthy.
+pub fn narrow_truthy(ty: &Ty) -> Ty {
+    Ty::union(
+        expand(ty)
+            .into_iter()
+            .filter(|m| !is_always_falsy(m))
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// What's left of `ty` when a value of it was found falsy.
+pub fn narrow_falsy(ty: &Ty) -> Ty {
+    Ty::union(
+        expand(ty)
+            .into_iter()
+            .filter(|m| !is_always_truthy(m))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn is_always_falsy(t: &Ty) -> bool {
+    match t.kind() {
+        K::Null | K::Void => true,
+        K::Literal(LitValue::Bool(b)) => !b,
+        K::Literal(LitValue::Int(n)) => *n == 0,
+        K::Literal(LitValue::Float(f)) => f.get() == 0.0,
+        K::Literal(LitValue::String(s)) => s.is_empty() || s == "0",
+        K::List { elem, non_empty } => !non_empty && elem.is_never(),
+        _ => false,
+    }
+}
+
+fn is_always_truthy(t: &Ty) -> bool {
+    match t.kind() {
+        K::Class { .. } | K::SelfType { .. } | K::Object | K::Callable { .. } => true,
+        K::ClassString(_) => true,
+        K::Literal(LitValue::Bool(b)) => *b,
+        K::Literal(LitValue::Int(n)) => *n != 0,
+        K::Literal(LitValue::Float(f)) => f.get() != 0.0,
+        K::Literal(LitValue::String(s)) => !s.is_empty() && s != "0",
+        K::List { non_empty, .. } | K::Array { non_empty, .. } => *non_empty,
+        K::Shape(s) => s.fields.iter().any(|f| !f.optional),
+        K::IntRange { min, max } => min.is_some_and(|m| m > 0) || max.is_some_and(|m| m < 0),
+        _ => false,
+    }
 }
 
 /// The type of a value of type `declared` after a successful type check (`is_int($x)`,

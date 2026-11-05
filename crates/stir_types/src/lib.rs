@@ -30,7 +30,8 @@ pub use assign::{
 pub use compare::are_comparable;
 pub use env::{EmptyEnv, TypeEnv, Variance};
 pub use ops::{
-    free_params, is_nullable, join, meet, narrow_away, narrow_to, strip_nulls, subst, without_null,
+    free_params, is_nullable, join, meet, narrow_away, narrow_falsy, narrow_to, narrow_truthy,
+    strip_nulls, subst, without_null,
 };
 pub use ty::{
     FloatLit, FnParam, FnTy, LitValue, ParamId, ParamKind, SelfKind, ShapeField, ShapeKey, ShapeTy,

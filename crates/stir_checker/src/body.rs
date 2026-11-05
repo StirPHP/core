@@ -44,6 +44,30 @@ pub struct Local {
     pub declared: Ty,
     pub kind: LocalKind,
     pub range: TextRange,
+    /// Assigned on some of the paths that lead here, not all.
+    pub maybe_undefined: bool,
+}
+
+/// What's known at a point in the code: the variables, by scope.
+type FlowState = Vec<FxHashMap<SmolStr, Local>>;
+
+/// The states a loop or `switch` is left or continued from.
+#[derive(Debug, Default)]
+struct LoopExits {
+    breaks: Vec<FlowState>,
+    continues: Vec<FlowState>,
+}
+
+/// What a call that came with `@phpstan-assert`s went to.
+#[derive(Clone)]
+struct CallAsserts {
+    asserts: Vec<stir_hir::AssertDef>,
+    /// The callee's parameter names.
+    params: Vec<SmolStr>,
+    /// What the assert types are lowered against.
+    cx: LowerCx,
+    /// How the call solved the templates.
+    solved: FxHashMap<stir_types::ParamId, Ty>,
 }
 
 /// The function whose body is being checked.
@@ -67,7 +91,13 @@ pub struct Checker<'a, 'db> {
     pub path: std::path::PathBuf,
     pub items: &'db FileItems,
     pub diags: Vec<Diagnostic>,
-    conditional_depth: u32,
+    /// The current point can't be reached: a `return`, `throw` or the like came before it.
+    dead: bool,
+    /// Enclosing loops and `switch`es, for `break` and `continue`.
+    loops: Vec<LoopExits>,
+    /// In a first pass over a loop body, which only finds what the loop's variables hold.
+    /// Its diagnostics are thrown away.
+    prepass: u32,
     /// Inside `isset`, `empty` or the left of `??`: the value is allowed not to exist.
     probing: u32,
     /// The function (by `fns` depth) that ran `include` or `extract`, which can
@@ -78,6 +108,10 @@ pub struct Checker<'a, 'db> {
     class: Option<Rc<ClassModel<'db>>>,
     lower_cx: LowerCx,
     in_ctor: bool,
+    /// Calls to something with `@phpstan-assert`s, by the range of the call.
+    call_targets: FxHashMap<TextRange, CallAsserts>,
+    /// How the last checked call solved its templates.
+    last_solved: FxHashMap<stir_types::ParamId, Ty>,
     /// Expression types.
     pub types: FxHashMap<TextRange, Ty>,
     /// What names resolve to, by the range of the name (for the language server).
@@ -196,7 +230,9 @@ impl<'a, 'db> Checker<'a, 'db> {
             path: file.path(ctx.db).clone(),
             items: ctx.items(file),
             diags: Vec::new(),
-            conditional_depth: 0,
+            dead: false,
+            loops: Vec::new(),
+            prepass: 0,
             probing: 0,
             dynamic_vars_fn: None,
             frames: vec![FxHashMap::default()],
@@ -204,6 +240,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             class: None,
             lower_cx: LowerCx::default(),
             in_ctor: false,
+            call_targets: FxHashMap::default(),
+            last_solved: FxHashMap::default(),
             types: FxHashMap::default(),
             defs: FxHashMap::default(),
             locals: FxHashMap::default(),
@@ -399,16 +437,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                 ty,
                 kind,
                 range,
+                maybe_undefined: false,
             },
         );
-    }
-
-    /// Runs `f` for code that may not execute: a PHP variable assigned in it keeps
-    /// the types it had as well.
-    fn conditional(&mut self, f: impl FnOnce(&mut Self)) {
-        self.conditional_depth += 1;
-        f(self);
-        self.conditional_depth -= 1;
     }
 
     fn apply_facts(&mut self, facts: &Facts) {
@@ -425,24 +456,16 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
-    /// Snapshot of current narrowed types (for restoring after a branch).
-    fn snapshot(&self) -> Vec<FxHashMap<SmolStr, Local>> {
+    fn snapshot(&self) -> FlowState {
         self.frames.clone()
     }
 
-    fn restore_types(&mut self, snap: &[FxHashMap<SmolStr, Local>]) {
-        for (frame, old) in self.frames.iter_mut().zip(snap) {
-            frame.retain(|name, _| !name.contains("->") || old.contains_key(name));
-            for (name, local) in frame.iter_mut() {
-                if let Some(o) = old.get(name) {
-                    local.ty = o.ty.clone();
-                }
-            }
-        }
+    fn restore(&mut self, state: &FlowState) {
+        self.frames.clone_from(state);
     }
 
-    /// Like [`Self::restore_types`], keeping property paths that started being tracked.
-    fn restore_narrowing(&mut self, snap: &[FxHashMap<SmolStr, Local>]) {
+    /// Undoes what a sub-expression learned, keeping what's been defined or tracked since.
+    fn restore_narrowing(&mut self, snap: &FlowState) {
         for (frame, old) in self.frames.iter_mut().zip(snap) {
             for (name, local) in frame.iter_mut() {
                 if let Some(o) = old.get(name) {
@@ -452,14 +475,58 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
-    /// Resets narrowings of variables that a loop body may reassign.
-    fn widen_all(&mut self) {
-        for frame in &mut self.frames {
-            for local in frame.values_mut() {
-                if local.kind.mutable() {
-                    local.ty = local.declared.clone();
+    /// The state after paths with these end states come together.
+    fn merge_states(&self, states: Vec<FlowState>) -> Option<FlowState> {
+        let mut iter = states.into_iter();
+        let mut merged = iter.next()?;
+        for other in iter {
+            for (frame, o) in merged.iter_mut().zip(&other) {
+                for (name, local) in frame.iter_mut() {
+                    match o.get(name) {
+                        Some(ol) => {
+                            if local.ty != ol.ty {
+                                local.ty = stir_types::join(self.ctx, &local.ty, &ol.ty);
+                            }
+                            if local.declared != ol.declared {
+                                local.declared =
+                                    stir_types::join(self.ctx, &local.declared, &ol.declared);
+                            }
+                            local.maybe_undefined |= ol.maybe_undefined;
+                        }
+                        // a tracked property on one path isn't known on the other
+                        None if name.contains("->")
+                            || name.contains('[')
+                            || name.contains("::") =>
+                        {
+                            local.ty = local.declared.clone();
+                        }
+                        None => local.maybe_undefined = true,
+                    }
+                }
+                for (name, ol) in o {
+                    if !frame.contains_key(name) {
+                        let mut l = ol.clone();
+                        if name.contains("->") || name.contains('[') || name.contains("::") {
+                            l.ty = l.declared.clone();
+                        } else {
+                            l.maybe_undefined = true;
+                        }
+                        frame.insert(name.clone(), l);
+                    }
                 }
             }
+        }
+        Some(merged)
+    }
+
+    /// Continues from the merge of these end states; none means this point can't be reached.
+    fn continue_from(&mut self, states: Vec<FlowState>) {
+        match self.merge_states(states) {
+            Some(state) => {
+                self.frames = state;
+                self.dead = false;
+            }
+            None => self.dead = true,
         }
     }
 
@@ -506,44 +573,14 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     // ------------------------------------------------------------ statements
 
-    /// Does this statement always leave the enclosing block?
-    fn diverges(&self, node: &SyntaxNode) -> bool {
-        match node.kind() {
-            RETURN_STMT | BREAK_STMT | CONTINUE_STMT | GOTO_STMT => true,
-            EXPR_STMT => node.children().next().is_some_and(|e| {
-                matches!(e.kind(), THROW_EXPR | EXIT_EXPR)
-                    || self
-                        .types
-                        .get(&e.text_range())
-                        .is_some_and(|t| t.is_never())
-            }),
-            BLOCK => node.children().any(|s| self.diverges(&s)),
-            IF_STMT => {
-                let has_else = node.child(ELSE_CLAUSE).is_some();
-                has_else
-                    && node
-                        .children()
-                        .filter(|c| {
-                            matches!(c.kind(), BLOCK | ELSEIF_CLAUSE | ELSE_CLAUSE)
-                                || is_stmt_kind(c.kind())
-                        })
-                        .all(|c| match c.kind() {
-                            ELSEIF_CLAUSE | ELSE_CLAUSE => c
-                                .children()
-                                .filter(|s| is_stmt_kind(s.kind()))
-                                .any(|s| self.diverges(&s)),
-                            _ => self.diverges(&c),
-                        })
-            }
-            _ => false,
-        }
-    }
-
     pub fn stmt(&mut self, node: &SyntaxNode) {
         match node.kind() {
             EXPR_STMT => {
                 if let Some(e) = exprs_of(node).first() {
-                    self.expr(e, None);
+                    let t = self.expr(e, None);
+                    if t.is_never() || matches!(e.kind(), THROW_EXPR | EXIT_EXPR) {
+                        self.dead = true;
+                    }
                 }
             }
             ECHO_STMT | ECHO_TAG_STMT => {
@@ -551,105 +588,19 @@ impl<'a, 'db> Checker<'a, 'db> {
                     self.expr(&e, None);
                 }
             }
-            RETURN_STMT => self.return_stmt(node),
+            RETURN_STMT => {
+                self.return_stmt(node);
+                self.dead = true;
+            }
             BLOCK => self.block_stmts(node),
-            IF_STMT => self.conditional(|this| this.if_stmt(node)),
-            WHILE_STMT | DO_WHILE_STMT | FOR_STMT | FOREACH_STMT | SWITCH_STMT | TRY_STMT
-                if self.conditional_depth == 0 =>
-            {
-                self.conditional(|this| this.stmt(node));
-            }
-            WHILE_STMT => {
-                let cond = exprs_of(node).into_iter().next();
-                self.widen_all();
-                let facts = cond.as_ref().map(|c| self.condition(c)).unwrap_or_default();
-                let snap = self.snapshot();
-                self.apply_facts(&facts.0);
-                for s in node.children().filter(|c| is_stmt_kind(c.kind())) {
-                    self.stmt(&s);
-                }
-                self.restore_types(&snap);
-                self.widen_all();
-                self.apply_facts(&facts.1);
-            }
-            DO_WHILE_STMT => {
-                self.widen_all();
-                for s in node.children().filter(|c| is_stmt_kind(c.kind())) {
-                    self.stmt(&s);
-                }
-                if let Some(c) = exprs_of(node).first() {
-                    self.condition(c);
-                }
-                self.widen_all();
-            }
-            FOR_STMT => {
-                for part in [FOR_INIT, FOR_COND, FOR_STEP] {
-                    if let Some(p) = node.child(part) {
-                        for e in exprs_of(&p) {
-                            if part == FOR_COND {
-                                self.condition(&e);
-                            } else {
-                                self.expr(&e, None);
-                            }
-                        }
-                    }
-                }
-                self.widen_all();
-                for s in node.children().filter(|c| is_stmt_kind(c.kind())) {
-                    self.stmt(&s);
-                }
-                self.widen_all();
-            }
-            FOREACH_STMT => self.foreach_stmt(node),
-            SWITCH_STMT => {
-                if let Some(e) = exprs_of(node).first() {
-                    self.expr(e, None);
-                }
-                for case in node.children_of(SWITCH_CASE) {
-                    for e in exprs_of(&case) {
-                        self.expr(&e, None);
-                    }
-                    for s in case.children().filter(|c| is_stmt_kind(c.kind())) {
-                        self.stmt(&s);
-                    }
-                }
-            }
-            BREAK_STMT | CONTINUE_STMT | GOTO_STMT | LABEL_STMT | EMPTY_STMT | INLINE_HTML_STMT
-            | USE_DECL | HALT_COMPILER_STMT => {}
-            TRY_STMT => {
-                let snap = self.snapshot();
-                for c in node.children() {
-                    match c.kind() {
-                        BLOCK => self.stmt(&c),
-                        CATCH_CLAUSE => {
-                            self.restore_types(&snap);
-                            let tys: Vec<Ty> = c
-                                .children_of(NAME_REF)
-                                .iter()
-                                .map(|n| self.class_ref_ty(n, &text_of(n)))
-                                .collect();
-                            if let Some(v) = c.token(VARIABLE) {
-                                self.declare(
-                                    &v.text()[1..],
-                                    Ty::union(tys),
-                                    LocalKind::Loop,
-                                    v.text_range(),
-                                );
-                            }
-                            if let Some(b) = c.child(BLOCK) {
-                                self.stmt(&b);
-                            }
-                        }
-                        FINALLY_CLAUSE => {
-                            if let Some(b) = c.child(BLOCK) {
-                                self.stmt(&b);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                self.widen_all();
-            }
+            IF_STMT => self.if_stmt(node),
+            WHILE_STMT | DO_WHILE_STMT | FOR_STMT | FOREACH_STMT => self.loop_stmt(node),
+            SWITCH_STMT => self.switch_stmt(node),
+            BREAK_STMT => self.jump(node, true),
+            CONTINUE_STMT => self.jump(node, false),
+            GOTO_STMT => self.dead = true,
+            LABEL_STMT | EMPTY_STMT | INLINE_HTML_STMT | USE_DECL | HALT_COMPILER_STMT => {}
+            TRY_STMT => self.try_stmt(node),
             GLOBAL_STMT => {
                 for v in node.descendants().filter(|d| d.kind() == VARIABLE_EXPR) {
                     let name = text_of(&v);
@@ -710,79 +661,409 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
+    fn run_stmts(&mut self, parent: &SyntaxNode) {
+        for s in parent.children().filter(|c| is_stmt_kind(c.kind())) {
+            self.stmt(&s);
+        }
+    }
+
     fn if_stmt(&mut self, node: &SyntaxNode) {
         let cond = exprs_of(node).into_iter().next();
         let (t, f) = cond.as_ref().map(|c| self.condition(c)).unwrap_or_default();
-        let snap = self.snapshot();
-        let assigned = self.assigned_places(node);
+        let entry_dead = self.dead;
+        let after_cond = self.snapshot();
+        let mut ends = Vec::new();
         self.apply_facts(&t);
-        let body: Vec<SyntaxNode> = node.children().filter(|c| is_stmt_kind(c.kind())).collect();
-        let mut all_diverge = true;
-        for s in &body {
-            self.stmt(s);
+        self.run_stmts(node);
+        if !self.dead {
+            ends.push(self.snapshot());
         }
-        let then_diverges = body.iter().any(|s| self.diverges(s));
-        all_diverge &= then_diverges;
-        self.restore_types(&snap);
+        self.restore(&after_cond);
+        self.dead = entry_dead;
         self.apply_facts(&f);
-        let mut falls_through_facts = if then_diverges { Some(f.clone()) } else { None };
         let mut has_else = false;
         for clause in node.children() {
             match clause.kind() {
                 ELSEIF_CLAUSE => {
                     let c = exprs_of(&clause).into_iter().next();
                     let (t2, f2) = c.as_ref().map(|c| self.condition(c)).unwrap_or_default();
-                    let snap2 = self.snapshot();
+                    let before = self.snapshot();
                     self.apply_facts(&t2);
-                    let stmts: Vec<SyntaxNode> = clause
-                        .children()
-                        .filter(|c| is_stmt_kind(c.kind()))
-                        .collect();
-                    for s in &stmts {
-                        self.stmt(s);
+                    self.run_stmts(&clause);
+                    if !self.dead {
+                        ends.push(self.snapshot());
                     }
-                    let d = stmts.iter().any(|s| self.diverges(s));
-                    all_diverge &= d;
-                    self.restore_types(&snap2);
+                    self.restore(&before);
+                    self.dead = entry_dead;
                     self.apply_facts(&f2);
-                    if d {
-                        if let Some(ff) = &mut falls_through_facts {
-                            ff.narrow.extend(f2.narrow.clone());
-                        }
-                    } else {
-                        falls_through_facts = None;
-                    }
                 }
                 ELSE_CLAUSE => {
                     has_else = true;
-                    let stmts: Vec<SyntaxNode> = clause
-                        .children()
-                        .filter(|c| is_stmt_kind(c.kind()))
-                        .collect();
-                    for s in &stmts {
-                        self.stmt(s);
-                    }
-                    let d = stmts.iter().any(|s| self.diverges(s));
-                    all_diverge &= d;
-                    if !d {
-                        falls_through_facts = None;
+                    self.run_stmts(&clause);
+                    if !self.dead {
+                        ends.push(self.snapshot());
                     }
                 }
                 _ => {}
             }
         }
-        // After the if: types are those of the fall-through path, and a variable assigned
-        // on some path is back to its declared type, which holds what each path assigned.
-        self.restore_types(&snap);
-        if !has_else && let Some(ff) = falls_through_facts {
-            self.apply_facts(&ff);
+        if !has_else {
+            ends.push(self.snapshot());
         }
-        if !all_diverge {
-            for name in &assigned {
-                if let Some(l) = self.lookup_mut(name) {
-                    l.ty = l.declared.clone();
+        if entry_dead {
+            // dead code: keep going with something, as each statement still gets checked
+            let last = self.snapshot();
+            self.continue_from(ends);
+            self.dead = true;
+            if self.frames.is_empty() {
+                self.restore(&last);
+            }
+        } else if ends.is_empty() {
+            self.dead = true;
+        } else {
+            self.continue_from(ends);
+        }
+    }
+
+    /// `break` or `continue`: the rest of this path goes to the loop's end or next round.
+    fn jump(&mut self, node: &SyntaxNode, is_break: bool) {
+        let levels = exprs_of(node)
+            .first()
+            .and_then(|e| parse_int(text_of(e).trim()))
+            .unwrap_or(1)
+            .max(1) as usize;
+        if !self.dead {
+            let state = self.snapshot();
+            if let Some(i) = self.loops.len().checked_sub(levels)
+                && let Some(l) = self.loops.get_mut(i)
+            {
+                if is_break {
+                    l.breaks.push(state);
+                } else {
+                    l.continues.push(state);
                 }
             }
+        }
+        self.dead = true;
+    }
+
+    /// One round of a loop, up to where the condition is checked again.
+    fn loop_round(
+        &mut self,
+        node: &SyntaxNode,
+        bindings: &dyn Fn(&mut Self),
+    ) -> (Vec<FlowState>, Vec<FlowState>) {
+        self.loops.push(LoopExits::default());
+        match node.kind() {
+            WHILE_STMT => {
+                let cond = exprs_of(node).into_iter().next();
+                let facts = cond.as_ref().map(|c| self.condition(c)).unwrap_or_default();
+                self.apply_facts(&facts.0);
+                self.run_stmts(node);
+            }
+            DO_WHILE_STMT => self.run_stmts(node),
+            FOR_STMT => {
+                if let Some(p) = node.child(FOR_COND) {
+                    for e in exprs_of(&p) {
+                        let (t, _) = self.condition(&e);
+                        self.apply_facts(&t);
+                    }
+                }
+                self.run_stmts(node);
+            }
+            _ => {
+                bindings(self);
+                self.run_stmts(node);
+            }
+        }
+        let exits = self.loops.pop().unwrap_or_default();
+        let mut ends = exits.continues;
+        if !self.dead {
+            ends.push(self.snapshot());
+        }
+        (ends, exits.breaks)
+    }
+
+    /// What a loop's variables hold comes from the rounds before: outside a pre-pass, one
+    /// pass without diagnostics finds that out, and the second checks with it. A loop in a
+    /// pre-pass gets just the one pass, which keeps this linear in the nesting depth.
+    fn loop_stmt(&mut self, node: &SyntaxNode) {
+        let mut subject = None;
+        if node.kind() == FOR_STMT
+            && let Some(p) = node.child(FOR_INIT)
+        {
+            for e in exprs_of(&p) {
+                self.expr(&e, None);
+            }
+        }
+        if node.kind() == FOREACH_STMT {
+            let es = exprs_of(node);
+            if let Some(subj) = es.first() {
+                let st = self.expr(subj, None);
+                subject = Some(self.iter_types(subj.text_range(), &st));
+            }
+        }
+        let es = exprs_of(node);
+        let bindings = |this: &mut Self| {
+            let Some((key_ty, val_ty)) = subject.clone() else {
+                return;
+            };
+            let targets = &es[1..];
+            match targets {
+                [k, v] => {
+                    this.bind_target(k, key_ty);
+                    this.bind_target(v, val_ty);
+                }
+                [v] => this.bind_target(v, val_ty),
+                _ => {}
+            }
+        };
+        let entry = self.snapshot();
+        let entry_dead = self.dead;
+        let may_change = node.descendants().any(|d| {
+            matches!(
+                d.kind(),
+                ASSIGN_EXPR | POSTFIX_EXPR | PREFIX_EXPR | CALL_EXPR | FOREACH_STMT
+            )
+        });
+        let mut round_start = entry.clone();
+        if self.prepass == 0 && may_change {
+            self.prepass += 1;
+            let found = self.diags.len();
+            let dynamic = self.dynamic_vars_fn;
+            let (mut ends, breaks) = self.loop_round(node, &bindings);
+            self.finish_round(node, &mut ends);
+            self.diags.truncate(found);
+            self.dynamic_vars_fn = dynamic;
+            self.prepass -= 1;
+            drop(breaks);
+            ends.push(entry.clone());
+            round_start = self.merge_states(ends).unwrap_or_else(|| entry.clone());
+            // a variable is only there on later rounds: its first read isn't checked by this
+            self.restore(&round_start);
+            self.dead = entry_dead;
+        } else if !may_change {
+            self.restore(&round_start);
+        }
+        let (mut ends, breaks) = self.loop_round(node, &bindings);
+        self.finish_round(node, &mut ends);
+        let mut exits = breaks;
+        match node.kind() {
+            // the condition is false at the end of the last round, or at the first check
+            WHILE_STMT => {
+                let cond = exprs_of(node).into_iter().next();
+                let always = cond.as_ref().is_some_and(is_true_literal);
+                if !always {
+                    ends.push(round_start);
+                    let at_check = self.merge_states(ends);
+                    if let (Some(state), Some(c)) = (at_check, cond.as_ref()) {
+                        self.restore(&state);
+                        let (_, f) = self.facts(c);
+                        self.apply_facts(&f);
+                        exits.push(self.snapshot());
+                    }
+                }
+            }
+            DO_WHILE_STMT => {
+                if let Some(state) = self.merge_states(ends) {
+                    self.restore(&state);
+                    self.dead = false;
+                    if let Some(c) = exprs_of(node).first() {
+                        let (_, f) = self.condition(c);
+                        if !is_true_literal(c) {
+                            self.apply_facts(&f);
+                            exits.push(self.snapshot());
+                        }
+                    }
+                }
+            }
+            FOR_STMT => {
+                let unconditional = node.child(FOR_COND).is_none_or(|c| exprs_of(&c).is_empty());
+                if !unconditional {
+                    ends.push(round_start);
+                    exits.extend(self.merge_states(ends));
+                }
+            }
+            // no rounds at all, or all of them
+            _ => {
+                ends.push(entry);
+                exits.extend(self.merge_states(ends));
+            }
+        }
+        self.continue_from(exits);
+        self.dead |= entry_dead;
+    }
+
+    /// The step of a `for` runs after each round.
+    fn finish_round(&mut self, node: &SyntaxNode, ends: &mut Vec<FlowState>) {
+        if node.kind() != FOR_STMT {
+            return;
+        }
+        let Some(state) = self.merge_states(std::mem::take(ends)) else {
+            return;
+        };
+        self.restore(&state);
+        self.dead = false;
+        if let Some(p) = node.child(FOR_STEP) {
+            for e in exprs_of(&p) {
+                self.expr(&e, None);
+            }
+        }
+        ends.push(self.snapshot());
+    }
+
+    fn switch_stmt(&mut self, node: &SyntaxNode) {
+        let subject = exprs_of(node).into_iter().next();
+        if let Some(e) = &subject {
+            self.expr(e, None);
+        }
+        let by_true = subject.as_ref().is_some_and(is_true_literal);
+        let entry_dead = self.dead;
+        // what's left of the subject after the cases before
+        let mut after_cases = self.snapshot();
+        let mut has_default = false;
+        self.loops.push(LoopExits::default());
+        let mut falling: Option<FlowState> = None;
+        for case in node.children_of(SWITCH_CASE) {
+            self.restore(&after_cases);
+            self.dead = entry_dead;
+            let values = exprs_of(&case);
+            let mut yes = Facts::default();
+            if values.is_empty() {
+                has_default = true;
+            }
+            for e in &values {
+                self.expr(e, None);
+                let (t, f) = if by_true {
+                    self.facts(e)
+                } else {
+                    subject
+                        .as_ref()
+                        .map(|s| self.literal_facts(s, e, true))
+                        .unwrap_or_default()
+                };
+                yes = t;
+                self.apply_facts(&f);
+                after_cases = self.snapshot();
+            }
+            self.restore(&after_cases);
+            self.apply_facts(&yes);
+            if let Some(state) = falling.take() {
+                let current = self.snapshot();
+                self.continue_from(vec![current, state]);
+            }
+            self.run_stmts(&case);
+            if !self.dead {
+                falling = Some(self.snapshot());
+            }
+        }
+        let exits = self.loops.pop().unwrap_or_default();
+        let mut ends = exits.breaks;
+        // `continue` in a `switch` acts like `break`
+        ends.extend(exits.continues);
+        ends.extend(falling);
+        if !has_default {
+            ends.push(after_cases);
+        }
+        self.dead = entry_dead;
+        if ends.is_empty() {
+            self.dead = true;
+        } else {
+            self.continue_from(ends);
+            self.dead |= entry_dead;
+        }
+    }
+
+    fn try_stmt(&mut self, node: &SyntaxNode) {
+        let entry = self.snapshot();
+        let entry_dead = self.dead;
+        let mut ends = Vec::new();
+        if let Some(b) = node.child(BLOCK) {
+            self.stmt(&b);
+        }
+        let try_ends = !self.dead;
+        let at_try_end = self.snapshot();
+        if try_ends {
+            ends.push(at_try_end.clone());
+        }
+        // an exception can come at any point of the `try`, so any of what it assigned may
+        // have happened, and what it narrowed may no longer hold
+        let mut at_catch = self
+            .merge_states(vec![entry.clone(), at_try_end])
+            .unwrap_or_else(|| entry.clone());
+        if let Some(b) = node.child(BLOCK) {
+            for key in self.assigned_places(&b) {
+                for frame in &mut at_catch {
+                    if let Some(l) = frame.get_mut(key.as_str()) {
+                        l.ty = stir_types::join(self.ctx, &l.ty, &l.declared);
+                    }
+                }
+            }
+        }
+        for c in node.children_of(CATCH_CLAUSE) {
+            self.restore(&at_catch);
+            self.dead = entry_dead;
+            let tys: Vec<Ty> = c
+                .children_of(NAME_REF)
+                .iter()
+                .map(|n| self.class_ref_ty(n, &text_of(n)))
+                .collect();
+            if let Some(v) = c.token(VARIABLE) {
+                self.declare(
+                    &v.text()[1..],
+                    Ty::union(tys),
+                    LocalKind::Loop,
+                    v.text_range(),
+                );
+            }
+            if let Some(b) = c.child(BLOCK) {
+                self.stmt(&b);
+            }
+            if !self.dead {
+                ends.push(self.snapshot());
+            }
+        }
+        if let Some(f) = node.child(FINALLY_CLAUSE) {
+            // runs on every way out, even ones that leave the code after it behind
+            let on_any = ends.iter().chain(std::iter::once(&at_catch)).cloned();
+            let start = self.merge_states(on_any.collect());
+            if let Some(state) = start {
+                self.restore(&state);
+            }
+            self.dead = entry_dead;
+            if let Some(b) = f.child(BLOCK) {
+                self.stmt(&b);
+            }
+            if self.dead {
+                return;
+            }
+            let after = self.snapshot();
+            if ends.is_empty() {
+                self.dead = true;
+                self.restore(&after);
+            } else {
+                // what `finally` did on top of each normal way through
+                let assigned = self.assigned_places(&f);
+                let merged = self.merge_states(ends);
+                if let Some(mut state) = merged {
+                    for key in assigned {
+                        for (frame, a) in state.iter_mut().zip(&after) {
+                            if let Some(l) = a.get(key.as_str()) {
+                                frame.insert(SmolStr::new(&key), l.clone());
+                            }
+                        }
+                    }
+                    self.restore(&state);
+                    self.dead = entry_dead;
+                }
+            }
+            return;
+        }
+        if ends.is_empty() {
+            self.dead = true;
+        } else {
+            self.continue_from(ends);
+            self.dead |= entry_dead;
         }
     }
 
@@ -795,30 +1076,6 @@ impl<'a, 'db> Checker<'a, 'db> {
             .collect()
     }
 
-    fn foreach_stmt(&mut self, node: &SyntaxNode) {
-        let es = exprs_of(node);
-        let Some(subject) = es.first() else { return };
-        let st = self.expr(subject, None);
-        let (key_ty, val_ty) = self.iter_types(subject.text_range(), &st);
-        let bindings = &es[1..];
-        let (key, val) = match bindings.len() {
-            2 => (Some(&bindings[0]), Some(&bindings[1])),
-            1 => (None, Some(&bindings[0])),
-            _ => (None, None),
-        };
-        if let Some(k) = key {
-            self.bind_target(k, key_ty);
-        }
-        if let Some(v) = val {
-            self.bind_target(v, val_ty);
-        }
-        self.widen_all();
-        for s in node.children().filter(|c| is_stmt_kind(c.kind())) {
-            self.stmt(&s);
-        }
-        self.widen_all();
-    }
-
     /// Binds a foreach/destructuring target.
     fn bind_target(&mut self, target: &SyntaxNode, ty: Ty) {
         match target.kind() {
@@ -828,7 +1085,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                 if let Some(l) = self.lookup_mut(n)
                     && l.kind.mutable()
                 {
+                    l.declared = ty.clone();
                     l.ty = ty;
+                    l.maybe_undefined = false;
                     return;
                 }
                 self.declare(n, ty, LocalKind::Loop, target.text_range());
@@ -999,6 +1258,8 @@ impl<'a, 'db> Checker<'a, 'db> {
     fn function_body(&mut self, node: &SyntaxNode, sig: &FnSig, this: Option<Ty>) {
         let saved_frames = std::mem::replace(&mut self.frames, vec![FxHashMap::default()]);
         let saved_dynamic_vars = self.dynamic_vars_fn.take();
+        let saved_dead = std::mem::replace(&mut self.dead, false);
+        let saved_loops = std::mem::take(&mut self.loops);
         if let Some(t) = this {
             self.frames.last_mut().unwrap().insert(
                 SmolStr::new("this"),
@@ -1007,6 +1268,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     declared: t,
                     kind: LocalKind::This,
                     range: node.text_range(),
+                    maybe_undefined: false,
                 },
             );
         }
@@ -1035,6 +1297,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             self.block_stmts(&block);
         }
         self.dynamic_vars_fn = saved_dynamic_vars;
+        self.dead = saved_dead;
+        self.loops = saved_loops;
         self.fns.pop();
         self.frames = saved_frames;
     }
@@ -1192,40 +1456,38 @@ impl<'a, 'db> Checker<'a, 'db> {
                 Some(inner) => self.facts(inner),
                 None => Default::default(),
             },
-            // `!empty($x)` rules out null and false
+            // `empty($x)` is `isset($x) && !$x` turned around
             EMPTY_EXPR => {
                 let arg = node
                     .child(ARG_LIST)
                     .and_then(|l| l.child(ARG))
                     .and_then(|a| exprs_of(&a).into_iter().next());
-                let Some((name, local)) = arg.and_then(|a| self.local_of(&a)) else {
+                let Some(arg) = arg else {
                     return Default::default();
                 };
-                let no_false = local
-                    .ty
-                    .members()
-                    .iter()
-                    .filter(|m| !matches!(m.kind(), TyKind::Literal(LitValue::Bool(false))))
-                    .cloned()
-                    .collect::<Vec<_>>();
-                (
-                    Facts::default(),
-                    Facts {
-                        narrow: vec![(name, stir_types::without_null(&Ty::union(no_false)))],
-                    },
-                )
+                let (truthy, falsy) = self.truthiness_facts(&arg);
+                let mut not_empty = self.isset_facts(&arg);
+                not_empty.narrow.extend(truthy.narrow);
+                (falsy, not_empty)
             }
-            // `isset($x)` rules out null
             ISSET_EXPR => {
-                let mut narrow = Vec::new();
-                for arg in node.child(ARG_LIST).iter().flat_map(|l| l.children_of(ARG)) {
-                    if let Some((name, local)) =
-                        exprs_of(&arg).first().and_then(|e| self.local_of(e))
-                    {
-                        narrow.push((name, stir_types::without_null(&local.ty)));
-                    }
+                let mut yes = Facts::default();
+                let mut no = Vec::new();
+                let args = node.child(ARG_LIST);
+                let args = args.iter().flat_map(|l| l.children_of(ARG));
+                let exprs: Vec<_> = args
+                    .filter_map(|a| exprs_of(&a).into_iter().next())
+                    .collect();
+                for e in &exprs {
+                    yes.narrow.extend(self.isset_facts(e).narrow);
                 }
-                (Facts { narrow }, Facts::default())
+                // not set means null only if there's just the one thing it could be
+                if let [e] = exprs.as_slice()
+                    && let Some((name, _)) = self.local_of(e)
+                {
+                    no.push((name, Ty::null()));
+                }
+                (yes, Facts { narrow: no })
             }
             PREFIX_EXPR if op_token(node).is_some_and(|t| t.kind() == BANG) => {
                 match exprs_of(node).first() {
@@ -1254,23 +1516,22 @@ impl<'a, 'db> Checker<'a, 'db> {
                         self.apply_facts(&lt);
                         let (rt, rf) = self.facts(&es[1]);
                         self.restore_narrowing(&snap);
-                        let _ = (lf, rf);
                         (
                             Facts {
                                 narrow: [lt.narrow, rt.narrow].concat(),
                             },
-                            Facts::default(),
+                            self.either(lf, rf),
                         )
                     }
                     Some(PIPE2 | OR_KW) => {
-                        let (_, lf) = self.facts(&es[0]);
+                        let (lt, lf) = self.facts(&es[0]);
                         // the right side only runs (and narrows) if the left was false
                         let snap = self.snapshot();
                         self.apply_facts(&lf);
-                        let (_, rf) = self.facts(&es[1]);
+                        let (rt, rf) = self.facts(&es[1]);
                         self.restore_narrowing(&snap);
                         (
-                            Facts::default(),
+                            self.either(lt, rt),
                             Facts {
                                 narrow: [lf.narrow, rf.narrow].concat(),
                             },
@@ -1278,14 +1539,18 @@ impl<'a, 'db> Checker<'a, 'db> {
                     }
                     Some(k @ (EQ2 | EQ3 | NEQ | NEQ2)) => {
                         let positive = matches!(k, EQ2 | EQ3);
-                        let (var, other) = if is_null_literal(&es[1]) {
-                            (&es[0], &es[1])
+                        let strict = matches!(k, EQ3 | NEQ2);
+                        let var = if is_null_literal(&es[1]) {
+                            &es[0]
                         } else if is_null_literal(&es[0]) {
-                            (&es[1], &es[0])
+                            &es[1]
                         } else {
-                            return self.literal_facts(&es[0], &es[1], positive);
+                            let (mut t, mut f) = self.literal_facts(&es[0], &es[1], strict);
+                            let (t2, f2) = self.call_compared_facts(&es[0], &es[1]);
+                            t.narrow.extend(t2.narrow);
+                            f.narrow.extend(f2.narrow);
+                            return if positive { (t, f) } else { (f, t) };
                         };
-                        let _ = other;
                         let Some((name, local)) = self.local_of(var) else {
                             return Default::default();
                         };
@@ -1318,7 +1583,26 @@ impl<'a, 'db> Checker<'a, 'db> {
                 let test = match node.children().nth(1) {
                     Some(r) if r.kind() == NAME_EXPR => {
                         let n = text_of(&r);
-                        self.class_ref_ty(&r, &n)
+                        let found = self.diags.len();
+                        let t = self.class_ref_ty(&r, &n);
+                        self.diags.truncate(found);
+                        if n.eq_ignore_ascii_case("static") {
+                            Ty::static_of(t)
+                        } else {
+                            t
+                        }
+                    }
+                    // `$a instanceof $b`: an object, of a class known only when it runs
+                    Some(_) => {
+                        return (
+                            Facts {
+                                narrow: vec![(
+                                    name.clone(),
+                                    stir_types::narrow_to(self.ctx, &local.ty, &Ty::object()),
+                                )],
+                            },
+                            Facts::default(),
+                        );
                     }
                     _ => return Default::default(),
                 };
@@ -1334,13 +1618,14 @@ impl<'a, 'db> Checker<'a, 'db> {
                 )
             }
             CALL_EXPR => {
-                // is_int($x), is_string($x), ...
                 let Some(callee) = node.child(NAME_EXPR) else {
                     return Default::default();
                 };
                 let fname = text_of(&callee)
                     .trim_start_matches('\\')
                     .to_ascii_lowercase();
+                let args = self.args_of(node);
+                let first = args.first().and_then(|a| exprs_of(a).into_iter().next());
                 let test = match fname.as_str() {
                     "is_int" | "is_integer" | "is_long" => Ty::int(),
                     "is_float" | "is_double" => Ty::float(),
@@ -1350,13 +1635,26 @@ impl<'a, 'db> Checker<'a, 'db> {
                     "is_array" => Ty::plain_array(),
                     "is_object" => Ty::object(),
                     "is_resource" => Ty::resource(),
+                    "is_numeric" => Ty::union([Ty::int(), Ty::float(), Ty::numeric_string()]),
+                    "is_scalar" => Ty::scalar(),
+                    "is_iterable" => Ty::plain_iterable(),
+                    "is_countable" => {
+                        Ty::union([Ty::plain_array(), Ty::class("Countable", Vec::new())])
+                    }
+                    "is_a" | "is_subclass_of" => {
+                        let Some(t) = args
+                            .get(1)
+                            .and_then(|a| exprs_of(a).into_iter().next())
+                            .and_then(|e| self.types.get(&e.text_range()).cloned())
+                            .and_then(|t| self.named_class(&t))
+                        else {
+                            return Default::default();
+                        };
+                        t
+                    }
                     // anything callable isn't null; what else it might be, only the value knows
                     "is_callable" => {
-                        let arg = node
-                            .child(ARG_LIST)
-                            .and_then(|a| a.child(ARG))
-                            .and_then(|a| exprs_of(&a).into_iter().next());
-                        let Some((name, local)) = arg.and_then(|a| self.local_of(&a)) else {
+                        let Some((name, local)) = first.and_then(|a| self.local_of(&a)) else {
                             return Default::default();
                         };
                         return (
@@ -1366,16 +1664,39 @@ impl<'a, 'db> Checker<'a, 'db> {
                             Facts::default(),
                         );
                     }
-                    _ => return self.assert_facts(node, &text_of(&callee)),
+                    "in_array" => {
+                        let strict = args
+                            .get(2)
+                            .and_then(|a| exprs_of(a).into_iter().next())
+                            .is_some_and(|e| is_true_literal(&e));
+                        let haystack = args
+                            .get(1)
+                            .and_then(|a| exprs_of(a).into_iter().next())
+                            .and_then(|e| self.types.get(&e.text_range()).cloned());
+                        let Some(values) = haystack.as_ref().and_then(|h| self.index_type(h, None))
+                        else {
+                            return Default::default();
+                        };
+                        let Some((name, local)) = first.and_then(|a| self.local_of(&a)) else {
+                            return Default::default();
+                        };
+                        if !strict || values.is_untyped() || matches!(values.kind(), TyKind::Mixed)
+                        {
+                            return Default::default();
+                        }
+                        return (
+                            Facts {
+                                narrow: vec![(
+                                    name,
+                                    stir_types::narrow_to(self.ctx, &local.ty, &values),
+                                )],
+                            },
+                            Facts::default(),
+                        );
+                    }
+                    _ => return self.assert_facts(node),
                 };
-                let Some(arg) = node
-                    .child(ARG_LIST)
-                    .and_then(|a| a.child(ARG))
-                    .and_then(|a| exprs_of(&a).into_iter().next())
-                else {
-                    return Default::default();
-                };
-                let Some((name, local)) = self.local_of(&arg) else {
+                let Some((name, local)) = first.and_then(|a| self.local_of(&a)) else {
                     return Default::default();
                 };
                 let yes = stir_types::narrow_to(self.ctx, &local.ty, &test);
@@ -1389,62 +1710,195 @@ impl<'a, 'db> Checker<'a, 'db> {
                     },
                 )
             }
-            VARIABLE_EXPR => {
-                // truthiness: `if ($x)` removes null
-                let Some((name, local)) = self.local_of(node) else {
-                    return Default::default();
-                };
-                (
-                    Facts {
-                        narrow: vec![(name, stir_types::without_null(&local.ty))],
-                    },
-                    Facts::default(),
-                )
+            METHOD_CALL_EXPR | NULLSAFE_METHOD_CALL_EXPR | STATIC_CALL_EXPR => {
+                let (t, f) = self.assert_facts(node);
+                if t.narrow.is_empty() && f.narrow.is_empty() {
+                    self.truthiness_facts(node)
+                } else {
+                    (t, f)
+                }
             }
+            VARIABLE_EXPR
+            | PROPERTY_FETCH_EXPR
+            | NULLSAFE_PROPERTY_FETCH_EXPR
+            | INDEX_EXPR
+            | STATIC_PROPERTY_FETCH_EXPR
+            | ASSIGN_EXPR => self.truthiness_facts(node),
             _ => Default::default(),
         }
     }
 
-    /// `x == "a"` narrows a literal union.
-    fn literal_facts(&mut self, a: &SyntaxNode, b: &SyntaxNode, positive: bool) -> (Facts, Facts) {
-        let (var, lit) = if self.local_of(a).is_some() {
-            (a, b)
-        } else {
-            (b, a)
+    /// Facts for a path taken when either of two conditions held: only what both say,
+    /// which is either of the things they say.
+    fn either(&self, a: Facts, b: Facts) -> Facts {
+        let mut narrow = Vec::new();
+        for (name, ty) in &a.narrow {
+            // the last says what the condition added up to
+            let ty = a
+                .narrow
+                .iter()
+                .rev()
+                .find(|(n, _)| n == name)
+                .map_or(ty, |(_, t)| t);
+            if narrow.iter().any(|(n, _): &(SmolStr, Ty)| n == name) {
+                continue;
+            }
+            if let Some((_, other)) = b.narrow.iter().rev().find(|(n, _)| n == name) {
+                narrow.push((name.clone(), stir_types::join(self.ctx, ty, other)));
+            }
+        }
+        Facts { narrow }
+    }
+
+    /// `if ($x)`: what a value being truthy or falsy says about it.
+    fn truthiness_facts(&mut self, node: &SyntaxNode) -> (Facts, Facts) {
+        let Some((name, local)) = self.local_of(node) else {
+            return Default::default();
+        };
+        let mut yes = Facts {
+            narrow: vec![(name.clone(), stir_types::narrow_truthy(&local.ty))],
+        };
+        // what's reached through something is only there if that is
+        yes.narrow.extend(self.base_facts(node));
+        (
+            yes,
+            Facts {
+                narrow: vec![(name, stir_types::narrow_falsy(&local.ty))],
+            },
+        )
+    }
+
+    /// `isset($x->y)` or `isset($x['y'])`: it's set and isn't null, and neither is what it's
+    /// reached through.
+    fn isset_facts(&mut self, node: &SyntaxNode) -> Facts {
+        let mut narrow = self.base_facts(node);
+        if let Some((name, local)) = self.local_of(node) {
+            narrow.push((name, stir_types::without_null(&local.ty)));
+        }
+        Facts { narrow }
+    }
+
+    fn base_facts(&mut self, node: &SyntaxNode) -> Vec<(SmolStr, Ty)> {
+        let mut narrow = Vec::new();
+        if matches!(
+            node.kind(),
+            PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR | INDEX_EXPR
+        ) && let Some(base) = exprs_of(node).first()
+        {
+            narrow.extend(self.base_facts(base));
+            if let Some((name, local)) = self.local_of(base) {
+                narrow.push((name, stir_types::without_null(&local.ty)));
+            }
+        }
+        narrow
+    }
+
+    /// The class a value names: `Foo::class`, `'Foo'`.
+    fn named_class(&self, t: &Ty) -> Option<Ty> {
+        match t.kind() {
+            TyKind::ClassString(Some(c)) => Some(c.clone()),
+            TyKind::Literal(LitValue::String(s)) => {
+                let c = self.ctx.class(s)?;
+                Some(Ty::class(c.name.clone(), Vec::new()))
+            }
+            _ => None,
+        }
+    }
+
+    /// `x == "a"` narrows a literal union, and `x === y` narrows to what both can be.
+    fn literal_facts(&mut self, a: &SyntaxNode, b: &SyntaxNode, strict: bool) -> (Facts, Facts) {
+        let lit = |this: &Self, n: &SyntaxNode| {
+            this.types
+                .get(&n.text_range())
+                .is_some_and(|t| matches!(t.kind(), TyKind::Literal(_)))
+        };
+        let (var, other) = if lit(self, a) { (b, a) } else { (a, b) };
+        let Some(lt) = self.types.get(&other.text_range()).cloned() else {
+            return Default::default();
         };
         let Some((name, local)) = self.local_of(var) else {
             return Default::default();
         };
-        let Some(lt) = self.types.get(&lit.text_range()).cloned() else {
-            return Default::default();
-        };
         if !matches!(lt.kind(), TyKind::Literal(_)) {
+            // two values: if they're identical each is what the other can be
+            if strict
+                && !lt.is_error()
+                && !lt.is_untyped()
+                && !matches!(lt.kind(), TyKind::Mixed)
+                && !local.ty.is_untyped()
+            {
+                return (
+                    Facts {
+                        narrow: vec![(name, stir_types::narrow_to(self.ctx, &local.ty, &lt))],
+                    },
+                    Facts::default(),
+                );
+            }
+            return Default::default();
+        }
+        // `==` compares loosely, so `$x == 'a'` can hold of more than that string
+        if !strict
+            && !local
+                .ty
+                .members()
+                .iter()
+                .all(|m| matches!(m.kind(), TyKind::Literal(_) | TyKind::Null))
+        {
             return Default::default();
         }
         let yes = stir_types::narrow_to(self.ctx, &local.ty, &lt);
         let no = stir_types::narrow_away(self.ctx, &local.ty, &lt);
-        let t = Facts {
-            narrow: vec![(name.clone(), yes)],
+        (
+            Facts {
+                narrow: vec![(name.clone(), yes)],
+            },
+            Facts {
+                narrow: vec![(name, no)],
+            },
+        )
+    }
+
+    /// `is_string($x) === true`, `in_array(...) === false` and such.
+    fn call_compared_facts(&mut self, a: &SyntaxNode, b: &SyntaxNode) -> (Facts, Facts) {
+        let bool_lit = |n: &SyntaxNode| {
+            (n.kind() == NAME_EXPR)
+                .then(|| text_of(n).to_ascii_lowercase())
+                .and_then(|t| match t.as_str() {
+                    "true" => Some(true),
+                    "false" => Some(false),
+                    _ => None,
+                })
         };
-        let f = Facts {
-            narrow: vec![(name, no)],
+        let (cond, value) = match (bool_lit(a), bool_lit(b)) {
+            (_, Some(v)) => (a, v),
+            (Some(v), _) => (b, v),
+            _ => return Default::default(),
         };
-        if positive { (t, f) } else { (f, t) }
+        if !matches!(
+            cond.kind(),
+            CALL_EXPR | METHOD_CALL_EXPR | STATIC_CALL_EXPR | INSTANCEOF_EXPR | ISSET_EXPR
+        ) {
+            return Default::default();
+        }
+        let (t, f) = self.facts(cond);
+        if value { (t, f) } else { (f, t) }
     }
 
     fn local_of(&mut self, node: &SyntaxNode) -> Option<(SmolStr, Local)> {
         let name = match node.kind() {
             VARIABLE_EXPR => text_of(node).trim_start_matches('$').to_owned(),
             PAREN_EXPR => return exprs_of(node).first().and_then(|e| self.local_of(e)),
-            PROPERTY_FETCH_EXPR => return self.property_place(node),
-            _ => return None,
+            // `($x = f()) !== null` is about `$x`
+            ASSIGN_EXPR => return node.children().next().and_then(|e| self.local_of(&e)),
+            _ => return self.property_place(node),
         };
         self.lookup(&name).map(|l| (SmolStr::new(&name), l.clone()))
     }
 
-    /// `$this->x` / `$a->b->c` as something narrowing can track, the way TypeScript does: it
-    /// stays narrowed until it, or something it's reached through, is assigned. Calls don't
-    /// reset it. It's held like a local under a name no variable can have.
+    /// `$this->x`, `$a->b()->c` or `$a['k']` as something narrowing can track. It stays narrowed
+    /// until it, or something it's reached through, is assigned, or a method on what it's
+    /// reached through is called that returns nothing: such a call is there for what it
+    /// changes. It's held like a local under a name no variable can have.
     fn property_place(&mut self, node: &SyntaxNode) -> Option<(SmolStr, Local)> {
         let key = self.place_key(node)?;
         if let Some(l) = self.lookup(&key) {
@@ -1456,6 +1910,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             declared: ty,
             kind: LocalKind::Variable,
             range: node.text_range(),
+            maybe_undefined: false,
         };
         // the outermost frame, so it outlives the block it was narrowed in
         self.frames
@@ -1464,61 +1919,175 @@ impl<'a, 'db> Checker<'a, 'db> {
         Some((SmolStr::new(&key), local))
     }
 
-    /// What a call to a function with `@phpstan-assert-if-true` says about its arguments.
-    fn assert_facts(&mut self, node: &SyntaxNode, callee: &str) -> (Facts, Facts) {
-        let scope = self.scope(node);
-        let r = scope.resolve_function(callee);
-        let Some(loc) = self.ctx.function(r.primary.as_str()).or_else(|| {
-            r.fallback
-                .as_ref()
-                .and_then(|f| self.ctx.function(f.as_str()))
-        }) else {
+    /// What a call to a function or method with `@phpstan-assert-if-true` or
+    /// `@phpstan-assert-if-false` says about its arguments.
+    fn assert_facts(&mut self, node: &SyntaxNode) -> (Facts, Facts) {
+        let (mut when_true, mut when_false) = (Facts::default(), Facts::default());
+        let Some((asserts, cx, solved)) = self.call_asserts(node) else {
             return Default::default();
         };
-        let def = self.ctx.function_def(loc);
-        let args = self.args_of(node);
-        let cx = LowerCx::default();
-        let (mut when_true, mut when_false) = (Facts::default(), Facts::default());
-        for assert in &def.sig.asserts {
-            let Some(index) = def.sig.params.iter().position(|p| p.name == assert.param) else {
+        for assert in asserts {
+            let Some((name, local)) = self.assert_target(node, &assert) else {
                 continue;
             };
-            let Some((name, local)) = args
-                .get(index)
-                .and_then(|a| exprs_of(a).into_iter().next())
-                .and_then(|e| self.local_of(&e))
-            else {
-                continue;
-            };
-            let mut sink = Vec::new();
-            let test = self.ctx.lower(&assert.ty, &cx, &mut sink);
-            let yes = stir_types::narrow_to(self.ctx, &local.ty, &test);
-            let no = stir_types::narrow_away(self.ctx, &local.ty, &test);
-            let (on_true, on_false) = if assert.when { (yes, no) } else { (no, yes) };
-            when_true.narrow.push((name.clone(), on_true));
-            when_false.narrow.push((name, on_false));
+            let (yes, no) = self.assert_types(&assert, &local, &cx, &solved);
+            match assert.when {
+                stir_hir::AssertWhen::Always => {}
+                stir_hir::AssertWhen::IfTrue => {
+                    when_true.narrow.push((name.clone(), yes));
+                    when_false.narrow.push((name, no));
+                }
+                stir_hir::AssertWhen::IfFalse => {
+                    when_true.narrow.push((name.clone(), no));
+                    when_false.narrow.push((name, yes));
+                }
+            }
         }
         (when_true, when_false)
     }
 
-    /// The name a variable or property path is tracked under.
+    /// A call's plain `@phpstan-assert`s hold once it has returned.
+    fn apply_call_asserts(&mut self, node: &SyntaxNode) {
+        let Some((asserts, cx, solved)) = self.call_asserts(node) else {
+            return;
+        };
+        for assert in asserts {
+            if assert.when != stir_hir::AssertWhen::Always {
+                continue;
+            }
+            let Some((name, local)) = self.assert_target(node, &assert) else {
+                continue;
+            };
+            let (yes, _) = self.assert_types(&assert, &local, &cx, &solved);
+            if let Some(l) = self.lookup_mut(&name) {
+                l.ty = yes;
+            }
+        }
+    }
+
+    fn assert_types(
+        &self,
+        assert: &stir_hir::AssertDef,
+        local: &Local,
+        cx: &LowerCx,
+        solved: &FxHashMap<stir_types::ParamId, Ty>,
+    ) -> (Ty, Ty) {
+        let mut sink = Vec::new();
+        let test = stir_types::subst(&self.ctx.lower(&assert.ty, cx, &mut sink), solved);
+        let yes = stir_types::narrow_to(self.ctx, &local.ty, &test);
+        let no = stir_types::narrow_away(self.ctx, &local.ty, &test);
+        if assert.negated { (no, yes) } else { (yes, no) }
+    }
+
+    /// The asserts of the function or method `node` calls, what their types are lowered
+    /// against, and how the call solved its templates.
+    #[allow(clippy::type_complexity)]
+    fn call_asserts(
+        &mut self,
+        node: &SyntaxNode,
+    ) -> Option<(
+        Vec<stir_hir::AssertDef>,
+        LowerCx,
+        FxHashMap<stir_types::ParamId, Ty>,
+    )> {
+        let call = self.call_targets.get(&node.text_range())?.clone();
+        if call.asserts.is_empty() {
+            return None;
+        }
+        Some((call.asserts, call.cx, call.solved))
+    }
+
+    /// The place an assert is about.
+    fn assert_target(
+        &mut self,
+        node: &SyntaxNode,
+        assert: &stir_hir::AssertDef,
+    ) -> Option<(SmolStr, Local)> {
+        let call = self.call_targets.get(&node.text_range())?.clone();
+        let base = if assert.param == "this" {
+            let fetch = node.children().next()?;
+            if node.kind() == STATIC_CALL_EXPR {
+                return None;
+            }
+            exprs_of(&fetch).into_iter().next()?
+        } else {
+            let index = call.params.iter().position(|p| *p == assert.param)?;
+            let args = self.args_of(node);
+            let arg = args.iter().find(|a| {
+                a.kind() == NAMED_ARG && a.name_text().as_deref() == Some(assert.param.as_str())
+            });
+            let arg = arg.or_else(|| args.get(index).filter(|a| a.kind() != NAMED_ARG))?;
+            exprs_of(arg).into_iter().next()?
+        };
+        let Some(member) = &assert.member else {
+            return self.local_of(&base);
+        };
+        let key = format!("{}->{member}", self.place_key(&base)?);
+        if let Some(l) = self.lookup(&key) {
+            return Some((SmolStr::new(&key), l.clone()));
+        }
+        let bt = self.types.get(&base.text_range())?.clone();
+        let ty = member
+            .strip_suffix("()")
+            .and_then(|m| {
+                let (owner, method, map) = self.ctx.find_method(&class_of(&bt), m)?;
+                let sig = self.ctx.method_sig(&owner, method);
+                Some(stir_types::subst(&sig.ret, &map))
+            })
+            .or_else(|| self.ctx.find_property(&class_of(&bt), member).map(|p| p.ty))?;
+        let local = Local {
+            ty: ty.clone(),
+            declared: ty,
+            kind: LocalKind::Variable,
+            range: node.text_range(),
+            maybe_undefined: false,
+        };
+        self.frames
+            .first_mut()?
+            .insert(SmolStr::new(&key), local.clone());
+        Some((SmolStr::new(&key), local))
+    }
+
+    /// The name a variable, or an expression narrowing can track, is held under. Calls with
+    /// arguments aren't tracked: the next one may be about something else.
     fn place_key(&self, node: &SyntaxNode) -> Option<String> {
         match node.kind() {
             VARIABLE_EXPR => Some(text_of(node).trim_start_matches('$').to_owned()),
-            PROPERTY_FETCH_EXPR => {
+            PAREN_EXPR => self.place_key(exprs_of(node).first()?),
+            PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR => {
                 let base = exprs_of(node).into_iter().next()?;
                 let name = node.child(SyntaxKind::NAME).map(|n| text_of(&n))?;
                 Some(format!("{}->{name}", self.place_key(&base)?))
             }
+            METHOD_CALL_EXPR | NULLSAFE_METHOD_CALL_EXPR => {
+                let fetch = node.children().next()?;
+                if !self.args_of(node).is_empty() {
+                    return None;
+                }
+                let base = exprs_of(&fetch).into_iter().next()?;
+                let name = fetch.child(SyntaxKind::NAME).map(|n| text_of(&n))?;
+                Some(format!("{}->{name}()", self.place_key(&base)?))
+            }
+            INDEX_EXPR => {
+                let parts = exprs_of(node);
+                let index = parts.get(1)?;
+                let index = match index.kind() {
+                    STRING_LITERAL | LITERAL | NAME_EXPR | CLASS_CONST_FETCH_EXPR => text_of(index),
+                    VARIABLE_EXPR => text_of(index),
+                    _ => return None,
+                };
+                Some(format!("{}[{index}]", self.place_key(parts.first()?)?))
+            }
+            STATIC_PROPERTY_FETCH_EXPR => Some(text_of(node).to_ascii_lowercase()),
             _ => None,
         }
     }
 
-    /// Assigning to `$a` forgets what was known about `$a->b`.
+    /// Assigning to `$a` forgets what was known about `$a->b` and `$a['b']`.
     fn forget_properties_of(&mut self, key: &str) {
-        let prefix = format!("{key}->");
+        let (arrow, bracket) = (format!("{key}->"), format!("{key}["));
         for frame in &mut self.frames {
-            frame.retain(|name, _| !name.starts_with(&prefix));
+            frame.retain(|name, _| !name.starts_with(&arrow) && !name.starts_with(&bracket));
         }
     }
 
@@ -1528,6 +2097,17 @@ impl<'a, 'db> Checker<'a, 'db> {
     /// that helps inference (the caller still checks assignability).
     pub fn expr(&mut self, node: &SyntaxNode, expected: Option<&Ty>) -> Ty {
         let ty = self.expr_inner(node, expected);
+        // a tracked expression holds what it was narrowed to
+        let ty = if matches!(
+            node.kind(),
+            PROPERTY_FETCH_EXPR | METHOD_CALL_EXPR | INDEX_EXPR | STATIC_PROPERTY_FETCH_EXPR
+        ) && let Some(key) = self.place_key(node)
+            && let Some(l) = self.lookup(&key)
+        {
+            l.ty.clone()
+        } else {
+            ty
+        };
         self.types.insert(node.text_range(), ty.clone());
         ty
     }
@@ -1614,10 +2194,14 @@ impl<'a, 'db> Checker<'a, 'db> {
                 let snap = self.snapshot();
                 self.apply_facts(&t);
                 let a = self.expr(&es[1], expected);
-                self.restore_types(&snap);
+                let after_a = self.snapshot();
+                self.restore(&snap);
                 self.apply_facts(&f);
                 let b = self.expr(&es[2], expected);
-                self.restore_types(&snap);
+                let after_b = self.snapshot();
+                if let Some(state) = self.merge_states(vec![after_a, after_b]) {
+                    self.frames = state;
+                }
                 stir_types::join(self.ctx, &a, &b)
             }
             SHORT_TERNARY_EXPR => {
@@ -1833,7 +2417,18 @@ impl<'a, 'db> Checker<'a, 'db> {
         match self.lookup(name).cloned() {
             Some(l) => {
                 self.def(node.text_range(), Def::Local { decl: l.range });
-
+                if l.maybe_undefined
+                    && self.probing == 0
+                    && self.fns.len() > 1
+                    && self.dynamic_vars_fn != Some(self.fns.len())
+                {
+                    self.error(
+                        node.text_range(),
+                        codes::UNDEFINED_VARIABLE,
+                        format!("variable `${name}` might not be defined"),
+                    );
+                    self.tag_level(1);
+                }
                 l.ty
             }
             None => {
@@ -1986,7 +2581,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 let snap = self.snapshot();
                 self.apply_facts(if matches!(op, AMP2 | AND_KW) { &t } else { &f });
                 let r = self.expr(&es[1], None);
-                self.restore_types(&snap);
+                self.restore_narrowing(&snap);
                 (l, r)
             }
             QUESTION2 => {
@@ -2130,6 +2725,15 @@ impl<'a, 'db> Checker<'a, 'db> {
     }
 
     fn assign(&mut self, node: &SyntaxNode) -> Ty {
+        let t = self.assign_inner(node);
+        // a failed path doesn't assign: `$x = throw ...`
+        if t.is_never() {
+            self.dead = true;
+        }
+        t
+    }
+
+    fn assign_inner(&mut self, node: &SyntaxNode) -> Ty {
         let es = exprs_of(node);
         let op = node
             .children_with_tokens()
@@ -2155,17 +2759,13 @@ impl<'a, 'db> Checker<'a, 'db> {
                             self.def(lhs.text_range(), Def::Local { decl: l.range });
                         }
                         let vt = self.expr(rhs, Some(&l.declared));
-                        let conditional = self.conditional_depth > 0;
                         if n == "this" {
                             self.check_mutable_target(lhs);
                         } else if let Some(loc) = self.lookup_mut(&n) {
                             // PHP variables are dynamically typed
                             loc.ty = widen_literals(&vt);
-                            loc.declared = if conditional {
-                                Ty::union([loc.declared.clone(), loc.ty.clone()])
-                            } else {
-                                loc.ty.clone()
-                            };
+                            loc.declared = loc.ty.clone();
+                            loc.maybe_undefined = false;
                         }
                         self.types.insert(lhs.text_range(), l.declared.clone());
                         vt
@@ -2216,13 +2816,32 @@ impl<'a, 'db> Checker<'a, 'db> {
                     _ => widen_literals(&lt),
                 };
 
-                self.check_assign(rhs.text_range(), &result, &declared, "assignment");
-                if let Some(n) = self.local_name(lhs)
-                    && let Some(l) = self.lookup_mut(&n)
-                {
-                    l.ty = narrow_assigned(&l.declared, &result);
+                // a variable holds whatever it's given
+                if let Some(n) = self.local_name(lhs) {
+                    self.forget_properties_of(&n);
+                    match self.lookup_mut(&n) {
+                        Some(l) if l.kind != LocalKind::This => {
+                            l.ty = widen_literals(&result);
+                            l.declared = l.ty.clone();
+                            l.maybe_undefined = false;
+                        }
+                        Some(_) => {}
+                        None => self.declare(
+                            &n,
+                            widen_literals(&result),
+                            LocalKind::Variable,
+                            lhs.text_range(),
+                        ),
+                    }
+                    return result;
                 }
-                if lhs.kind() == PROPERTY_FETCH_EXPR
+                self.check_assign(rhs.text_range(), &result, &declared, "assignment");
+                if lhs.kind() == INDEX_EXPR
+                    && let Some(key) = exprs_of(lhs).first().and_then(|b| self.place_key(b))
+                {
+                    self.forget_properties_of(&key);
+                }
+                if matches!(lhs.kind(), PROPERTY_FETCH_EXPR | STATIC_PROPERTY_FETCH_EXPR)
                     && !lt.is_error()
                     && let Some(key) = self.place_key(lhs)
                 {
@@ -2245,6 +2864,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                                 declared: declared.clone(),
                                 kind: LocalKind::Variable,
                                 range: lhs.text_range(),
+                                maybe_undefined: false,
                             },
                         );
                     }
@@ -2319,15 +2939,12 @@ impl<'a, 'db> Checker<'a, 'db> {
             ([Some(k)], None | Some(TyKind::Null)) => Ty::array(k.clone(), value),
             _ => Ty::array(Ty::array_key(), Ty::mixed()),
         };
-        let conditional = self.conditional_depth > 0;
+        self.forget_properties_of(name);
         match self.lookup_mut(name) {
             Some(l) => {
                 l.ty = grown.clone();
-                l.declared = if conditional {
-                    Ty::union([l.declared.clone(), grown])
-                } else {
-                    grown
-                };
+                l.declared = grown;
+                l.maybe_undefined = false;
             }
             None => self.declare(name, grown, LocalKind::Variable, root.text_range()),
         }
@@ -2345,6 +2962,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         match self.lookup_mut(name) {
             Some(l) if l.kind == LocalKind::This => {}
             Some(l) => {
+                l.maybe_undefined = false;
                 if !matches!(l.ty.kind(), TyKind::Array { .. } | TyKind::List { .. }) {
                     l.ty = Ty::untyped();
                     l.declared = Ty::untyped();
@@ -2363,7 +2981,10 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     /// The declared (un-narrowed) type of an assignment target.
     fn declared_target_type(&self, node: &SyntaxNode) -> Option<Ty> {
-        if node.kind() == PROPERTY_FETCH_EXPR {
+        if matches!(
+            node.kind(),
+            PROPERTY_FETCH_EXPR | STATIC_PROPERTY_FETCH_EXPR
+        ) {
             let key = self.place_key(node)?;
             return self.lookup(&key).map(|l| l.declared.clone());
         }
@@ -2903,7 +3524,40 @@ impl<'a, 'db> Checker<'a, 'db> {
                 &format!("argument `{}` of `{}`", param.name, sig.name),
             );
         }
-        inf.apply(&subst_cls(&sig.ret))
+        let ret = inf.apply(&subst_cls(&sig.ret));
+        self.last_solved.clone_from(&inf.solved);
+        self.last_solved
+            .extend(class_map.iter().map(|(k, v)| (*k, v.clone())));
+        ret
+    }
+
+    /// Remembers that the call `node` went to a function with these asserts, and applies
+    /// the ones that hold whatever it returns.
+    fn record_asserts(
+        &mut self,
+        node: &SyntaxNode,
+        def: &stir_hir::Signature,
+        sig: &FnSig,
+        mut cx: LowerCx,
+    ) {
+        if def.asserts.is_empty() {
+            return;
+        }
+        cx.generics.extend(
+            sig.type_params
+                .iter()
+                .map(|p| (p.name.clone(), p.ty.clone())),
+        );
+        self.call_targets.insert(
+            node.text_range(),
+            CallAsserts {
+                asserts: def.asserts.clone(),
+                params: sig.params.iter().map(|p| p.name.clone()).collect(),
+                cx,
+                solved: self.last_solved.clone(),
+            },
+        );
+        self.apply_call_asserts(node);
     }
 
     /// Without `strict_types`, an object with `__toString` coerces to a `string` argument.
@@ -2970,6 +3624,12 @@ impl<'a, 'db> Checker<'a, 'db> {
                 self.dynamic_vars_fn = Some(self.fns.len());
             }
             let ret = self.check_args(node, &sig, &FxHashMap::default(), expected, &[]);
+            self.record_asserts(
+                node,
+                &self.ctx.function_def(loc).sig,
+                &sig,
+                LowerCx::default(),
+            );
             let name = self
                 .ctx
                 .function_def(loc)
@@ -3147,12 +3807,6 @@ impl<'a, 'db> Checker<'a, 'db> {
         let start = self.diags.len();
         let t = self.member_type(&recv, &name, name_node.text_range());
         self.tag_unless_on_this(node, start);
-        if node.kind() == PROPERTY_FETCH_EXPR
-            && let Some(key) = self.place_key(node)
-            && let Some(l) = self.lookup(&key)
-        {
-            return l.ty.clone();
-        }
         if nullable { t.nullable() } else { t }
     }
 
@@ -3329,6 +3983,12 @@ impl<'a, 'db> Checker<'a, 'db> {
         let start = self.diags.len();
         let t = self.call_member(node, &recv, &name, name_node.text_range(), expected);
         self.tag_unless_on_this(&fetch, start);
+        // a method that returns nothing is there for what it changes
+        if matches!(t.kind(), TyKind::Void)
+            && let Some(key) = exprs_of(&fetch).first().and_then(|b| self.place_key(b))
+        {
+            self.forget_properties_of(&key);
+        }
         if nullable { t.nullable() } else { t }
     }
 
@@ -3394,10 +4054,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                 &format!("method `{name}`"),
             );
             let sig = self.ctx.method_sig(&owner, m);
-            let mut map = map;
             // `static` return types resolve to the receiver
             let ret = self.check_args(node, &sig, &map, expected, &[]);
-            map.clear();
+            let cx = self.ctx.class_cx(&owner);
+            self.record_asserts(node, &m.sig, &sig, cx);
             return resolve_self(&ret, recv);
         }
         if matches!(cls.kind(), TyKind::Class { .. })
@@ -3583,6 +4243,8 @@ impl<'a, 'db> Checker<'a, 'db> {
                     map
                 };
                 let ret = self.check_args(node, &sig, &map, expected, &extra);
+                let cx = self.ctx.class_cx(&owner);
+                self.record_asserts(node, &m.sig, &sig, cx);
                 resolve_self(&ret, &cls)
             }
             None => {
@@ -3825,6 +4487,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                                         declared: Ty::mixed(),
                                         kind: LocalKind::Variable,
                                         range: t.text_range(),
+                                        maybe_undefined: false,
                                     },
                                 );
                             } else {
@@ -3843,6 +4506,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             frame.insert(SmolStr::new("this"), this);
         }
         let saved = std::mem::replace(&mut self.frames, vec![frame]);
+        let saved_dead = std::mem::replace(&mut self.dead, false);
+        let saved_loops = std::mem::take(&mut self.loops);
         let mut params = Vec::new();
         if let Some(pl) = node.child(PARAM_LIST) {
             for (i, p) in pl.children_of(PARAM).iter().enumerate() {
@@ -3896,6 +4561,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
         };
         self.frames = saved;
+        self.dead = saved_dead;
+        self.loops = saved_loops;
         Ty::closure(Some(stir_types::FnTy::new(params, ret)))
     }
 
@@ -3922,6 +4589,10 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
         result.unwrap_or_else(Ty::never)
     }
+}
+
+fn is_true_literal(node: &SyntaxNode) -> bool {
+    node.kind() == NAME_EXPR && text_of(node).eq_ignore_ascii_case("true")
 }
 
 fn is_null_literal(node: &SyntaxNode) -> bool {

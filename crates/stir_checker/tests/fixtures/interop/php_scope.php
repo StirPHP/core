@@ -22,7 +22,7 @@ function set_in_loop(array $items)
     foreach ($items as $k => $item) {
         $last = $item;
     }
-    return [$k, $item, $last];
+    return [$k, $item, $last]; // error: SPHP0006
 }
 
 function set_in_try()

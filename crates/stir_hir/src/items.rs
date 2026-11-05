@@ -90,13 +90,26 @@ pub struct Signature {
     pub asserts: Vec<AssertDef>,
 }
 
-/// What a boolean function's result says about one of its parameters.
+/// When an assert holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssertWhen {
+    /// `@phpstan-assert`: once the call has returned.
+    Always,
+    IfTrue,
+    IfFalse,
+}
+
+/// What a call says about one of its parameters: `@phpstan-assert` and its forms.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssertDef {
+    /// The parameter, or `this`.
     pub param: SmolStr,
+    /// What's asserted is about this property of it, or (ending in `()`) what this method returns.
+    pub member: Option<SmolStr>,
     pub ty: TypeRef,
-    /// The result that means the parameter has this type.
-    pub when: bool,
+    /// `!Type`
+    pub negated: bool,
+    pub when: AssertWhen,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -490,17 +503,24 @@ impl Lowerer {
                 d.effective_tags()
                     .into_iter()
                     .filter_map(|t| match &t.kind {
-                        stir_phpdoc::TagKind::Assert(a) if !a.negated && !a.equality => {
-                            let target = a.target.as_ref().filter(|t| t.member.is_none())?;
-                            let when = match a.kind {
-                                stir_phpdoc::AssertKind::IfTrue => true,
-                                stir_phpdoc::AssertKind::IfFalse => false,
-                                stir_phpdoc::AssertKind::Assert => return None,
-                            };
+                        stir_phpdoc::TagKind::Assert(a) => {
+                            let target = a.target.as_ref()?;
                             Some(AssertDef {
                                 param: target.param.clone(),
+                                member: target.member.as_ref().map(|m| {
+                                    if m.is_method {
+                                        SmolStr::new(format!("{}()", m.name))
+                                    } else {
+                                        m.name.clone()
+                                    }
+                                }),
                                 ty: self.doc_cx(&names).lower(&a.ty),
-                                when,
+                                negated: a.negated,
+                                when: match a.kind {
+                                    stir_phpdoc::AssertKind::IfTrue => AssertWhen::IfTrue,
+                                    stir_phpdoc::AssertKind::IfFalse => AssertWhen::IfFalse,
+                                    stir_phpdoc::AssertKind::Assert => AssertWhen::Always,
+                                },
                             })
                         }
                         _ => None,
