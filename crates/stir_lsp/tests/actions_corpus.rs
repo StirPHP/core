@@ -509,7 +509,10 @@ async fn run_project(dir: &Path, report_path: Option<&Path>) {
         no_parse += t.no_parse;
         new_errors += t.new_errors;
     }
-    println!("total: {applied} applied, {no_parse} didn't parse, {new_errors} with new errors");
+    println!(
+        "total: {applied} applied, {no_parse} didn't parse, {new_errors} with new errors, {} panics",
+        actions::panics()
+    );
     println!("offers, on a checked file: {}", run.offers_time.summary());
     println!(
         "checking the file first, after the last action was undone: {}",

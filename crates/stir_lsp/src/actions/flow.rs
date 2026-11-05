@@ -236,14 +236,14 @@ fn early_return_offer<'c>(cx: &'c Cx<'c>, stmt: &SyntaxNode, out: &mut Vec<Offer
         let close = block.token(R_CURLY)?;
         let inside = TextRange::new(open.text_range().end(), close.text_range().start());
         let text = cx.slice(inside);
-        let lead = text.len() - text.trim_start_matches([' ', '\t', '\r', '\n']).len();
+        if text.trim().is_empty() {
+            return Some(String::new());
+        }
+        let lead = text.len() - text.trim_start().len();
         let body = TextRange::new(
             inside.start() + TextSize::from(lead as u32),
             inside.start() + TextSize::from(text.trim_end().len() as u32),
         );
-        if body.is_empty() {
-            return Some(String::new());
-        }
         Some(reindented(
             &cx.root,
             cx.text,

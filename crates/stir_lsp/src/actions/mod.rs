@@ -342,6 +342,35 @@ fn trim_range(text: &str, range: TextRange) -> TextRange {
     TextRange::new(TextSize::from(start as u32), TextSize::from(end as u32))
 }
 
+/// Runs one provider of offers. A bug in one doesn't take the others with it: what it panics
+/// with is left out, except salsa's cancellation, which has to get to whoever's waiting for it.
+fn guarded<'c>(out: &mut Vec<Offer<'c>>, provide: impl FnOnce(&mut Vec<Offer<'c>>)) {
+    let before = out.len();
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut found = Vec::new();
+        provide(&mut found);
+        found
+    }));
+    match ran {
+        Ok(found) => out.extend(found),
+        Err(payload) => {
+            // in a test, it's to be seen
+            if payload.is::<salsa::Cancelled>() || cfg!(debug_assertions) {
+                std::panic::resume_unwind(payload);
+            }
+            PANICS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            out.truncate(before);
+        }
+    }
+}
+
+static PANICS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many times working out offers or edits has gone wrong, for measuring.
+pub fn panics() -> usize {
+    PANICS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Everything that can be done at the selection of `cx`.
 pub fn offers<'c>(cx: &'c Cx<'c>) -> Vec<Offer<'c>> {
     let mut out = Vec::new();
@@ -351,34 +380,34 @@ pub fn offers<'c>(cx: &'c Cx<'c>) -> Vec<Offer<'c>> {
         return out;
     }
     if cx.wants(Kind::QuickFix) {
-        fix_names::offers(cx, &mut out);
-        fix_types::offers(cx, &mut out);
-        fix_members::offers(cx, &mut out);
-        organize::remove_offers(cx, &mut out);
-        variables::remove_unused_offers(cx, &mut out);
-        suppress::offers(cx, &mut out);
+        guarded(&mut out, |o| fix_names::offers(cx, o));
+        guarded(&mut out, |o| fix_types::offers(cx, o));
+        guarded(&mut out, |o| fix_members::offers(cx, o));
+        guarded(&mut out, |o| organize::remove_offers(cx, o));
+        guarded(&mut out, |o| variables::remove_unused_offers(cx, o));
+        guarded(&mut out, |o| suppress::offers(cx, o));
     }
     if cx.wants(Kind::OrganizeImports) {
-        organize::offers(cx, &mut out);
+        guarded(&mut out, |o| organize::offers(cx, o));
     }
     if cx.wants(Kind::FixAll) {
-        organize::fix_all_offers(cx, &mut out);
+        guarded(&mut out, |o| organize::fix_all_offers(cx, o));
     }
     if cx.wants(Kind::RefactorExtract) {
-        variables::extract_offers(cx, &mut out);
-        extract::offers(cx, &mut out);
+        guarded(&mut out, |o| variables::extract_offers(cx, o));
+        guarded(&mut out, |o| extract::offers(cx, o));
     }
     if cx.wants(Kind::RefactorInline) {
-        variables::inline_offers(cx, &mut out);
+        guarded(&mut out, |o| variables::inline_offers(cx, o));
     }
     if cx.wants(Kind::RefactorRewrite) || !cx.foreign.is_empty() {
-        members::offers(cx, &mut out);
+        guarded(&mut out, |o| members::offers(cx, o));
     }
     if cx.wants(Kind::RefactorRewrite) {
-        classes::offers(cx, &mut out);
-        flow::offers(cx, &mut out);
-        fix_types::refactor_offers(cx, &mut out);
-        signature::offers(cx, &mut out);
+        guarded(&mut out, |o| classes::offers(cx, o));
+        guarded(&mut out, |o| flow::offers(cx, o));
+        guarded(&mut out, |o| fix_types::refactor_offers(cx, o));
+        guarded(&mut out, |o| signature::offers(cx, o));
     }
     out.retain(|o| cx.wants(o.kind));
     out.sort_by_key(|o| !o.preferred);
@@ -391,7 +420,17 @@ pub fn resolve<'c>(cx: &'c Cx<'c>, id: &str) -> Result<Change, Refusal> {
         .into_iter()
         .find(|o| o.id == id)
         .ok_or_else(|| "That can't be done any more.".to_owned())?;
-    finish(cx.db, (offer.build)()?)
+    let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(offer.build));
+    match built {
+        Ok(change) => finish(cx.db, change?),
+        Err(payload) => {
+            if payload.is::<salsa::Cancelled>() || cfg!(debug_assertions) {
+                std::panic::resume_unwind(payload);
+            }
+            PANICS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Err("Working that out went wrong, so nothing was done. That's a bug in StirPHP.".into())
+        }
+    }
 }
 
 /// `change`, if it's something that can be done.
