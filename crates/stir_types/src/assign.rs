@@ -623,7 +623,12 @@ impl<'a> Checker<'a> {
             }
             // PHP callables: `'strlen'`, `[$object, 'method']`
             (
-                K::String | K::List { .. } | K::Array { .. } | K::Shape(_),
+                K::String
+                | K::NonEmptyString
+                | K::ClassString(_)
+                | K::List { .. }
+                | K::Array { .. }
+                | K::Shape(_),
                 K::Callable { closure: false, .. },
             ) => return Ok(()),
             (K::Literal(LitValue::String(_)), K::Callable { closure: false, .. }) => {
@@ -911,6 +916,11 @@ impl<'a> Checker<'a> {
         }
         match (f, t) {
             (K::Mixed | K::Untyped, _) => true,
+            // a value within a template's bound may be what it turns out to be
+            (_, K::Param { id, .. }) => self
+                .env
+                .param_bound(*id)
+                .is_none_or(|b| self.maybe(from, &b, d)),
             (K::Param { id, .. }, _) => self
                 .env
                 .param_bound(*id)

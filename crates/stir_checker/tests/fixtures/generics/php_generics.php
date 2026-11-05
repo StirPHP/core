@@ -127,3 +127,16 @@ function raw_generator(): Generator { yield "a" => 1; }
 
 // a dynamic static property isn't a property of that name
 class Dyn { public static array $a = []; public function get(string $n): mixed { return self::$$n; } }
+
+// a template in scope is a type like any other
+/**
+ * @template T of Animal
+ * @param T $a
+ * @return T
+ */
+function keeps_template(Animal $a): Animal {
+    want_animal($a);
+    wants_string($a); // error: SPHP0005
+    return new Dog(); // error: SPHP0005
+}
+function want_animal(Animal $a): void {}

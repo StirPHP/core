@@ -9,7 +9,7 @@ class Node
     /** @return T */
     public function parent(): mixed
     {
-        return null;
+        return null; // error: SPHP0005
     }
 }
 

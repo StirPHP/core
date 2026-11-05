@@ -366,8 +366,20 @@ impl<'a, 'db> Checker<'a, 'db> {
         if from.is_error() || to.is_error() {
             return;
         }
-        // a template the call couldn't solve says nothing about the value
-        if !stir_types::free_params(from).is_empty() || !stir_types::free_params(to).is_empty() {
+        // A template in scope is a type like any other. One that isn't, which the call couldn't
+        // solve, says nothing about the value. Inside another type they aren't compared yet:
+        // that needs PHPStan's rules for variance against templates.
+        let checkable = |t: &Ty| {
+            t.members().iter().all(|m| match m.kind() {
+                TyKind::Param { id, .. } => self
+                    .lower_cx
+                    .generics
+                    .iter()
+                    .any(|(_, g)| matches!(g.kind(), TyKind::Param { id: g, .. } if g == id)),
+                _ => stir_types::free_params(m).is_empty(),
+            })
+        };
+        if !checkable(from) || !checkable(to) {
             return;
         }
         // `$this` in a trait nobody here uses is whichever class would use it
@@ -1509,7 +1521,10 @@ impl<'a, 'db> Checker<'a, 'db> {
             for (p, pnode) in sig.params.iter().zip(list.children_of(PARAM)) {
                 if let Some(d) = exprs_of(&pnode).into_iter().next() {
                     let dt = self.expr(&d, Some(&p.ty));
-                    self.check_assign(d.text_range(), &dt, &p.ty, "default value");
+                    // a default solves the template when it's used, so it can't be wrong for it
+                    if stir_types::free_params(&p.ty).is_empty() {
+                        self.check_assign(d.text_range(), &dt, &p.ty, "default value");
+                    }
                 }
             }
         }
