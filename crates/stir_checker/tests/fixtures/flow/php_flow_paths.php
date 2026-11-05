@@ -282,3 +282,33 @@ function self_generic(Builder1 $b): void {
     want_string($b->withInt()->get()); // error: SPHP0005
     want_string($b->get());
 }
+
+// writing to an array offset that was found not to be set
+class Caches {
+    /** @var array<string, list<int>> */
+    private static array $cache = [];
+    /** @return list<int> */
+    public function get(string $k): array {
+        if (isset(self::$cache[$k])) {
+            return self::$cache[$k];
+        }
+        return self::$cache[$k] = [1];
+    }
+    /** @return list<int> */
+    public function wrong(string $k): array {
+        if (!isset(self::$cache[$k])) {
+            self::$cache[$k] = "x"; // error: SPHP0005
+        }
+        return self::$cache[$k];
+    }
+}
+
+// `new self` on a trait used by an anonymous class is that class
+trait MakesItself { public static function make(): static { return new static(); } }
+function anonymous_uses_trait(): object {
+    return new class { use MakesItself; };
+}
+
+function string_or_int_offset(int|string $k): string {
+    return $k[0]; // error: SPHP0015
+}

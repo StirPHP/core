@@ -931,19 +931,9 @@ impl<'db> Ctx<'db> {
     }
 
     pub fn param_sig(&self, p: &ParamDef, cx: &LowerCx, sink: &mut Vec<LowerError>) -> ParamSig {
-        // `@param list<T> $x` on `T ...$x` is about the list of them, and the type is of each
-        let ty = match (p.variadic, p.doc_ty.as_ref()) {
-            (true, Some(doc)) => {
-                let d = self.lower(doc, cx, sink);
-                match d.kind() {
-                    TyKind::List { elem, .. } => Some(elem.clone()),
-                    TyKind::Array { value, .. } => Some(value.clone()),
-                    _ => self.merged_ty(p.ty.as_ref(), p.doc_ty.as_ref(), cx, sink),
-                }
-            }
-            _ => self.merged_ty(p.ty.as_ref(), p.doc_ty.as_ref(), cx, sink),
-        };
-        let ty = ty.unwrap_or_else(Ty::untyped);
+        let ty = self
+            .merged_ty(p.ty.as_ref(), p.doc_ty.as_ref(), cx, sink)
+            .unwrap_or_else(Ty::untyped);
         let ty = if p.default_is_null { ty.nullable() } else { ty };
         ParamSig {
             name: p.name.clone(),

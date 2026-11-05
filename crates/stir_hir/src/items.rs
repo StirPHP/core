@@ -591,10 +591,18 @@ impl Lowerer {
                     def.ty = t;
                 }
                 if let Some(doc) = doc {
-                    def.doc_ty = doc
-                        .param(&def.name)
+                    let tag = doc.param(&def.name);
+                    def.doc_ty = tag
                         .and_then(|t| t.ty.as_ref())
                         .map(|t| self.doc_cx(names).lower(t));
+                    // `@param list<T> $x` on `T ...$x` describes all of them together
+                    if def.variadic && tag.is_some_and(|t| !t.variadic) {
+                        def.doc_ty = def.doc_ty.take().map(|t| match t.kind {
+                            TypeRefKind::PhpList { elem, .. } => *elem,
+                            TypeRefKind::PhpArray { value, .. } => *value,
+                            kind => TypeRef { kind, range: t.range },
+                        });
+                    }
                     if doc::optional_marker(doc, &def.name) {
                         def.has_default = true;
                     }
@@ -756,7 +764,8 @@ impl Lowerer {
             CLASS_DECL => ClassKind::Class,
             INTERFACE_DECL => ClassKind::Interface,
             TRAIT_DECL => ClassKind::Trait,
-            _ => ClassKind::Enum,
+            ENUM_DECL => ClassKind::Enum,
+            _ => ClassKind::Class,
         };
         let mut mods = ClassMods::default();
         if let Some(m) = node.child(MODIFIERS) {

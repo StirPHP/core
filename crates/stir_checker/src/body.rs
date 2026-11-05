@@ -3480,7 +3480,7 @@ impl<'a, 'db> Checker<'a, 'db> {
     fn declared_target_type(&self, node: &SyntaxNode) -> Option<Ty> {
         if matches!(
             node.kind(),
-            PROPERTY_FETCH_EXPR | STATIC_PROPERTY_FETCH_EXPR
+            PROPERTY_FETCH_EXPR | STATIC_PROPERTY_FETCH_EXPR | INDEX_EXPR
         ) {
             let key = self.place_key(node)?;
             return self.lookup(&key).map(|l| l.declared.clone());
@@ -3546,6 +3546,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             TyKind::List { elem, .. } => Some(elem.clone()),
             TyKind::Array { value, .. } | TyKind::Iterable { value, .. } => Some(value.clone()),
+            // a string, if it isn't an int
+            TyKind::ArrayKey => Some(Ty::string()),
             // a string or an array, if it's anything that can be indexed
             TyKind::Callable { .. }
             | TyKind::Object
@@ -4221,16 +4223,22 @@ impl<'a, 'db> Checker<'a, 'db> {
             let overloads = self.ctx.function_overloads(fqn.as_str());
             if overloads.len() > 1 {
                 let start = self.diags.len();
-                let mut best: Option<(Vec<Diagnostic>, Ty)> = None;
+                let mut best: Option<(usize, Vec<Diagnostic>, Ty)> = None;
                 for candidate in &overloads {
                     let sig = self.ctx.function_sig(*candidate);
                     let t = self.check_args(node, &sig, &FxHashMap::default(), expected, &[]);
                     let found = self.diags.split_off(start);
-                    if best.as_ref().is_none_or(|(b, _)| found.len() < b.len()) {
-                        best = Some((found, t));
+                    // what counts is what would be reported at this level
+                    let level = self.ctx.ws.settings(self.ctx.db).level();
+                    let score = found
+                        .iter()
+                        .filter(|d| crate::levels::min_level(d) <= level)
+                        .count();
+                    if best.as_ref().is_none_or(|(b, _, _)| score < *b) {
+                        best = Some((score, found, t));
                     }
                 }
-                if let Some((found, t)) = best {
+                if let Some((_, found, t)) = best {
                     self.diags.extend(found);
                     return t;
                 }
