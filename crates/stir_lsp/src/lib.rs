@@ -24,7 +24,11 @@ pub mod trust;
 pub async fn run_stdio() {
     use tower_lsp_server::{LspService, Server};
     let (service, socket) = LspService::new(server::Server::new);
-    Server::new(tokio::io::stdin(), tokio::io::stdout(), socket)
-        .serve(service)
-        .await;
+    let serve = Server::new(tokio::io::stdin(), tokio::io::stdout(), socket).serve(service);
+    tokio::select! {
+        () = serve => {}
+        () = stir_phpstan::signalled() => {}
+    }
+    // however it ends, nothing of ours stays behind
+    stir_phpstan::kill_all();
 }

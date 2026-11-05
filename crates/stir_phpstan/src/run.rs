@@ -96,7 +96,10 @@ fn summary(output: &str) -> String {
             || line.starts_with("analyse [")
             || (line.starts_with("In ") && line.ends_with(':'))
     };
-    let lines = output.lines().map(str::trim).filter(|line| !boilerplate(line));
+    let lines = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !boilerplate(line));
     let mut said = lines.take(4).collect::<Vec<_>>().join(" ");
     if said.len() > MAX {
         let mut end = MAX;

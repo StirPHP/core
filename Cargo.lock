@@ -1541,6 +1541,7 @@ dependencies = [
  "stir_fmt",
  "stir_hir",
  "stir_neon",
+ "stir_phpstan",
  "stir_project",
  "stir_stubs",
  "stir_syntax",

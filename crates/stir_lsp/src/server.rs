@@ -27,6 +27,8 @@ use crate::convert::{Encoding, LineMap};
 use crate::trust::{self, TrustStore};
 use crate::{complete, hierarchy, hints, hover, nav, symbols, tokens};
 
+mod phpstan;
+
 /// Delay between an edit and the diagnostics run it triggers.
 const DIAGNOSTICS_DELAY: Duration = Duration::from_millis(150);
 /// How long a question about a workspace's scripts goes unanswered before the person is told, for
@@ -210,6 +212,14 @@ fn location(db: &dyn Db, file: SourceFile, range: TextRange, enc: Encoding) -> O
     Some(Location::new(file_uri(db, file)?, map.range(range)))
 }
 
+/// Where PHPStan says what an identifier of its means.
+fn phpstan_docs(identifier: &str) -> Option<CodeDescription> {
+    let href = format!("https://phpstan.org/error-identifiers/{identifier}");
+    Some(CodeDescription {
+        href: href.parse().ok()?,
+    })
+}
+
 fn lsp_diagnostic(
     d: &Diagnostic,
     map: &LineMap,
@@ -236,8 +246,12 @@ fn lsp_diagnostic(
             Severity::Warning => DiagnosticSeverity::WARNING,
             Severity::Hint => DiagnosticSeverity::HINT,
         }),
-        code: Some(NumberOrString::String(d.code.to_string())),
-        source: Some("stirphp".into()),
+        // a report of PHPStan's may have no identifier
+        code: (!d.code.is_empty()).then(|| NumberOrString::String(d.code.to_string())),
+        code_description: (d.from_phpstan && !d.code.is_empty())
+            .then(|| phpstan_docs(&d.code))
+            .flatten(),
+        source: Some(if d.from_phpstan { "phpstan" } else { "stirphp" }.into()),
         message,
         related_information: related,
         tags: stir_checker::deprecations::is_deprecation(&d.code)
@@ -269,6 +283,7 @@ pub struct Server {
     /// What the user was last told about the project, so that a reload doesn't repeat it.
     notices: Mutex<Vec<String>>,
     rules: RulesTrust,
+    phpstan: phpstan::Phpstan,
 }
 
 /// What it takes to decide whether a workspace's scripts run. See [`trust`].
@@ -308,30 +323,41 @@ impl Server {
     }
 
     pub fn with_trust(client: Client, trust: TrustOptions) -> Self {
+        let state = Arc::new(Mutex::new(State::empty()));
+        let diagnostics = Arc::new(Notify::new());
+        let rules = RulesTrust {
+            store: trust.store,
+            never: Arc::default(),
+            can_ask: Arc::default(),
+            asking: Arc::default(),
+            told: Arc::default(),
+            answer_wait: trust.answer_wait,
+        };
+        let phpstan = phpstan::Phpstan::new(
+            client.clone(),
+            state.clone(),
+            diagnostics.clone(),
+            rules.clone(),
+        );
         let server = Server {
             client,
-            state: Arc::new(Mutex::new(State::empty())),
+            state,
             encoding: Arc::new(Mutex::new(Encoding::Utf16)),
             ready: Arc::new(tokio::sync::watch::channel(false).0),
-            diagnostics: Arc::new(Notify::new()),
+            diagnostics,
             workspace_folder: Mutex::new(None),
             watch_dynamic: Mutex::new(false),
             type_hierarchy_dynamic: Mutex::new(false),
             notices: Mutex::new(Vec::new()),
-            rules: RulesTrust {
-                store: trust.store,
-                never: Arc::default(),
-                can_ask: Arc::default(),
-                asking: Arc::default(),
-                told: Arc::default(),
-                answer_wait: trust.answer_wait,
-            },
+            rules,
+            phpstan,
         };
         tokio::spawn(diagnostics_loop(
             server.client.clone(),
             server.state.clone(),
             server.encoding.clone(),
             server.diagnostics.clone(),
+            server.phpstan.results.clone(),
         ));
         server
     }
@@ -416,6 +442,9 @@ impl Server {
         let notices = loaded.as_ref().map_or_else(Vec::new, |l| l.notices.clone());
         let rules = loaded.as_ref().map(|l| l.rules.clone()).unwrap_or_default();
         let indent = loaded.as_ref().and_then(|l| l.indent);
+        let phpstan = loaded
+            .as_ref()
+            .map(|l| (l.root.clone(), l.vendor_dir.clone(), l.phpstan.clone()));
         {
             let mut s = self.state.lock().unwrap();
             // documents opened meanwhile keep their editor text
@@ -429,7 +458,12 @@ impl Server {
                 })
                 .collect();
             let mut state = match loaded {
-                Some(l) => State::new(l.db, l.ws, Some(l.root), Some(l.vendor_dir)),
+                Some(l) => {
+                    let mut state = State::new(l.db, l.ws, Some(l.root), Some(l.vendor_dir));
+                    // PHPStan's caches are `.php` files, written while we watch for those
+                    state.foreign.extend(l.phpstan_tmp_dir);
+                    state
+                }
                 None => {
                     let mut st = State::empty();
                     st.root = folder.clone();
@@ -445,6 +479,11 @@ impl Server {
             *s = state;
         }
         self.decide_rules();
+        self.phpstan.decide(
+            phpstan
+                .as_ref()
+                .map(|(root, vendor, run)| (root.as_path(), vendor.as_path(), run)),
+        );
         self.ready.send_replace(true);
         self.diagnostics.notify_one();
         self.show_notices(notices).await;
@@ -627,6 +666,8 @@ struct LoadedProject {
     notices: Vec<String>,
     rules: Vec<ScriptFile>,
     indent: Option<stir_neon::phpstan::FormatIndent>,
+    phpstan: stir_neon::phpstan::PhpstanRun,
+    phpstan_tmp_dir: Option<PathBuf>,
 }
 
 async fn load_project(dir: &Path) -> Option<LoadedProject> {
@@ -646,6 +687,8 @@ async fn load_project(dir: &Path) -> Option<LoadedProject> {
             notices: l.notices,
             rules: l.rules,
             indent: project.config.indent,
+            phpstan: project.config.phpstan.clone(),
+            phpstan_tmp_dir: project.config.phpstan_tmp_dir.clone(),
         }),
         Err(error) => {
             tracing::error!(%error, "failed to load the project");
@@ -660,14 +703,23 @@ async fn diagnostics_loop(
     state: Arc<Mutex<State>>,
     encoding: Arc<Mutex<Encoding>>,
     notify: Arc<Notify>,
+    phpstan: Arc<Mutex<Arc<phpstan::Results>>>,
 ) {
     let mut published: FxHashMap<PathBuf, Vec<Diagnostic>> = FxHashMap::default();
     loop {
         notify.notified().await;
         tokio::time::sleep(DIAGNOSTICS_DELAY).await;
-        let (db, ws, sources) = {
+        let phpstan = phpstan.lock().unwrap().clone();
+        let (db, ws, sources, elsewhere) = {
             let s = state.lock().unwrap();
-            (s.db.clone(), s.ws, s.sources())
+            let sources = s.sources();
+            // what PHPStan reports isn't only about what we check
+            let elsewhere: Vec<_> = phpstan
+                .keys()
+                .filter(|p| !s.files.get(*p).is_some_and(|f| sources.contains(f)))
+                .map(|p| (p.clone(), s.files.get(p).copied()))
+                .collect();
+            (s.db.clone(), s.ws, sources, elsewhere)
         };
         let enc = *encoding.lock().unwrap();
         // everything that needs the snapshot happens here, so it is dropped
@@ -684,6 +736,17 @@ async fn diagnostics_loop(
                         (uri, lsp)
                     })
                 };
+                // what PHPStan said of a file, if that's still the text it read
+                let from_phpstan = |path: &Path, text: &str, ours: &[Diagnostic]| {
+                    let Some(result) = phpstan.get(path) else {
+                        return Vec::new();
+                    };
+                    if result.text != phpstan::text_hash(text) {
+                        return Vec::new();
+                    }
+                    let theirs = stir_phpstan::diagnostics(path, text, &result.reported);
+                    stir_phpstan::merge(ours, theirs, text)
+                };
                 let mut results = sources
                     .iter()
                     .map(|&f| {
@@ -699,6 +762,8 @@ async fn diagnostics_loop(
                                     .map(|d| d.with_severity(Severity::Hint)),
                             );
                         }
+                        let theirs = from_phpstan(&path, f.text(&db), &diags);
+                        diags.extend(theirs);
                         let lsp = to_lsp(&path, f.text(&db), &diags);
                         (path, diags, lsp)
                     })
@@ -715,6 +780,16 @@ async fn diagnostics_loop(
                         .map_or("", String::as_str);
                     let lsp = to_lsp(&path, text, &diags);
                     results.push((path, diags, lsp));
+                }
+                for (path, file) in &elsewhere {
+                    let text = match file {
+                        Some(file) => Some(file.text(&db).clone()),
+                        None => std::fs::read_to_string(path).ok(),
+                    };
+                    let Some(text) = text else { continue };
+                    let diags = from_phpstan(path, &text, &[]);
+                    let lsp = to_lsp(path, &text, &diags);
+                    results.push((path.clone(), diags, lsp));
                 }
                 results
             }))
@@ -967,6 +1042,15 @@ impl LanguageServer for Server {
             .window
             .as_ref()
             .is_some_and(|w| w.show_message.is_some());
+        self.phpstan.set_settings(
+            phpstan::editor_settings(params.initialization_options.as_ref()),
+            params
+                .capabilities
+                .window
+                .as_ref()
+                .and_then(|w| w.work_done_progress)
+                == Some(true),
+        );
         *self.watch_dynamic.lock().unwrap() = params
             .capabilities
             .workspace
@@ -1008,7 +1092,8 @@ impl LanguageServer for Server {
                     TextDocumentSyncOptions {
                         open_close: Some(true),
                         change: Some(TextDocumentSyncKind::INCREMENTAL),
-                        save: Some(TextDocumentSyncSaveOptions::Supported(false)),
+                        // PHPStan runs on a save
+                        save: Some(TextDocumentSyncSaveOptions::Supported(true)),
                         ..Default::default()
                     },
                 )),
@@ -1106,6 +1191,7 @@ impl LanguageServer for Server {
     }
 
     async fn shutdown(&self) -> Result<()> {
+        self.phpstan.shut_down().await;
         Ok(())
     }
 
@@ -1150,6 +1236,16 @@ impl LanguageServer for Server {
             s.set_text(&path, text);
             s.open.insert(path, version);
         });
+    }
+
+    async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        let Some(path) = uri_path(&params.text_document.uri) else {
+            return;
+        };
+        let in_project = self.state.lock().unwrap().is_project_path(&path);
+        if in_project && is_source_path(&path) {
+            self.phpstan.request();
+        }
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {

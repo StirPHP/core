@@ -2,6 +2,9 @@
 //! person is asked, and the answer is kept here, in the user's config directory, out of reach of
 //! any repository: by workspace, for the scripts it was given about. When they change, it no
 //! longer applies.
+//!
+//! Running PHPStan is a separate question with a separate answer, as it isn't sandboxed: see
+//! [`phpstan_hash`].
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -30,6 +33,16 @@ impl TrustStore {
     pub fn at(path: impl Into<PathBuf>) -> Self {
         TrustStore {
             path: Some(path.into()),
+        }
+    }
+
+    /// Next to this one, where the answers about running PHPStan are kept.
+    pub fn phpstan(&self) -> Self {
+        TrustStore {
+            path: self
+                .path
+                .as_ref()
+                .map(|p| p.with_file_name("trusted-phpstan.json")),
         }
     }
 
@@ -92,6 +105,37 @@ pub fn scripts_hash(workspace: &Path, scripts: &[(&Path, Result<&str, &str>)]) -
     hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// What an answer about running PHPStan is for: which file gets executed and what it says, and
+/// which configuration it's given and what that says, as a configuration is what names bootstrap
+/// files and extensions. What those contain isn't part of this, or of what's asked: `composer
+/// update` or a new baseline shouldn't ask again. What's in the settings other than that, such as
+/// how much memory it gets, changes nothing about what's trusted.
+pub fn phpstan_hash(workspace: &Path, invocation: &stir_phpstan::Invocation) -> String {
+    let mut hash = Sha256::new();
+    let mut add = |path: &Path| {
+        let shown = path.strip_prefix(workspace).unwrap_or(path);
+        hash.update(shown.to_string_lossy().as_bytes());
+        hash.update([0]);
+        match std::fs::read(path) {
+            Ok(content) => {
+                hash.update([1]);
+                hash.update(content.len().to_le_bytes());
+                hash.update(content);
+            }
+            // a command on the `PATH`: its name is all there is
+            Err(_) => hash.update([0]),
+        }
+    };
+    add(&invocation.program);
+    if let Some(script) = &invocation.script {
+        add(script);
+    }
+    if let Some(config) = &invocation.config_file {
+        add(config);
+    }
+    hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,6 +156,43 @@ mod tests {
         store.remember(a, "h3", false).unwrap();
         assert_eq!(store.decision(a, "h1"), None);
         assert_eq!(store.decision(a, "h3"), Some(false));
+    }
+
+    #[test]
+    fn answers_about_phpstan_are_not_answers_about_scripts() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let store = TrustStore::at(tmp.path().join("trust.json"));
+        store.remember(Path::new("/a"), "h", true).unwrap();
+        assert_eq!(store.phpstan().decision(Path::new("/a"), "h"), None);
+    }
+
+    #[test]
+    fn the_hash_of_phpstan_follows_what_runs_and_its_configuration() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let binary = root.join("phpstan");
+        let config = root.join("phpstan.neon");
+        std::fs::write(&binary, "one").unwrap();
+        std::fs::write(&config, "one").unwrap();
+        let invocation = stir_phpstan::Invocation {
+            program: binary.clone(),
+            script: None,
+            args: vec!["analyse".into()],
+            cwd: root.to_owned(),
+            config_file: Some(config.clone()),
+            timeout: std::time::Duration::from_secs(1),
+        };
+        let one = phpstan_hash(root, &invocation);
+        std::fs::write(&binary, "two").unwrap();
+        let two = phpstan_hash(root, &invocation);
+        assert_ne!(one, two);
+        std::fs::write(&config, "two").unwrap();
+        let three = phpstan_hash(root, &invocation);
+        assert_ne!(two, three);
+        // arguments such as the memory it gets aren't a matter of trust
+        let mut other = invocation.clone();
+        other.args.push("--memory-limit=1G".into());
+        assert_eq!(three, phpstan_hash(root, &other));
     }
 
     #[test]
