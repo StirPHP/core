@@ -479,6 +479,84 @@ fn stirphp_section_rejects_what_it_does_not_know() {
 }
 
 #[test]
+fn how_to_run_phpstan() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = root(&tmp);
+    let file = write(
+        &dir,
+        "conf/stirphp.neon",
+        r#"
+parameters:
+    stirphp:
+        phpstan:
+            enabled: true
+            binary: ../tools/phpstan
+            configuration: phpstan.ci.neon
+            level: max
+            memoryLimit: 1G
+            timeout: 120
+"#,
+    );
+    let run = PhpstanConfig::load_with(&file, &opts())
+        .unwrap()
+        .stirphp
+        .phpstan;
+    assert_eq!(run.enabled, Some(true));
+    // paths are relative to the file, like every other path in there
+    assert_eq!(run.binary, Some(dir.join("tools/phpstan")));
+    assert_eq!(run.configuration, Some(dir.join("conf/phpstan.ci.neon")));
+    assert_eq!(run.level.as_deref(), Some("max"));
+    assert_eq!(run.memory_limit.as_deref(), Some("1G"));
+    assert_eq!(run.timeout, Some(120));
+
+    let file = write(
+        &dir,
+        "s.neon",
+        "parameters:\n    stirphp:\n        phpstan: false\n",
+    );
+    let run = PhpstanConfig::load_with(&file, &opts())
+        .unwrap()
+        .stirphp
+        .phpstan;
+    assert_eq!(run.enabled, Some(false));
+
+    let file = write(
+        &dir,
+        "s.neon",
+        "parameters:\n    stirphp:\n        phpstan:\n            level: 7\n            memoryLimit: -1\n",
+    );
+    let run = PhpstanConfig::load_with(&file, &opts())
+        .unwrap()
+        .stirphp
+        .phpstan;
+    assert_eq!(run.level.as_deref(), Some("7"));
+    assert_eq!(run.memory_limit.as_deref(), Some("-1"));
+}
+
+#[test]
+fn how_to_run_phpstan_rejects_what_it_does_not_know() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = root(&tmp);
+    for section in [
+        "phpstan: maybe",
+        "phpstan:\n            nope: 1",
+        "phpstan:\n            enabled: 1",
+        "phpstan:\n            level: high",
+        "phpstan:\n            memoryLimit: lots",
+        "phpstan:\n            timeout: 0",
+        "phpstan:\n            timeout: soon",
+    ] {
+        let text = format!("parameters:\n    stirphp:\n        {section}\n");
+        let file = write(&dir, "stirphp.neon", &text);
+        let err = PhpstanConfig::load_with(&file, &opts()).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::Invalid { .. }),
+            "{section}: {err}"
+        );
+    }
+}
+
+#[test]
 fn reads_phpstans_own_parameters_schema() {
     let conf = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../corpus/phpstan-src/conf/parametersSchema.neon");

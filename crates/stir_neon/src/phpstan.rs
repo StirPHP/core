@@ -99,6 +99,53 @@ pub struct StirphpParameters {
     pub indent: Option<FormatIndent>,
     /// `deprecations`: report the use of what's deprecated on the command line too.
     pub deprecations: bool,
+    /// `phpstan`: how to run PHPStan next to our own analysis.
+    pub phpstan: PhpstanRun,
+}
+
+/// How to run PHPStan, from `parameters.stirphp.phpstan` or an editor's settings. What's left out
+/// is found out or takes a default.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PhpstanRun {
+    /// `enabled`: on or off, over working it out from what the project has.
+    pub enabled: Option<bool>,
+    /// `binary`: the PHPStan to run, instead of the one in the project's Composer packages.
+    pub binary: Option<PathBuf>,
+    /// `configuration`: PHPStan's configuration, instead of the one PHPStan would find itself.
+    pub configuration: Option<PathBuf>,
+    /// `level`: a number or `max`, over the configuration's.
+    pub level: Option<String>,
+    /// `memoryLimit`: as in PHPStan's `--memory-limit`, such as `2G`, or `-1` for none.
+    pub memory_limit: Option<String>,
+    /// `timeout`: how many seconds a run gets.
+    pub timeout: Option<u64>,
+}
+
+impl PhpstanRun {
+    /// Each setting of `self`, or else of `other`.
+    pub fn or(self, other: &PhpstanRun) -> PhpstanRun {
+        PhpstanRun {
+            enabled: self.enabled.or(other.enabled),
+            binary: self.binary.or_else(|| other.binary.clone()),
+            configuration: self.configuration.or_else(|| other.configuration.clone()),
+            level: self.level.or_else(|| other.level.clone()),
+            memory_limit: self.memory_limit.or_else(|| other.memory_limit.clone()),
+            timeout: self.timeout.or(other.timeout),
+        }
+    }
+}
+
+/// Is this a value for PHPStan's `--level`?
+pub fn valid_phpstan_level(level: &str) -> bool {
+    level == "max" || level.parse::<u8>().is_ok()
+}
+
+/// Is this a value for PHPStan's `--memory-limit`, as PHP writes it?
+pub fn valid_memory_limit(limit: &str) -> bool {
+    let digits = limit
+        .strip_suffix(['K', 'M', 'G', 'k', 'm', 'g'])
+        .unwrap_or(limit);
+    limit == "-1" || (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// How a level of indentation is written.
@@ -187,6 +234,8 @@ const PATH_LIST_PARAMS: &[&str] = &[
 const PATH_SCALAR_PARAMS: &[&str] = &["tmpDir", "bootstrap"];
 /// Keys of `parameters.stirphp` whose values are paths.
 const STIRPHP_PATH_PARAMS: &[&str] = &["srcDir", "composer", "baseline", "rules"];
+/// Keys of `parameters.stirphp.phpstan` whose values are paths.
+const PHPSTAN_RUN_PATH_PARAMS: &[&str] = &["binary", "configuration"];
 
 impl PhpstanConfig {
     /// Loads `path` with default options (`%currentWorkingDirectory%` = process cwd).
@@ -261,7 +310,7 @@ impl PhpstanConfig {
         }
     }
 
-    fn param(&self, key: &str) -> Option<&Value> {
+    pub fn param(&self, key: &str) -> Option<&Value> {
         self.parameters
             .get(&Key::from(key))
             .filter(|v| !v.is_null())
@@ -433,7 +482,71 @@ impl PhpstanConfig {
                     });
                 }
                 "deprecations" => out.deprecations = boolean(v, &k)?,
+                "phpstan" => out.phpstan = self.phpstan_run(v)?,
                 other => return Err(self.invalid(KEY, format!("unknown key `{other}`"))),
+            }
+        }
+        Ok(out)
+    }
+
+    /// `parameters.stirphp.phpstan`: `true`, `false`, or the settings.
+    fn phpstan_run(&self, value: &Value) -> Result<PhpstanRun, ConfigError> {
+        const KEY: &str = "stirphp";
+        let mut out = PhpstanRun::default();
+        if let Value::Bool(enabled) = value {
+            out.enabled = Some(*enabled);
+            return Ok(out);
+        }
+        let Some(entries) = value.entries() else {
+            return Err(self.invalid(KEY, "`phpstan` must be true, false or a mapping"));
+        };
+        let string = |v: &Value, what: &str| -> Result<String, ConfigError> {
+            match v {
+                Value::String(s) => Ok(s.clone()),
+                Value::Int(n) => Ok(n.to_string()),
+                _ => Err(self.invalid(KEY, format!("`phpstan.{what}` has the wrong type"))),
+            }
+        };
+        for (k, v) in entries {
+            let k = key_string(&k);
+            match k.as_str() {
+                "enabled" => match v {
+                    Value::Bool(b) => out.enabled = Some(*b),
+                    _ => {
+                        return Err(self.invalid(KEY, "`phpstan.enabled` must be true or false"));
+                    }
+                },
+                "binary" => out.binary = Some(PathBuf::from(string(v, &k)?)),
+                "configuration" => out.configuration = Some(PathBuf::from(string(v, &k)?)),
+                "level" => {
+                    let level = string(v, &k)?;
+                    if !valid_phpstan_level(&level) {
+                        return Err(self.invalid(KEY, "`phpstan.level` must be a number or `max`"));
+                    }
+                    out.level = Some(level);
+                }
+                "memoryLimit" => {
+                    let limit = string(v, &k)?;
+                    if !valid_memory_limit(&limit) {
+                        return Err(self.invalid(
+                            KEY,
+                            "`phpstan.memoryLimit` must be like `512M` or `2G`, or `-1` for none",
+                        ));
+                    }
+                    out.memory_limit = Some(limit);
+                }
+                "timeout" => match v {
+                    Value::Int(n) if *n > 0 => out.timeout = Some(*n as u64),
+                    _ => {
+                        return Err(self.invalid(
+                            KEY,
+                            "`phpstan.timeout` must be a number of seconds above 0",
+                        ));
+                    }
+                },
+                other => {
+                    return Err(self.invalid(KEY, format!("unknown key `phpstan.{other}`")));
+                }
             }
         }
         Ok(out)
@@ -603,8 +716,19 @@ impl Loader<'_> {
                 {
                     for (key, value) in section.iter_mut() {
                         let key = key.as_str().unwrap_or_default();
-                        if STIRPHP_PATH_PARAMS.contains(&key.strip_suffix('!').unwrap_or(key)) {
+                        let key = key.strip_suffix('!').unwrap_or(key);
+                        if STIRPHP_PATH_PARAMS.contains(&key) {
                             resolve_strings(value, &dir, &self.opts.params);
+                        } else if key == "phpstan"
+                            && let Value::Mapping(run) = value
+                        {
+                            for (key, value) in run.iter_mut() {
+                                if PHPSTAN_RUN_PATH_PARAMS
+                                    .contains(&key.as_str().unwrap_or_default())
+                                {
+                                    resolve_strings(value, &dir, &self.opts.params);
+                                }
+                            }
                         }
                     }
                 } else if name == "ignoreErrors"

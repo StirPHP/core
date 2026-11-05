@@ -280,6 +280,9 @@ pub struct Diagnostic {
     pub php_level: Option<u8>,
     /// The name the project doesn't declare, on an error about an unknown symbol.
     pub symbol: Option<String>,
+    /// PHPStan reported this, and it's shown along with what's ours. `code` is empty if PHPStan
+    /// gave no identifier.
+    pub from_phpstan: bool,
 }
 
 impl Diagnostic {
@@ -299,6 +302,7 @@ impl Diagnostic {
             notes: Vec::new(),
             php_level: None,
             symbol: None,
+            from_phpstan: false,
         }
     }
 

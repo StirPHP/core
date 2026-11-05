@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use stir_neon::phpstan::{FormatIndent, LoadOptions, PhpstanConfig};
+use stir_neon::phpstan::{FormatIndent, LoadOptions, PhpstanConfig, PhpstanRun};
 
 use crate::error::{Error, Result};
 
@@ -30,6 +30,10 @@ pub struct Config {
     pub indent: Option<FormatIndent>,
     /// Report the use of what's deprecated in `stirphp check` too.
     pub deprecations: bool,
+    /// How to run PHPStan next to our own analysis.
+    pub phpstan: PhpstanRun,
+    /// PHPStan's `tmpDir`, whose `.php` files are its caches and never the project's sources.
+    pub phpstan_tmp_dir: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -43,6 +47,8 @@ impl Default for Config {
             rules: Vec::new(),
             indent: None,
             deprecations: false,
+            phpstan: PhpstanRun::default(),
+            phpstan_tmp_dir: None,
         }
     }
 }
@@ -52,7 +58,12 @@ impl Config {
     /// what `%currentWorkingDirectory%` stands for.
     pub fn load(path: &Path, root: &Path) -> Result<Self> {
         let opts = LoadOptions::new().param("currentWorkingDirectory", root.to_string_lossy());
-        let own = PhpstanConfig::load_with(path, &opts)?.stirphp;
+        let config = PhpstanConfig::load_with(path, &opts)?;
+        let phpstan_tmp_dir = config
+            .param("tmpDir")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from);
+        let own = config.stirphp;
         let defaults = Self::default();
         Ok(Self {
             src_dir: own.src_dir.unwrap_or(defaults.src_dir),
@@ -63,6 +74,8 @@ impl Config {
             rules: own.rules,
             indent: own.indent,
             deprecations: own.deprecations,
+            phpstan: own.phpstan,
+            phpstan_tmp_dir,
         })
     }
 }

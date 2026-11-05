@@ -117,6 +117,14 @@ fn discover_blocking(project: &Project) -> Result<Vec<SourceFile>> {
         if !include.is_match(rel) || excluded(path, &exclude) {
             continue;
         }
+        // PHPStan's caches are `.php` files, and the project may well have them in its folder
+        if config
+            .phpstan_tmp_dir
+            .as_ref()
+            .is_some_and(|dir| path.starts_with(dir))
+        {
+            continue;
+        }
         files.push(SourceFile {
             path: path.to_path_buf(),
         });

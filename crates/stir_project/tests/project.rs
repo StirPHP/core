@@ -458,3 +458,19 @@ async fn load_autoload_without_composer_is_empty() {
 }
 
 // ---------- init ----------
+
+#[tokio::test]
+async fn phpstan_caches_are_not_sources() {
+    let tmp = TempDir::new().unwrap();
+    let root = canon(&tmp);
+    write(root.join("src/a.php"), "<?php\n");
+    write(root.join("phpstan-cache/resultCache.php"), "<?php\n");
+    write(
+        root.join("phpstan.neon"),
+        "parameters:\n    tmpDir: phpstan-cache\n",
+    );
+    let project = Project::load_or_default(&root).await.unwrap();
+    let files = discover(&project).await.unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, root.join("src/a.php"));
+}
