@@ -90,13 +90,17 @@ pub fn filter_php(diags: &mut Vec<Diagnostic>, settings: &Settings) {
         .iter()
         .map(CompiledRule::new)
         .collect();
-    let analysed = |file: &Path| {
-        (settings.php_paths.is_empty() || settings.php_paths.iter().any(|p| path_matches(p, file)))
-            && !settings.php_excludes.iter().any(|p| path_matches(p, file))
-    };
     diags.retain(|d| {
-        min_level(d) <= level && analysed(&d.file) && !rules.iter().any(|r| r.matches(d))
+        min_level(d) <= level
+            && is_analysed(&d.file, settings)
+            && !rules.iter().any(|r| r.matches(d))
     });
+}
+
+/// Is `file` within the PHPStan `paths` and outside its `excludePaths`?
+pub fn is_analysed(file: &Path, settings: &Settings) -> bool {
+    (settings.php_paths.is_empty() || settings.php_paths.iter().any(|p| path_matches(p, file)))
+        && !settings.php_excludes.iter().any(|p| path_matches(p, file))
 }
 
 /// Drops diagnostics on lines silenced by `@phpstan-ignore-line`,
@@ -132,16 +136,18 @@ pub fn filter_phpstan_ignores(diags: &mut Vec<Diagnostic>, text: &str) {
     });
 }
 
+/// An ignore rule whose patterns are compiled the first time a diagnostic reaches them: a
+/// baseline has thousands of rules, and nearly all are for some other file.
 struct CompiledRule<'a> {
     rule: &'a IgnoreRule,
-    patterns: Vec<fancy_regex::Regex>,
+    patterns: std::cell::OnceCell<Vec<fancy_regex::Regex>>,
 }
 
 impl<'a> CompiledRule<'a> {
     fn new(rule: &'a IgnoreRule) -> Self {
         CompiledRule {
             rule,
-            patterns: rule.patterns.iter().filter_map(|p| pcre(p)).collect(),
+            patterns: std::cell::OnceCell::new(),
         }
     }
 
@@ -151,15 +157,19 @@ impl<'a> CompiledRule<'a> {
         if !has_message && r.identifiers.is_empty() {
             return false;
         }
-        let message_ok = !has_message
+        if !r.paths.is_empty() && !r.paths.iter().any(|p| path_matches(p, &d.file)) {
+            return false;
+        }
+        if !r.identifiers.is_empty() && !r.identifiers.iter().any(|i| i == d.code) {
+            return false;
+        }
+        !has_message
+            || r.raw_messages.contains(&d.message)
             || self
                 .patterns
+                .get_or_init(|| r.patterns.iter().filter_map(|p| pcre(p)).collect())
                 .iter()
                 .any(|p| p.is_match(&d.message).unwrap_or(false))
-            || r.raw_messages.contains(&d.message);
-        let id_ok = r.identifiers.is_empty() || r.identifiers.iter().any(|i| i == d.code);
-        let path_ok = r.paths.is_empty() || r.paths.iter().any(|p| path_matches(p, &d.file));
-        message_ok && id_ok && path_ok
     }
 }
 
@@ -194,6 +204,8 @@ fn pcre(pattern: &str) -> Option<fancy_regex::Regex> {
 fn path_matches(rule: &Path, file: &Path) -> bool {
     let r = rule.to_string_lossy();
     if r.contains(['*', '?']) {
+        // a source directory of `.` leaves `/./` in the file's path, which `components` drops
+        let file: std::path::PathBuf = file.components().collect();
         fnmatch(r.as_bytes(), file.to_string_lossy().as_bytes())
     } else {
         file == rule || file.starts_with(rule)
@@ -233,6 +245,11 @@ mod tests {
         filter_php(&mut diags, &settings);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].file, Path::new("/p/src/a.php"));
+
+        // a source directory of `.`
+        let mut diags = vec![diag(codes::UNDEFINED_VARIABLE, "x", "/p/./src/gen/c.php")];
+        filter_php(&mut diags, &settings);
+        assert!(diags.is_empty());
     }
 
     fn diag(code: &'static str, msg: &str, file: &str) -> Diagnostic {

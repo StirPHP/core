@@ -137,7 +137,7 @@ pub fn builtin_files(db: &RootDatabase) -> Vec<SourceFile> {
 
 /// Check settings: the rule level and `ignoreErrors` of the PHPStan config (the
 /// `phpstan` key of `sphp.toml`, else
-/// `phpstan.neon` or `phpstan.neon.dist` at the project root).
+/// `phpstan.neon`, `phpstan.neon.dist` or `phpstan.dist.neon` at the project root).
 pub async fn load_settings(project: &Project) -> anyhow::Result<Settings> {
     Ok(settings_from(load_phpstan_config(project).await?))
 }
@@ -147,7 +147,7 @@ async fn load_phpstan_config(
 ) -> anyhow::Result<Option<stir_neon::phpstan::PhpstanConfig>> {
     let path = match project.phpstan_path() {
         Some(p) => Some(p),
-        None => ["phpstan.neon", "phpstan.neon.dist"]
+        None => ["phpstan.neon", "phpstan.neon.dist", "phpstan.dist.neon"]
             .iter()
             .map(|n| project.root.join(n))
             .find(|p| p.is_file()),
@@ -455,6 +455,19 @@ mod tests {
         let project = Project::load(root).await.unwrap();
         let settings = load_settings(&project).await.unwrap();
         assert_eq!(settings.php_level, stir_db::MAX_PHP_LEVEL);
+    }
+
+    #[tokio::test]
+    async fn finds_every_default_phpstan_config_name() {
+        for name in ["phpstan.neon", "phpstan.neon.dist", "phpstan.dist.neon"] {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let root = tmp.path();
+            write(&root.join("sphp.toml"), "srcDir = \"src\"\n");
+            write(&root.join(name), "parameters:\n    level: 3\n");
+            let project = Project::load(root).await.unwrap();
+            let settings = load_settings(&project).await.unwrap();
+            assert_eq!(settings.php_level, 3, "{name}");
+        }
     }
 
     #[tokio::test]

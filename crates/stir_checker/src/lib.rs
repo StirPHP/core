@@ -30,7 +30,9 @@ pub use typed::{Def, MemberKind, TypedFile, typed_file};
 #[salsa::tracked(returns(ref))]
 pub fn check_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> Arc<Vec<Diagnostic>> {
     let settings = ws.settings(db);
-    if file.origin(db) == FileOrigin::Source && levels::is_nocheck(file.text(db)) {
+    if file.origin(db) == FileOrigin::Source
+        && (levels::is_nocheck(file.text(db)) || !levels::is_analysed(file.path(db), settings))
+    {
         return Arc::new(Vec::new());
     }
     let mut diags = stir_db::syntax_diagnostics(db, file).as_ref().clone();
