@@ -161,7 +161,7 @@ fn try_at(
             continue;
         }
         let cap = if t.starts_with("signature") {
-            run.cap.min(25)
+            run.cap.min(env_number("ACTIONS_SIGNATURES", 25))
         } else {
             run.cap
         };

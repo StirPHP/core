@@ -1004,13 +1004,14 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
         .filter(|n| n.kind() == RETURN_STMT)
         .collect();
     let leaves = !selection.expression && selection.nodes.iter().any(always_leaves);
+    // what comes after isn't run once this has left: nothing it sets is wanted there
+    if leaves {
+        outputs.clear();
+    }
     let mut returning = Returning::No;
     if !returns.is_empty() {
         if !leaves {
             return Err("It has a `return`, but not on every path.".into());
-        }
-        if !outputs.is_empty() {
-            return Err("It has a `return`, and sets variables used afterwards.".into());
         }
         let valued = returns
             .iter()

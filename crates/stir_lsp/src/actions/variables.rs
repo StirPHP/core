@@ -568,12 +568,27 @@ pub fn by_value(cx: &Cx<'_>, arg: &SyntaxNode) -> bool {
             .map(|n| n.text_range()),
         _ => None,
     };
+    let callee = callee.or_else(|| {
+        // `new Foo(...)`: its constructor
+        (call.kind() == NEW_EXPR)
+            .then(|| call.children().find(|c| c.kind() == NAME_EXPR))
+            .flatten()
+            .and_then(|n| n.children().find(|c| c.kind() == NAME_REF))
+            .map(|n| n.text_range())
+    });
     let Some(callee) = callee else { return false };
     let refs = nav::file_refs(cx.db, cx.ws, cx.file);
     let Some((_, def)) = refs.iter().find(|(r, _)| *r == callee) else {
         return false;
     };
     let sig = match def {
+        stir_checker::Def::Class(key) if call.kind() == NEW_EXPR => {
+            match model_api::ctor_info(cx.ctx(), key) {
+                Some(sig) => sig,
+                // no constructor: there's nothing to take it by reference
+                None => return cx.ctx().class(key).is_some(),
+            }
+        }
         stir_checker::Def::Function(loc) => model_api::function_info(cx.ctx(), *loc),
         stir_checker::Def::Member {
             class,

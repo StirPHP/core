@@ -1,0 +1,33 @@
+=== action: Extract method
+=== php: 8.1
+=== input
+<?php
+class Unsupported extends Exception {
+    public function __construct(string $what, string $scheme) { parent::__construct($what . $scheme); }
+}
+class A {
+    public function f(string $dsn): string {
+        if ('x' !== $dsn) {
+            ⟦throw new Unsupported($dsn, 'x');⟧
+        }
+        return $dsn;
+    }
+}
+=== output
+<?php
+class Unsupported extends Exception {
+    public function __construct(string $what, string $scheme) { parent::__construct($what . $scheme); }
+}
+class A {
+    public function f(string $dsn): string {
+        if ('x' !== $dsn) {
+            self::extracted($dsn);
+        }
+        return $dsn;
+    }
+
+    private static function extracted(string $dsn): never
+    {
+        throw new Unsupported($dsn, 'x');
+    }
+}
