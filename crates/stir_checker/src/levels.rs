@@ -26,8 +26,8 @@ pub fn min_level(d: &Diagnostic) -> u8 {
     if let Some(l) = d.php_level {
         return l;
     }
-    let untyped =
-        d.message.contains("untyped") || d.message.contains("Any!") || d.message.contains("mixed");
+    // an untyped value prints as `mixed`
+    let untyped = d.message.contains("untyped") || d.message.contains("mixed");
     match d.code {
         codes::TYPE_MISMATCH if untyped => 9,
         codes::TYPE_MISMATCH if d.message.contains("in argument") => 5,
@@ -269,6 +269,23 @@ mod tests {
         assert_eq!(
             min_level(&diag(codes::TYPE_MISMATCH, "x", "a.php").with_php_level(7)),
             7
+        );
+        // an untyped value prints as `mixed`
+        assert_eq!(
+            min_level(&diag(
+                codes::TYPE_MISMATCH,
+                "type mismatch in argument `a`: mixed is not assignable to int",
+                "a.php"
+            )),
+            9
+        );
+        assert_eq!(
+            min_level(&diag(
+                codes::TYPE_MISMATCH,
+                "type mismatch in property: narrow the untyped value first",
+                "a.php"
+            )),
+            9
         );
 
         let settings = Settings {

@@ -16,20 +16,18 @@ fn substitution() {
         (tp(), Ty::int()),
         (np(), np()),
         (Ty::list(tp()), Ty::list(Ty::int())),
-        (Ty::map(tp(), up()), Ty::map(Ty::int(), cls("Dog"))),
+        (Ty::array(tp(), up()), Ty::array(Ty::int(), cls("Dog"))),
         (tp().nullable(), Ty::int().nullable()),
         (fun(vec![tp()], up()), fun(vec![Ty::int()], cls("Dog"))),
         (
             cls_args("Box", vec![tp()]),
             cls_args("Box", vec![Ty::int()]),
         ),
-        (rec(&[("x", tp())]), rec(&[("x", Ty::int())])),
         (
             shape(&[("a", tp())], true),
             shape(&[("a", Ty::int())], true),
         ),
-        (Ty::platform(tp()), Ty::platform(Ty::int())),
-        // substitution re-normalises: `T | Int` with T = Int is `Int`
+        // substitution re-normalises: `T|int` with T = int is `int`
         (union(vec![tp(), Ty::int()]), Ty::int()),
         (
             Ty::intersection([tp(), up()]),
@@ -39,18 +37,18 @@ fn substitution() {
     for (before, after) in cases {
         assert_eq!(subst(&before, &map), after, "subst({before})");
     }
-    // Substituting with Nothing collapses unions.
-    let mut nothing = FxHashMap::default();
-    nothing.insert(T_ID, Ty::nothing());
+    // Substituting with never collapses unions.
+    let mut never = FxHashMap::default();
+    never.insert(T_ID, Ty::never());
     assert_eq!(
-        subst(&union(vec![tp(), Ty::string()]), &nothing),
+        subst(&union(vec![tp(), Ty::string()]), &never),
         Ty::string()
     );
 }
 
 #[test]
 fn free_params_in_order() {
-    let ty = fun(vec![up(), Ty::list(tp())], Ty::map(up(), np()));
+    let ty = fun(vec![up(), Ty::list(tp())], Ty::array(up(), np()));
     assert_eq!(free_params(&ty), vec![U_ID, T_ID, N_ID]);
     assert_eq!(free_params(&Ty::int()), Vec::<ParamId>::new());
     assert_eq!(
@@ -63,14 +61,10 @@ fn free_params_in_order() {
 fn nullability() {
     let e = env();
     assert_eq!(without_null(&Ty::int().nullable()), Ty::int());
-    assert_eq!(without_null(&Ty::null()), Ty::nothing());
+    assert_eq!(without_null(&Ty::null()), Ty::never());
     assert_eq!(
         without_null(&union(vec![Ty::int(), Ty::string(), Ty::null()])),
         union(vec![Ty::int(), Ty::string()])
-    );
-    assert_eq!(
-        without_null(&Ty::platform(Ty::int().nullable())),
-        Ty::platform(Ty::int())
     );
     assert_eq!(without_null(&Ty::int()), Ty::int());
 
@@ -79,13 +73,10 @@ fn nullability() {
         (Ty::int().nullable(), true),
         (Ty::null(), true),
         (Ty::mixed(), true),
-        (Ty::any_platform(), true),
-        (Ty::platform(Ty::int()), false),
-        (Ty::platform(Ty::int().nullable()), true),
-        (tp(), true),  // unbounded: Any?
+        (Ty::untyped(), true),
+        (tp(), true),  // unbounded: mixed
         (up(), false), // bound Pet
-        (np(), true),  // bound Int?
-        (Ty::php_int().nullable(), true),
+        (np(), true),  // bound ?int
     ] {
         assert_eq!(is_nullable(&e, &ty), expected, "is_nullable({ty})");
     }
@@ -101,14 +92,19 @@ fn join_and_meet() {
         union(vec![cls("Dog"), cls("Cat")])
     );
     assert_eq!(join(&e, &Ty::int(), &Ty::null()), Ty::int().nullable());
-    assert_eq!(join(&e, &Ty::nothing(), &Ty::string()), Ty::string());
+    assert_eq!(join(&e, &Ty::never(), &Ty::string()), Ty::string());
     assert_eq!(
         join(&e, &Ty::int(), &Ty::string()),
         union(vec![Ty::int(), Ty::string()])
     );
 
+    // a plain `Closure` is more general than one with a signature, either way round
+    let closure = fun(vec![Ty::int()], Ty::bool());
+    assert_eq!(join(&e, &cls("Closure"), &closure), cls("Closure"));
+    assert_eq!(join(&e, &closure, &cls("Closure")), cls("Closure"));
+
     assert_eq!(meet(&e, &cls("Dog"), &cls("Pet")), cls("Dog"));
-    assert_eq!(meet(&e, &Ty::int(), &Ty::string()), Ty::nothing());
+    assert_eq!(meet(&e, &Ty::int(), &Ty::string()), Ty::never());
     assert_eq!(meet(&e, &Ty::int().nullable(), &Ty::int()), Ty::int());
     assert_eq!(
         meet(
@@ -122,8 +118,8 @@ fn join_and_meet() {
         meet(&e, &cls("Pet"), &cls("Named")),
         Ty::intersection([cls("Pet"), cls("Named")])
     );
-    assert_eq!(meet(&e, &cls("Cat"), &cls("Named")), Ty::nothing());
-    assert_eq!(meet(&e, &cls("Pet"), &cls("Robot")), Ty::nothing());
+    assert_eq!(meet(&e, &cls("Cat"), &cls("Named")), Ty::never());
+    assert_eq!(meet(&e, &cls("Pet"), &cls("Robot")), Ty::never());
 }
 
 #[test]
@@ -140,11 +136,9 @@ fn narrowing_to() {
             union(vec![s("a"), s("c")]),
             union(vec![s("a"), s("c")]),
         ),
-        (abc.clone(), s("z"), Ty::nothing()),
-        (Ty::any_platform(), Ty::int(), Ty::int()),
-        (Ty::mixed(), Ty::php_int(), Ty::php_int()),
-        (Ty::platform(Ty::string()), Ty::string(), Ty::string()),
-        (Ty::platform(Ty::string()), Ty::null(), Ty::null()),
+        (abc.clone(), s("z"), Ty::never()),
+        (Ty::untyped(), Ty::int(), Ty::int()),
+        (Ty::mixed(), Ty::int(), Ty::int()),
         (cls("Animal"), cls("Dog"), cls("Dog")),
         (cls("Dog"), cls("Animal"), cls("Dog")),
         (
@@ -152,7 +146,7 @@ fn narrowing_to() {
             cls("Named"),
             Ty::intersection([cls("Pet"), cls("Named")]),
         ),
-        (cls("Cat"), cls("Named"), Ty::nothing()),
+        (cls("Cat"), cls("Named"), Ty::never()),
         (union(vec![cls("Dog"), Ty::int()]), cls("Pet"), cls("Dog")),
         (Ty::bool(), Ty::lit_bool(true), Ty::lit_bool(true)),
         (tp(), Ty::int(), Ty::intersection([tp(), Ty::int()])),
@@ -175,47 +169,25 @@ fn narrowing_away() {
     let cases = [
         (abc.clone(), s("a"), union(vec![s("b"), s("c")])),
         (abc.clone(), union(vec![s("a"), s("b")]), s("c")),
-        (abc.clone(), abc.clone(), Ty::nothing()),
+        (abc.clone(), abc.clone(), Ty::never()),
         (Ty::int().nullable(), Ty::null(), Ty::int()),
         (Ty::int(), Ty::null(), Ty::int()),
         (Ty::int(), Ty::lit_int(5), Ty::int()),
         (Ty::bool(), Ty::lit_bool(true), Ty::lit_bool(false)),
         (Ty::bool().nullable(), Ty::null(), Ty::bool()),
-        (
-            Ty::php_bool(),
-            Ty::php_lit(stir_types::LitValue::Bool(false)),
-            Ty::php_lit(stir_types::LitValue::Bool(true)),
-        ),
-        (Ty::platform(Ty::string()), Ty::null(), Ty::string()),
+        (Ty::bool(), Ty::lit_bool(false), Ty::lit_bool(true)),
         (
             union(vec![Ty::int(), Ty::string(), Ty::null()]),
             Ty::string(),
             Ty::int().nullable(),
         ),
-        (
-            union(vec![cls("Dog"), cls("Cat")]),
-            cls("Pet"),
-            Ty::nothing(),
-        ),
+        (union(vec![cls("Dog"), cls("Cat")]), cls("Pet"), Ty::never()),
         (
             union(vec![cls("Dog"), cls("Robot")]),
             cls("Pet"),
             cls("Robot"),
         ),
-        // sealed hierarchies are split
-        (cls("Shape"), cls("Circle"), cls("Poly")),
-        (
-            cls("Shape"),
-            cls("Square"),
-            union(vec![cls("Circle"), cls("Triangle")]),
-        ),
-        (cls("Shape"), cls("Poly"), cls("Circle")),
-        (cls("Pet"), cls("Dog"), cls("Pet")), // not sealed: nothing to subtract
-        (
-            cls_args("Res", vec![Ty::int()]),
-            cls_args("Ok", vec![Ty::int()]),
-            cls("Err"),
-        ),
+        (cls("Pet"), cls("Dog"), cls("Pet")), // nothing to subtract
     ];
     for (declared, test, expected) in cases {
         assert_eq!(

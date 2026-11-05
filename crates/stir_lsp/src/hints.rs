@@ -34,7 +34,7 @@ pub fn inlay_hints(
         };
         let ty = stir_checker::widen_literals(ty);
         let wanted = match kind {
-            LocalKind::Php | LocalKind::Loop => true,
+            LocalKind::Variable | LocalKind::Loop => true,
             // a parameter's type is only news if it isn't written next to it
             LocalKind::Param => token
                 .parent()
@@ -42,7 +42,7 @@ pub fn inlay_hints(
                 .is_some_and(|p| stir_hir::first_type(&p).is_none()),
             _ => false,
         };
-        let label = render::ty(&ty);
+        let label = ty.to_string();
         if wanted && label != "mixed" {
             out.push(TypeHint {
                 offset: decl.end(),

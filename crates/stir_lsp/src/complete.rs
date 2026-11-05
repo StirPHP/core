@@ -249,7 +249,7 @@ fn member_items(
             ),
             MemberTy::Property { ty, immutable } => {
                 let readonly = if *immutable { "readonly " } else { "" };
-                let label = format!("{readonly}{} ${}", render::ty(ty), m.name);
+                let label = format!("{readonly}{} ${}", ty, m.name);
                 let insert = if statics {
                     format!("${}", m.name)
                 } else {
@@ -259,7 +259,7 @@ fn member_items(
             }
             MemberTy::Const(t) => (
                 ItemKind::Const,
-                format!("const {} {}", render::ty(t), m.name),
+                format!("const {} {}", t, m.name),
                 m.name.to_string(),
             ),
             MemberTy::Case => (

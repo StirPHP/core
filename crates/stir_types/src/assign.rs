@@ -2,21 +2,15 @@
 //!
 //! The rules, in the order they are tried:
 //!
-//! 1. identical types, `Error` on either side, and bottom (`Nothing`/`never`) sources;
+//! 1. identical types, `Error` on either side, and `never` sources;
 //! 2. a union source needs every member assignable; an intersection target needs the
 //!    source assignable to every member;
-//! 3. `mixed` and `Any!` accept everything;
+//! 3. `mixed` and untyped targets accept everything;
 //! 4. a union target needs some member to accept the source;
-//! 5. widening sources: `T!` behaves as `T` or as non-null `T`; `Any!` only reaches `mixed`;
-//!    a type parameter is replaced by its bound; `static`/`$this` by their class; an
-//!    intersection source needs some member assignable;
-//! 6. a platform target `T!` accepts what `T` or `T?` accepts;
-//! 7. structural rules. A StirPHP-family source used where a non-StirPHP type is expected is
-//!    first converted to its PHP view (`Int` → `int`, `List<T>` → `list<T>`,
-//!    `Map<K, V>` → `array<K, V>`, records → sealed array shapes, `(A) -> R` →
-//!    `Closure(A): R`), which is how "safe → unsafe is allowed" falls out. PHP-family
-//!    sources are never assignable to StirPHP-family targets (except a sealed array shape with
-//!    exactly a record's layout).
+//! 5. widening sources: an untyped value only reaches `mixed`; a type parameter is replaced
+//!    by its bound; `static`/`$this` by their class; an intersection source needs some member
+//!    assignable;
+//! 6. structural rules.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -25,15 +19,11 @@ use rustc_hash::FxHashSet;
 use smol_str::SmolStr;
 
 use crate::env::{TypeEnv, Variance};
-use crate::ops::without_null;
-use crate::ty::{
-    Family, FnTy, LitValue, Literal, ParamKind, RecordTy, SelfKind, ShapeField, ShapeKey, ShapeTy,
-    Ty, TyKind as K,
-};
+use crate::ty::{FnTy, LitValue, ParamKind, SelfKind, ShapeKey, ShapeTy, Ty, TyKind as K};
 
 /// Why `from` is not assignable to `to`. Nested reasons carry the [`Mismatch`] of the
 /// component that failed, so the [`Display`](fmt::Display) output reads like
-/// "field `y` of record: Int is not assignable to String".
+/// "key `y` of array shape: int is not assignable to string".
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Mismatch {
     pub from: Ty,
@@ -46,14 +36,8 @@ pub struct Mismatch {
 pub enum MismatchReason {
     /// No more specific explanation.
     Incompatible,
-    /// A PHP-family type was used where a StirPHP-family type is expected (`int` → `Int`).
-    UnsafeToSafe,
-    /// `Any!` was used where something other than `mixed` is expected.
-    AnyPlatformToSafe,
     /// A possibly-null value was used where null is not allowed.
     NullToNonNull,
-    /// StirPHP numeric types do not widen (`Int` → `Float`).
-    NoNumericWidening,
     /// The source class does not extend/implement the target class.
     NotSubtype,
     /// A member of the source union is not assignable.
@@ -68,18 +52,6 @@ pub enum MismatchReason {
         variance: Variance,
         cause: Box<Mismatch>,
     },
-    /// A record field's type is not assignable.
-    RecordField { name: SmolStr, cause: Box<Mismatch> },
-    /// The source record lacks a field of the target.
-    RecordMissingField { name: SmolStr },
-    /// The source record has the target's field, but at another position.
-    RecordFieldOrder {
-        index: usize,
-        expected: SmolStr,
-        found: SmolStr,
-    },
-    /// An array shape is not exactly the layout of the target record.
-    ShapeLayout,
     /// An array-shape entry's type is not assignable.
     ShapeKey { key: ShapeKey, cause: Box<Mismatch> },
     /// The source shape lacks a required key.
@@ -121,7 +93,6 @@ impl Mismatch {
             MismatchReason::UnionMember { cause, .. }
             | MismatchReason::IntersectionMember { cause, .. }
             | MismatchReason::TypeArgument { cause, .. }
-            | MismatchReason::RecordField { cause, .. }
             | MismatchReason::ShapeKey { cause, .. }
             | MismatchReason::FnParam { cause, .. }
             | MismatchReason::FnReturn { cause } => cause.root(),
@@ -157,7 +128,6 @@ impl fmt::Display for Mismatch {
                 };
                 write!(f, "type argument #{} of {}{v}: {cause}", index + 1, self.to)
             }
-            R::RecordField { name, cause } => write!(f, "field `{name}` of record: {cause}"),
             R::ShapeKey { key, cause } => {
                 write!(f, "key `{}` of array shape: {cause}", key_str(key))
             }
@@ -166,45 +136,9 @@ impl fmt::Display for Mismatch {
             }
             R::FnReturn { cause } => write!(f, "return type of function type: {cause}"),
             R::Incompatible | R::NotSubtype | R::NoUnionMember => base(f),
-            R::UnsafeToSafe => {
-                base(f)?;
-                f.write_str(" (a PHP type cannot be used as a StirPHP type; convert it explicitly)")
-            }
-            R::AnyPlatformToSafe => {
-                base(f)?;
-                f.write_str(" (an untyped PHP value must be narrowed with `is` first)")
-            }
             R::NullToNonNull => {
                 base(f)?;
                 f.write_str(" (the value may be null)")
-            }
-            R::NoNumericWidening => {
-                base(f)?;
-                f.write_str(" (StirPHP numbers are not widened implicitly)")
-            }
-            R::RecordMissingField { name } => {
-                base(f)?;
-                write!(f, ": missing field `{name}`")
-            }
-            R::RecordFieldOrder {
-                index,
-                expected,
-                found,
-            } => {
-                base(f)?;
-                write!(
-                    f,
-                    ": field #{} is `{found}` but `{expected}` was expected (record fields must \
-                     appear in the same order)",
-                    index + 1
-                )
-            }
-            R::ShapeLayout => {
-                base(f)?;
-                f.write_str(
-                    ": the array shape must be sealed and have exactly the record's fields, \
-                     in order",
-                )
             }
             R::ShapeMissingKey { key } => {
                 base(f)?;
@@ -274,40 +208,6 @@ pub fn is_equivalent(env: &dyn TypeEnv, a: &Ty, b: &Ty) -> bool {
     a == b || (is_assignable(env, a, b) && is_assignable(env, b, a))
 }
 
-/// The PHP-family view of a StirPHP-family type (shallow): what it is at runtime.
-/// Returns `None` for types that are not StirPHP-family.
-pub fn php_view(ty: &Ty) -> Option<Ty> {
-    Some(match ty.kind() {
-        K::Int => Ty::php_int(),
-        K::Float => Ty::php_float(),
-        K::String => Ty::php_string(),
-        K::Bool => Ty::php_bool(),
-        K::Unit => Ty::void(),
-        K::Nothing => Ty::never(),
-        K::Literal(Literal {
-            value,
-            family: Family::Safe,
-        }) => Ty::php_lit(value.clone()),
-        K::List(t) | K::MutableList(t) => Ty::php_list(t.clone()),
-        K::Map(k, v) | K::MutableMap(k, v) => Ty::array(k.clone(), v.clone()),
-        K::Record(r) => record_shape(r),
-        K::RecordRef { .. } => Ty::array(Ty::php_string(), Ty::mixed()),
-        K::Fn(sig) => Ty::closure(Some(sig.clone())),
-        _ => return None,
-    })
-}
-
-/// The sealed array shape a record lowers to.
-pub fn record_shape(r: &RecordTy) -> Ty {
-    Ty::shape(
-        r.fields
-            .iter()
-            .map(|f| ShapeField::new(f.name.as_str(), f.ty.clone()))
-            .collect(),
-        true,
-    )
-}
-
 /// PHP 8 numeric-string check (leading/trailing whitespace allowed).
 pub(crate) fn is_numeric_str(s: &str) -> bool {
     let t = s.trim_matches([' ', '\t', '\n', '\r', '\x0b', '\x0c']);
@@ -329,12 +229,9 @@ type Res = Result<(), Mismatch>;
 pub(crate) struct Checker<'a> {
     pub(crate) env: &'a dyn TypeEnv,
     depth: u32,
-    /// Record-reference pairs assumed related while unfolding them (recursive
-    /// records are related coinductively).
-    assuming: Vec<(Ty, Ty)>,
 }
 
-fn lit(t: &Ty) -> Option<&Literal> {
+fn lit(t: &Ty) -> Option<&LitValue> {
     match t.kind() {
         K::Literal(l) => Some(l),
         _ => None,
@@ -342,65 +239,35 @@ fn lit(t: &Ty) -> Option<&Literal> {
 }
 
 fn is_int_like(t: &Ty) -> bool {
-    matches!(t.kind(), K::PhpInt | K::IntRange { .. })
-        || matches!(
-            lit(t),
-            Some(Literal {
-                value: LitValue::Int(_),
-                family: Family::Php
-            })
-        )
+    matches!(t.kind(), K::Int | K::IntRange { .. }) || matches!(lit(t), Some(LitValue::Int(_)))
 }
 
 fn is_float_like(t: &Ty) -> bool {
-    matches!(t.kind(), K::PhpFloat)
-        || matches!(
-            lit(t),
-            Some(Literal {
-                value: LitValue::Float(_),
-                family: Family::Php
-            })
-        )
+    matches!(t.kind(), K::Float) || matches!(lit(t), Some(LitValue::Float(_)))
 }
 
 fn is_string_like(t: &Ty) -> bool {
     matches!(
         t.kind(),
-        K::PhpString | K::NonEmptyString | K::NumericString | K::ClassString(_)
-    ) || matches!(
-        lit(t),
-        Some(Literal {
-            value: LitValue::String(_),
-            family: Family::Php
-        })
-    )
+        K::String | K::NonEmptyString | K::NumericString | K::ClassString(_)
+    ) || matches!(lit(t), Some(LitValue::String(_)))
 }
 
 fn is_bool_like(t: &Ty) -> bool {
-    matches!(t.kind(), K::PhpBool)
-        || matches!(
-            lit(t),
-            Some(Literal {
-                value: LitValue::Bool(_),
-                family: Family::Php
-            })
-        )
+    matches!(t.kind(), K::Bool) || matches!(lit(t), Some(LitValue::Bool(_)))
 }
 
-fn php_str_lit(t: &Ty) -> Option<&str> {
+fn str_lit(t: &Ty) -> Option<&str> {
     match lit(t) {
-        Some(Literal {
-            value: LitValue::String(s),
-            family: Family::Php,
-        }) => Some(s),
+        Some(LitValue::String(s)) => Some(s),
         _ => None,
     }
 }
 
 fn shape_key_ty(key: &ShapeKey) -> Ty {
     match key {
-        ShapeKey::Int(n) => Ty::php_lit(LitValue::Int(*n)),
-        ShapeKey::Str(s) => Ty::php_lit(LitValue::String(s.clone())),
+        ShapeKey::Int(n) => Ty::lit_int(*n),
+        ShapeKey::Str(s) => Ty::lit_string(s.clone()),
     }
 }
 
@@ -433,11 +300,7 @@ fn shape_is_list(s: &ShapeTy) -> bool {
 
 impl<'a> Checker<'a> {
     pub(crate) fn new(env: &'a dyn TypeEnv) -> Self {
-        Self {
-            env,
-            depth: 0,
-            assuming: Vec::new(),
-        }
+        Self { env, depth: 0 }
     }
 
     pub(crate) fn ok(&mut self, from: &Ty, to: &Ty) -> bool {
@@ -460,7 +323,7 @@ impl<'a> Checker<'a> {
             return Ok(());
         }
         match (from.kind(), to.kind()) {
-            (K::Error, _) | (_, K::Error) | (K::Nothing | K::Never, _) => return Ok(()),
+            (K::Error, _) | (_, K::Error) | (K::Never, _) => return Ok(()),
             _ => {}
         }
         if let K::Union(ms) = from.kind() {
@@ -493,19 +356,13 @@ impl<'a> Checker<'a> {
             }
             return Ok(());
         }
-        if matches!(to.kind(), K::Mixed | K::AnyPlatform) {
+        if matches!(to.kind(), K::Mixed | K::Untyped) {
             return Ok(());
         }
         // `array-key` is `int|string`
         if matches!(from.kind(), K::ArrayKey)
-            && to
-                .members()
-                .iter()
-                .any(|m| matches!(m.kind(), K::Int | K::PhpInt))
-            && to
-                .members()
-                .iter()
-                .any(|m| matches!(m.kind(), K::String | K::PhpString))
+            && to.members().iter().any(|m| matches!(m.kind(), K::Int))
+            && to.members().iter().any(|m| matches!(m.kind(), K::String))
         {
             return Ok(());
         }
@@ -521,20 +378,7 @@ impl<'a> Checker<'a> {
 
         // Widening sources.
         match from.kind() {
-            K::Platform(inner) => {
-                if self.ok(inner, to) {
-                    return Ok(());
-                }
-                return self.check(&without_null(inner), to);
-            }
-            K::AnyPlatform => {
-                let reason = if to.members().iter().any(|m| m.is_safe()) {
-                    R::AnyPlatformToSafe
-                } else {
-                    R::Incompatible
-                };
-                return Err(Mismatch::new(from, to, reason));
-            }
+            K::Untyped => return Err(Mismatch::new(from, to, R::Incompatible)),
             K::Param { id, .. } => {
                 if let Some(bound) = self.env.param_bound(*id)
                     && self.ok(&bound, to)
@@ -556,7 +400,7 @@ impl<'a> Checker<'a> {
             if let [single] = non_null.as_slice()
                 && !from.is_null()
             {
-                // `X -> T?`: explain against `T`.
+                // `X -> ?T`: explain against `T`.
                 let mut e = self.check(from, single).expect_err("checked above");
                 if e.from == *from && e.to == **single {
                     e.to = to.clone();
@@ -569,13 +413,6 @@ impl<'a> Checker<'a> {
                 R::NoUnionMember
             };
             return Err(Mismatch::new(from, to, reason));
-        }
-
-        if let K::Platform(inner) = to.kind() {
-            if self.ok(from, inner) {
-                return Ok(());
-            }
-            return self.check(from, &inner.clone().nullable());
         }
 
         self.structural(from, to)
@@ -602,20 +439,8 @@ impl<'a> Checker<'a> {
 
     fn fail(&self, from: &Ty, to: &Ty) -> Res {
         use MismatchReason as R;
-        let int_src = matches!(from.kind(), K::Int)
-            || matches!(
-                lit(from),
-                Some(Literal {
-                    value: LitValue::Int(_),
-                    family: Family::Safe
-                })
-            );
         let reason = if from.is_null() {
             R::NullToNonNull
-        } else if int_src && matches!(to.kind(), K::Float) {
-            R::NoNumericWidening
-        } else if from.is_php() && to.is_safe() {
-            R::UnsafeToSafe
         } else if matches!(from.kind(), K::Class { .. }) && matches!(to.kind(), K::Class { .. }) {
             R::NotSubtype
         } else {
@@ -626,23 +451,11 @@ impl<'a> Checker<'a> {
 
     fn structural(&mut self, from: &Ty, to: &Ty) -> Res {
         use MismatchReason as R;
-        if from.is_safe()
-            && !to.is_safe()
-            && let Some(view) = php_view(from)
-        {
-            return self.check(&view, to).map_err(|mut e| {
-                if e.from == view {
-                    e.from = from.clone();
-                }
-                e
-            });
-        }
-
         let (f, t) = (from.kind(), to.kind());
         match (f, t) {
             // an empty PHP array literal fits any PHP array type
             (
-                K::PhpList {
+                K::List {
                     elem,
                     non_empty: false,
                 },
@@ -653,7 +466,7 @@ impl<'a> Checker<'a> {
                 return Ok(());
             }
             (
-                K::PhpList {
+                K::List {
                     elem,
                     non_empty: false,
                 },
@@ -661,42 +474,6 @@ impl<'a> Checker<'a> {
             ) if matches!(elem.kind(), K::Never) => {
                 return Ok(());
             }
-            (K::List(a) | K::MutableList(a), K::List(b)) => {
-                return self.arg(from, to, 0, Variance::Out, a, b);
-            }
-            (K::MutableList(a), K::MutableList(b)) => {
-                return self.arg(from, to, 0, Variance::Invariant, a, b);
-            }
-            (K::Map(k1, v1) | K::MutableMap(k1, v1), K::Map(k2, v2)) => {
-                self.arg(from, to, 0, Variance::Invariant, k1, k2)?;
-                return self.arg(from, to, 1, Variance::Out, v1, v2);
-            }
-            (K::MutableMap(k1, v1), K::MutableMap(k2, v2)) => {
-                self.arg(from, to, 0, Variance::Invariant, k1, k2)?;
-                return self.arg(from, to, 1, Variance::Invariant, v1, v2);
-            }
-            (K::RecordRef { name: n1, args: a1 }, K::RecordRef { name: n2, args: a2 })
-                if n1.eq_ignore_ascii_case(n2) && a1 == a2 =>
-            {
-                return Ok(());
-            }
-            (K::RecordRef { .. }, _) | (_, K::RecordRef { .. }) => {
-                let pair = (from.clone(), to.clone());
-                if self.assuming.contains(&pair) {
-                    return Ok(());
-                }
-                let (uf, ut) = (crate::unfold(self.env, from), crate::unfold(self.env, to));
-                if &uf == from && &ut == to {
-                    return self.fail(from, to);
-                }
-                self.assuming.push(pair);
-                let r = self.check(&uf, &ut);
-                self.assuming.pop();
-                return r;
-            }
-            (K::Record(a), K::Record(b)) => return self.record_prefix(from, to, a, b),
-            (K::Shape(s), K::Record(r)) => return self.shape_to_record(from, to, s, r),
-            (K::Fn(a), K::Fn(b)) => return self.fn_sig(from, to, a, b),
             (K::Class { .. }, K::Class { name: n2, args: a2 }) => {
                 return self.class(from, to, n2, a2);
             }
@@ -726,7 +503,7 @@ impl<'a> Checker<'a> {
                 return self.arg(from, to, 1, Variance::Out, v1, value);
             }
             (
-                K::PhpList {
+                K::List {
                     elem,
                     non_empty: ne1,
                 },
@@ -739,21 +516,15 @@ impl<'a> Checker<'a> {
                 if *non_empty && !ne1 {
                     return Err(Mismatch::new(from, to, R::MaybeEmpty));
                 }
-                // a list's keys fit StirPHP's `Int` as well as PHP's `int`
-                let list_key = if matches!(key.kind(), K::Int) {
-                    Ty::int()
-                } else {
-                    Ty::non_negative_int()
-                };
-                self.arg(from, to, 0, Variance::Out, &list_key, key)?;
+                self.arg(from, to, 0, Variance::Out, &Ty::non_negative_int(), key)?;
                 return self.arg(from, to, 1, Variance::Out, elem, value);
             }
             (
-                K::PhpList {
+                K::List {
                     elem: e1,
                     non_empty: ne1,
                 },
-                K::PhpList { elem, non_empty },
+                K::List { elem, non_empty },
             ) => {
                 if *non_empty && !ne1 {
                     return Err(Mismatch::new(from, to, R::MaybeEmpty));
@@ -790,7 +561,7 @@ impl<'a> Checker<'a> {
                 }
                 return Ok(());
             }
-            (K::Shape(s), K::PhpList { elem, non_empty }) => {
+            (K::Shape(s), K::List { elem, non_empty }) => {
                 if !shape_is_list(s) {
                     return self.fail(from, to);
                 }
@@ -821,12 +592,10 @@ impl<'a> Checker<'a> {
             }
             // PHP callables: `'strlen'`, `[$object, 'method']`
             (
-                K::PhpString | K::PhpList { .. } | K::Array { .. } | K::Shape(_),
+                K::String | K::List { .. } | K::Array { .. } | K::Shape(_),
                 K::Callable { closure: false, .. },
             ) => return Ok(()),
-            (K::Literal(l), K::Callable { closure: false, .. })
-                if matches!(l.value, LitValue::String(_)) =>
-            {
+            (K::Literal(LitValue::String(_)), K::Callable { closure: false, .. }) => {
                 return Ok(());
             }
             (_, K::Callable { sig, closure }) => {
@@ -857,38 +626,10 @@ impl<'a> Checker<'a> {
         }
 
         let ok = match t {
-            K::Int => matches!(
-                lit(from),
-                Some(Literal {
-                    value: LitValue::Int(_),
-                    family: Family::Safe
-                })
-            ),
-            K::Float => matches!(
-                lit(from),
-                Some(Literal {
-                    value: LitValue::Float(_),
-                    family: Family::Safe
-                })
-            ),
-            K::String => matches!(
-                lit(from),
-                Some(Literal {
-                    value: LitValue::String(_),
-                    family: Family::Safe
-                })
-            ),
-            K::Bool => matches!(
-                lit(from),
-                Some(Literal {
-                    value: LitValue::Bool(_),
-                    family: Family::Safe
-                })
-            ),
-            K::PhpInt => is_int_like(from),
-            K::PhpFloat => is_int_like(from) || is_float_like(from),
-            K::PhpString => is_string_like(from),
-            K::PhpBool => is_bool_like(from),
+            K::Int => is_int_like(from),
+            K::Float => is_int_like(from) || is_float_like(from),
+            K::String => is_string_like(from),
+            K::Bool => is_bool_like(from),
             K::Object => matches!(f, K::Class { .. } | K::Callable { closure: true, .. }),
             K::Scalar => {
                 is_int_like(from)
@@ -901,21 +642,18 @@ impl<'a> Checker<'a> {
                 is_int_like(from)
                     || is_float_like(from)
                     || matches!(f, K::NumericString)
-                    || php_str_lit(from).is_some_and(is_numeric_str)
+                    || str_lit(from).is_some_and(is_numeric_str)
             }
             K::ArrayKey => is_int_like(from) || is_string_like(from),
             K::NonEmptyString => {
                 matches!(f, K::NumericString | K::ClassString(_))
-                    || php_str_lit(from).is_some_and(|s| !s.is_empty())
+                    || str_lit(from).is_some_and(|s| !s.is_empty())
             }
-            K::NumericString => php_str_lit(from).is_some_and(is_numeric_str),
+            K::NumericString => str_lit(from).is_some_and(is_numeric_str),
             K::IntRange { min, max } => {
                 let (lo, hi) = match f {
                     K::IntRange { min: a, max: b } => (*a, *b),
-                    K::Literal(Literal {
-                        value: LitValue::Int(n),
-                        family: Family::Php,
-                    }) => (Some(*n), Some(*n)),
+                    K::Literal(LitValue::Int(n)) => (Some(*n), Some(*n)),
                     _ => return self.fail(from, to),
                 };
                 let lo_ok = match (min, lo) {
@@ -936,72 +674,6 @@ impl<'a> Checker<'a> {
             _ => false,
         };
         if ok { Ok(()) } else { self.fail(from, to) }
-    }
-
-    fn record_prefix(&mut self, from: &Ty, to: &Ty, a: &RecordTy, b: &RecordTy) -> Res {
-        use MismatchReason as R;
-        for (i, bf) in b.fields.iter().enumerate() {
-            let Some(af) = a.fields.get(i) else {
-                return Err(Mismatch::new(
-                    from,
-                    to,
-                    R::RecordMissingField {
-                        name: bf.name.clone(),
-                    },
-                ));
-            };
-            if af.name != bf.name {
-                let reason = if a.field(&bf.name).is_some() {
-                    R::RecordFieldOrder {
-                        index: i,
-                        expected: bf.name.clone(),
-                        found: af.name.clone(),
-                    }
-                } else {
-                    R::RecordMissingField {
-                        name: bf.name.clone(),
-                    }
-                };
-                return Err(Mismatch::new(from, to, reason));
-            }
-            self.check(&af.ty, &bf.ty).map_err(|cause| {
-                Mismatch::new(
-                    from,
-                    to,
-                    R::RecordField {
-                        name: bf.name.clone(),
-                        cause: Box::new(cause),
-                    },
-                )
-            })?;
-        }
-        Ok(())
-    }
-
-    fn shape_to_record(&mut self, from: &Ty, to: &Ty, s: &ShapeTy, r: &RecordTy) -> Res {
-        use MismatchReason as R;
-        let layout_ok = s.sealed
-            && s.fields.len() == r.fields.len()
-            && s.fields
-                .iter()
-                .zip(&r.fields)
-                .all(|(sf, rf)| !sf.optional && ShapeKey::from_str_key(&rf.name) == sf.key);
-        if !layout_ok {
-            return Err(Mismatch::new(from, to, R::ShapeLayout));
-        }
-        for (sf, rf) in s.fields.iter().zip(&r.fields) {
-            self.check(&sf.ty, &rf.ty).map_err(|cause| {
-                Mismatch::new(
-                    from,
-                    to,
-                    R::RecordField {
-                        name: rf.name.clone(),
-                        cause: Box::new(cause),
-                    },
-                )
-            })?;
-        }
-        Ok(())
     }
 
     fn shape(&mut self, from: &Ty, to: &Ty, a: &ShapeTy, b: &ShapeTy) -> Res {
@@ -1187,7 +859,7 @@ impl<'a> Checker<'a> {
             K::Array { key, value, .. } | K::Iterable { key, value } => {
                 (key.clone(), value.clone())
             }
-            K::PhpList { elem, .. } => (Ty::non_negative_int(), elem.clone()),
+            K::List { elem, .. } => (Ty::non_negative_int(), elem.clone()),
             K::Shape(s) => {
                 let mut keys: Vec<Ty> = s.fields.iter().map(|f| shape_key_ty(&f.key)).collect();
                 let mut values: Vec<Ty> = s.fields.iter().map(|f| f.ty.clone()).collect();

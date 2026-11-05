@@ -44,7 +44,7 @@ pub fn hover(
     }
     Some(HoverResult {
         range: *range,
-        markdown: render::code(&render::ty(ty)),
+        markdown: render::code(&ty.to_string()),
     })
 }
 
@@ -68,7 +68,7 @@ fn with_doc(code: String, owner: Option<&str>, doc: Option<&stir_hir::DocText>) 
 /// A local variable: `int $x`.
 pub fn local_label(name: &str, ty: &Ty) -> String {
     let name = name.trim_start_matches('$');
-    format!("{} ${name}", render::ty(ty))
+    format!("{} ${name}", ty)
 }
 
 fn visibility(v: Visibility) -> &'static str {
@@ -185,11 +185,7 @@ pub fn describe(
                     let p = ctx.find_property(&model.self_ty(), name)?;
                     let ty = narrowed.filter(|t| !t.is_error()).unwrap_or(p.ty);
                     let readonly = if p.immutable { "readonly " } else { "" };
-                    let code = format!(
-                        "{} {readonly}{} ${name}",
-                        visibility(p.visibility),
-                        render::ty(&ty)
-                    );
+                    let code = format!("{} {readonly}{} ${name}", visibility(p.visibility), ty);
                     let doc = model
                         .def
                         .properties
@@ -200,11 +196,7 @@ pub fn describe(
                 }
                 MemberKind::Const => {
                     let ty = ctx.find_const(&model.self_ty(), name)?;
-                    Some(with_doc(
-                        format!("const {} {name}", render::ty(&ty)),
-                        Some(owner),
-                        None,
-                    ))
+                    Some(with_doc(format!("const {} {name}", ty), Some(owner), None))
                 }
                 MemberKind::Case => Some(with_doc(format!("case {name}"), Some(owner), None)),
             }

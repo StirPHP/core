@@ -10,7 +10,7 @@
 //!   salsa query results or sent across tokio tasks freely;
 //! * cloning is a reference-count bump, and equality has a pointer-equality fast path, so the
 //!   common case (comparing a type with itself or a clone of itself) is O(1);
-//! * the leaf types (`Int`, `string`, `null`, ...) are cached in statics, so building them
+//! * the leaf types (`int`, `string`, `null`, ...) are cached in statics, so building them
 //!   never allocates.
 //!
 //! The cost is that structurally equal composite types are not deduplicated in memory and a
@@ -22,19 +22,16 @@
 //! All construction goes through [`Ty::new`] (or the convenience constructors, which call
 //! it), which normalises the type so that equal types have equal representations:
 //!
-//! * unions are flattened and deduplicated; `Nothing`/`never` members are dropped; a union
-//!   containing `Error` *is* `Error`; `mixed` absorbs everything (and `Any!` absorbs even
-//!   `mixed`); literals are absorbed by their base type (`"a" | String` is `String`);
-//!   PHPStan refinements are absorbed by their base (`positive-int | int` is `int`);
-//!   `true | false` becomes `Bool` (or `bool`). A one-member union is that member and an
-//!   empty union is `Nothing`. Union equality ignores member order.
-//! * `T?` *is* `T | null` (see [`Ty::nullable`]).
+//! * unions are flattened and deduplicated; `never` members are dropped; a union containing
+//!   `Error` *is* `Error`; `mixed` absorbs everything (and an untyped value absorbs even
+//!   `mixed`); literals are absorbed by their base type (`'a'|string` is `string`); PHPStan
+//!   refinements are absorbed by their base (`positive-int|int` is `int`); `true|false`
+//!   becomes `bool`. A one-member union is that member and an empty union is `never`. Union
+//!   equality ignores member order.
+//! * `?T` *is* `T|null` (see [`Ty::nullable`]).
 //! * intersections are flattened and deduplicated, `mixed` members are dropped, and an
-//!   intersection with a bottom type is `Nothing`.
-//! * `Platform(Platform(T))` is `Platform(T)`, `mixed!` is `Any!`, and platform wrappers
-//!   around `Error`, bottom types and `null` disappear.
-//! * `int<min, max>` is `int`, `int<n, n>` is the PHP literal `n`, and an empty range is
-//!   `never`.
+//!   intersection with `never` is `never`.
+//! * `int<min, max>` is `int`, `int<n, n>` is the literal `n`, and an empty range is `never`.
 //! * class names lose a leading `\`; an untyped `Closure` is the class `Closure`;
 //!   numeric-string array-shape keys become integer keys (as in PHP).
 //!
@@ -69,15 +66,6 @@ impl Hash for Ty {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct ParamId(pub u32);
 
-/// Which of the two type families a type belongs to.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum Family {
-    /// StirPHP ("safe") types: they have methods and never coerce.
-    Safe,
-    /// PHP ("unsafe") types: no methods, PHP coercion semantics.
-    Php,
-}
-
 /// A float literal value with bitwise equality (`-0.0` is normalised to `0.0`, all NaNs are
 /// equal to each other).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -108,24 +96,13 @@ impl std::fmt::Debug for FloatLit {
     }
 }
 
-/// The value of a literal type.
+/// The value of a literal type such as `5`, `'active'` or `true`.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum LitValue {
     Int(i64),
     Float(FloatLit),
     String(SmolStr),
     Bool(bool),
-}
-
-/// A literal type such as `5`, `"active"` or `true`.
-///
-/// Literals written in `.sphp` source are [`Family::Safe`] and are assignable to both the
-/// StirPHP base type (`Int`) and the PHP one (`int`). Literals coming from PHPDoc are
-/// [`Family::Php`] and only assignable to PHP types.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct Literal {
-    pub value: LitValue,
-    pub family: Family,
 }
 
 /// A key of an array shape.
@@ -203,42 +180,6 @@ impl ShapeTy {
     }
 }
 
-/// One field of a record.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct RecordField {
-    pub name: SmolStr,
-    pub ty: Ty,
-}
-
-impl RecordField {
-    pub fn new(name: impl Into<SmolStr>, ty: Ty) -> Self {
-        Self {
-            name: name.into(),
-            ty,
-        }
-    }
-}
-
-/// A record (C-like struct). Records are *structural*: `name` and `args` are only used for
-/// display, assignability looks at `fields` alone.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct RecordTy {
-    /// The declared name, if the record type came from a `record` declaration.
-    pub name: Option<SmolStr>,
-    /// Type arguments of a generic record declaration (display only; `fields` are already
-    /// substituted).
-    pub args: Vec<Ty>,
-    /// The fields, in declaration order.
-    pub fields: Vec<RecordField>,
-}
-
-impl RecordTy {
-    /// Looks a field up by name.
-    pub fn field(&self, name: &str) -> Option<&RecordField> {
-        self.fields.iter().find(|f| f.name == name)
-    }
-}
-
 /// Whether a function parameter is required, optional (has a default) or variadic.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ParamKind {
@@ -275,8 +216,7 @@ impl FnParam {
     }
 }
 
-/// A function signature `(A, B) -> R`, shared by StirPHP function types and PHP
-/// `callable(A, B): R` / `Closure(A, B): R`.
+/// The signature of a `callable(A, B): R` or `Closure(A, B): R`.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct FnTy {
     pub params: Vec<FnParam>,
@@ -366,39 +306,10 @@ pub enum TyKind {
     /// Error recovery: assignable to and from everything, never reported.
     Error,
 
-    // ----- StirPHP ("safe") family -----
     Int,
     Float,
     String,
     Bool,
-    Unit,
-    /// The bottom type.
-    Nothing,
-    /// Read-only list, covariant.
-    List(Ty),
-    /// Mutable list, invariant.
-    MutableList(Ty),
-    /// Read-only map: key invariant, value covariant.
-    Map(Ty, Ty),
-    /// Mutable map, invariant.
-    MutableMap(Ty, Ty),
-    Record(RecordTy),
-    /// A reference to a named record from inside its own declaration (directly or
-    /// through other records): expanded one level at a time with
-    /// [`TypeEnv::unfold_record`](crate::TypeEnv::unfold_record), so recursive
-    /// records stay finite.
-    RecordRef {
-        name: SmolStr,
-        args: Vec<Ty>,
-    },
-    /// StirPHP function type `(A, B) -> R`.
-    Fn(FnTy),
-
-    // ----- PHP ("unsafe") family -----
-    PhpInt,
-    PhpFloat,
-    PhpString,
-    PhpBool,
     Void,
     Never,
     Mixed,
@@ -424,7 +335,7 @@ pub enum TyKind {
         non_empty: bool,
     },
     /// `list<T>` / `non-empty-list<T>`.
-    PhpList {
+    List {
         elem: Ty,
         non_empty: bool,
     },
@@ -440,10 +351,8 @@ pub enum TyKind {
         sig: Option<FnTy>,
         closure: bool,
     },
-
-    // ----- shared -----
     Null,
-    Literal(Literal),
+    Literal(LitValue),
     /// A nominal class, interface or enum type.
     Class {
         name: SmolStr,
@@ -461,10 +370,10 @@ pub enum TyKind {
     },
     Union(TyList),
     Intersection(TyList),
-    /// Platform type `T!` for values coming from external PHP.
-    Platform(Ty),
-    /// `Any!`: an untyped / `mixed` value from external PHP.
-    AnyPlatform,
+    /// A value the checker has no type for (the result of an unknown call, a `foreach` over
+    /// an unknown value, ...). It prints as `mixed` but, unlike a declared `mixed`, absorbs
+    /// `mixed` in a union and is accepted where external PHP code takes an argument.
+    Untyped,
 }
 
 macro_rules! leaf_ctors {
@@ -484,50 +393,38 @@ macro_rules! leaf_ctors {
 leaf_ctors! {
     /// The error-recovery type.
     error => Error;
-    /// StirPHP `Int`.
+    /// `int`.
     int => Int;
-    /// StirPHP `Float`.
+    /// `float`.
     float => Float;
-    /// StirPHP `String`.
+    /// `string`.
     string => String;
-    /// StirPHP `Bool`.
+    /// `bool`.
     bool => Bool;
-    /// StirPHP `Unit`.
-    unit => Unit;
-    /// StirPHP `Nothing`.
-    nothing => Nothing;
-    /// PHP `int`.
-    php_int => PhpInt;
-    /// PHP `float`.
-    php_float => PhpFloat;
-    /// PHP `string`.
-    php_string => PhpString;
-    /// PHP `bool`.
-    php_bool => PhpBool;
-    /// PHP `void`.
+    /// `void`.
     void => Void;
-    /// PHP `never`.
+    /// `never`.
     never => Never;
     /// `null`.
     null => Null;
-    /// PHP `mixed`.
+    /// `mixed`.
     mixed => Mixed;
-    /// PHP `object`.
+    /// `object`.
     object => Object;
-    /// PHP `resource`.
+    /// `resource`.
     resource => Resource;
-    /// PHP `scalar`.
+    /// `scalar`.
     scalar => Scalar;
-    /// PHP `numeric`.
+    /// `numeric`.
     numeric => Numeric;
-    /// PHP `array-key`.
+    /// `array-key`.
     array_key => ArrayKey;
     /// PHPStan `non-empty-string`.
     non_empty_string => NonEmptyString;
     /// PHPStan `numeric-string`.
     numeric_string => NumericString;
-    /// `Any!`.
-    any_platform => AnyPlatform;
+    /// A value without a known type.
+    untyped => Untyped;
 }
 
 impl Ty {
@@ -540,7 +437,6 @@ impl Ty {
         match kind {
             TyKind::Union(ms) => Ty::union(ms.0.into_vec()),
             TyKind::Intersection(ms) => Ty::intersection(ms.0.into_vec()),
-            TyKind::Platform(t) => Ty::platform(t),
             TyKind::IntRange { min, max } => Ty::int_range(min, max),
             TyKind::Class { name, args } => Ty::class(name, args),
             TyKind::Callable { sig, closure } => {
@@ -552,7 +448,6 @@ impl Ty {
             }
             TyKind::Error => Ty::error(),
             TyKind::Int => Ty::int(),
-            TyKind::PhpInt => Ty::php_int(),
             TyKind::Null => Ty::null(),
             TyKind::Mixed => Ty::mixed(),
             kind => Ty::raw(kind),
@@ -566,76 +461,6 @@ impl Ty {
 
     // ----- composite constructors -----
 
-    /// StirPHP `List<T>`.
-    pub fn list(elem: Ty) -> Ty {
-        Ty::raw(TyKind::List(elem))
-    }
-
-    /// StirPHP `MutableList<T>`.
-    pub fn mutable_list(elem: Ty) -> Ty {
-        Ty::raw(TyKind::MutableList(elem))
-    }
-
-    /// StirPHP `Map<K, V>`.
-    pub fn map(key: Ty, value: Ty) -> Ty {
-        Ty::raw(TyKind::Map(key, value))
-    }
-
-    /// StirPHP `MutableMap<K, V>`.
-    pub fn mutable_map(key: Ty, value: Ty) -> Ty {
-        Ty::raw(TyKind::MutableMap(key, value))
-    }
-
-    /// A record type.
-    pub fn record_ref<N: Into<SmolStr>>(name: N, args: Vec<Ty>) -> Ty {
-        Ty::raw(TyKind::RecordRef {
-            name: name.into(),
-            args,
-        })
-    }
-
-    pub fn record(record: RecordTy) -> Ty {
-        Ty::raw(TyKind::Record(record))
-    }
-
-    /// An anonymous record `{ name: ty, ... }`.
-    pub fn anon_record<N: Into<SmolStr>>(fields: impl IntoIterator<Item = (N, Ty)>) -> Ty {
-        Ty::record(RecordTy {
-            name: None,
-            args: Vec::new(),
-            fields: fields
-                .into_iter()
-                .map(|(n, t)| RecordField::new(n, t))
-                .collect(),
-        })
-    }
-
-    /// A named record (display uses the name).
-    pub fn named_record<N: Into<SmolStr>>(
-        name: impl Into<SmolStr>,
-        args: Vec<Ty>,
-        fields: impl IntoIterator<Item = (N, Ty)>,
-    ) -> Ty {
-        Ty::record(RecordTy {
-            name: Some(name.into()),
-            args,
-            fields: fields
-                .into_iter()
-                .map(|(n, t)| RecordField::new(n, t))
-                .collect(),
-        })
-    }
-
-    /// StirPHP function type.
-    pub fn func(params: Vec<FnParam>, ret: Ty) -> Ty {
-        Ty::raw(TyKind::Fn(FnTy::new(params, ret)))
-    }
-
-    /// StirPHP function type with only required parameters.
-    pub fn simple_func(params: impl IntoIterator<Item = Ty>, ret: Ty) -> Ty {
-        Ty::func(params.into_iter().map(FnParam::required).collect(), ret)
-    }
-
     /// PHP `class-string` / `class-string<T>`.
     pub fn class_string(of: Option<Ty>) -> Ty {
         Ty::raw(TyKind::ClassString(of))
@@ -644,9 +469,9 @@ impl Ty {
     /// PHPStan `int<min, max>` (`None` means unbounded).
     pub fn int_range(min: Option<i64>, max: Option<i64>) -> Ty {
         match (min, max) {
-            (None, None) => Ty::php_int(),
+            (None, None) => Ty::int(),
             (Some(a), Some(b)) if a > b => Ty::never(),
-            (Some(a), Some(b)) if a == b => Ty::php_lit(LitValue::Int(a)),
+            (Some(a), Some(b)) if a == b => Ty::lit_int(a),
             _ => Ty::raw(TyKind::IntRange { min, max }),
         }
     }
@@ -661,13 +486,13 @@ impl Ty {
         Ty::int_range(Some(0), None)
     }
 
-    /// Untyped PHP `array` (`array<array-key, mixed>`).
-    pub fn php_array() -> Ty {
+    /// A plain `array` (`array<array-key, mixed>`).
+    pub fn plain_array() -> Ty {
         static CELL: LazyLock<Ty> = LazyLock::new(|| Ty::array(Ty::array_key(), Ty::mixed()));
         CELL.clone()
     }
 
-    /// PHP `array<K, V>`.
+    /// `array<K, V>`.
     pub fn array(key: Ty, value: Ty) -> Ty {
         Ty::raw(TyKind::Array {
             key,
@@ -676,7 +501,7 @@ impl Ty {
         })
     }
 
-    /// PHP `non-empty-array<K, V>`.
+    /// `non-empty-array<K, V>`.
     pub fn non_empty_array(key: Ty, value: Ty) -> Ty {
         Ty::raw(TyKind::Array {
             key,
@@ -685,38 +510,38 @@ impl Ty {
         })
     }
 
-    /// PHP `list<T>`.
-    pub fn php_list(elem: Ty) -> Ty {
-        Ty::raw(TyKind::PhpList {
+    /// `list<T>`.
+    pub fn list(elem: Ty) -> Ty {
+        Ty::raw(TyKind::List {
             elem,
             non_empty: false,
         })
     }
 
-    /// PHP `non-empty-list<T>`.
+    /// `non-empty-list<T>`.
     pub fn non_empty_list(elem: Ty) -> Ty {
-        Ty::raw(TyKind::PhpList {
+        Ty::raw(TyKind::List {
             elem,
             non_empty: true,
         })
     }
 
-    /// PHP array shape.
+    /// An array shape.
     pub fn shape(fields: Vec<ShapeField>, sealed: bool) -> Ty {
         Ty::raw(TyKind::Shape(ShapeTy { fields, sealed }))
     }
 
-    /// PHP `iterable<K, V>`.
+    /// `iterable<K, V>`.
     pub fn iterable(key: Ty, value: Ty) -> Ty {
         Ty::raw(TyKind::Iterable { key, value })
     }
 
-    /// Untyped PHP `iterable`.
-    pub fn php_iterable() -> Ty {
+    /// A plain `iterable`.
+    pub fn plain_iterable() -> Ty {
         Ty::iterable(Ty::mixed(), Ty::mixed())
     }
 
-    /// PHP `callable` / `callable(A): R`.
+    /// `callable` / `callable(A): R`.
     pub fn callable(sig: Option<FnTy>) -> Ty {
         Ty::raw(TyKind::Callable {
             sig,
@@ -724,7 +549,7 @@ impl Ty {
         })
     }
 
-    /// PHP `Closure(A): R`; `None` gives the plain class `Closure`.
+    /// `Closure(A): R`; `None` gives the plain class `Closure`.
     pub fn closure(sig: Option<FnTy>) -> Ty {
         match sig {
             None => Ty::class("Closure", Vec::new()),
@@ -732,34 +557,29 @@ impl Ty {
         }
     }
 
-    /// A literal of the given family.
-    pub fn literal(value: LitValue, family: Family) -> Ty {
-        Ty::raw(TyKind::Literal(Literal { value, family }))
+    /// A literal type.
+    pub fn literal(value: LitValue) -> Ty {
+        Ty::raw(TyKind::Literal(value))
     }
 
-    /// A PHP-family literal (from PHPDoc).
-    pub fn php_lit(value: LitValue) -> Ty {
-        Ty::literal(value, Family::Php)
-    }
-
-    /// A `.sphp` int literal type.
+    /// An int literal type.
     pub fn lit_int(value: i64) -> Ty {
-        Ty::literal(LitValue::Int(value), Family::Safe)
+        Ty::literal(LitValue::Int(value))
     }
 
-    /// A `.sphp` float literal type.
+    /// A float literal type.
     pub fn lit_float(value: f64) -> Ty {
-        Ty::literal(LitValue::Float(FloatLit::new(value)), Family::Safe)
+        Ty::literal(LitValue::Float(FloatLit::new(value)))
     }
 
-    /// A `.sphp` string literal type.
+    /// A string literal type.
     pub fn lit_string(value: impl Into<SmolStr>) -> Ty {
-        Ty::literal(LitValue::String(value.into()), Family::Safe)
+        Ty::literal(LitValue::String(value.into()))
     }
 
-    /// A `.sphp` bool literal type.
+    /// A bool literal type.
     pub fn lit_bool(value: bool) -> Ty {
-        Ty::literal(LitValue::Bool(value), Family::Safe)
+        Ty::literal(LitValue::Bool(value))
     }
 
     /// A nominal class/interface/enum type. A leading `\` is stripped.
@@ -796,21 +616,7 @@ impl Ty {
         })
     }
 
-    /// Platform type `T!`.
-    pub fn platform(inner: Ty) -> Ty {
-        match inner.kind() {
-            TyKind::Platform(_)
-            | TyKind::AnyPlatform
-            | TyKind::Error
-            | TyKind::Nothing
-            | TyKind::Never
-            | TyKind::Null => inner,
-            TyKind::Mixed => Ty::any_platform(),
-            _ => Ty::raw(TyKind::Platform(inner)),
-        }
-    }
-
-    /// `T?`, i.e. `T | null`.
+    /// `?T`, i.e. `T|null`.
     pub fn nullable(self) -> Ty {
         Ty::union([self, Ty::null()])
     }
@@ -819,16 +625,16 @@ impl Ty {
     pub fn union(members: impl IntoIterator<Item = Ty>) -> Ty {
         let mut out: Vec<Ty> = Vec::new();
         let mut has_mixed = false;
-        let mut has_any = false;
-        fn push(t: Ty, out: &mut Vec<Ty>, mixed: &mut bool, any: &mut bool) -> bool {
+        let mut has_untyped = false;
+        fn push(t: Ty, out: &mut Vec<Ty>, mixed: &mut bool, untyped: &mut bool) -> bool {
             match t.kind() {
                 TyKind::Error => return false,
-                TyKind::Nothing | TyKind::Never => {}
+                TyKind::Never => {}
                 TyKind::Mixed => *mixed = true,
-                TyKind::AnyPlatform => *any = true,
+                TyKind::Untyped => *untyped = true,
                 TyKind::Union(ms) => {
                     for m in ms.iter() {
-                        if !push(m.clone(), out, mixed, any) {
+                        if !push(m.clone(), out, mixed, untyped) {
                             return false;
                         }
                     }
@@ -842,12 +648,12 @@ impl Ty {
             true
         }
         for m in members {
-            if !push(m, &mut out, &mut has_mixed, &mut has_any) {
+            if !push(m, &mut out, &mut has_mixed, &mut has_untyped) {
                 return Ty::error();
             }
         }
-        if has_any {
-            return Ty::any_platform();
+        if has_untyped {
+            return Ty::untyped();
         }
         if has_mixed {
             return Ty::mixed();
@@ -855,51 +661,37 @@ impl Ty {
 
         // Absorption of literals / refinements by their base type.
         let has = |k: &TyKind| out.iter().any(|t| t.kind() == k);
-        let (s_int, s_float, s_str, s_bool) = (
+        let (int, float, string, bool_) = (
             has(&TyKind::Int),
             has(&TyKind::Float),
             has(&TyKind::String),
             has(&TyKind::Bool),
         );
-        let (p_int, p_float, p_str, p_bool) = (
-            has(&TyKind::PhpInt),
-            has(&TyKind::PhpFloat),
-            has(&TyKind::PhpString),
-            has(&TyKind::PhpBool),
-        );
         out.retain(|t| match t.kind() {
-            TyKind::Literal(Literal { value, family }) => {
-                let safe = *family == Family::Safe;
-                let (s, p) = match value {
-                    LitValue::Int(_) => (s_int, p_int),
-                    LitValue::Float(_) => (s_float, p_float),
-                    LitValue::String(_) => (s_str, p_str),
-                    LitValue::Bool(_) => (s_bool, p_bool),
-                };
-                !(p || (safe && s))
-            }
-            TyKind::IntRange { .. } => !p_int,
-            TyKind::NonEmptyString | TyKind::NumericString | TyKind::ClassString(_) => !p_str,
+            TyKind::Literal(LitValue::Int(_)) | TyKind::IntRange { .. } => !int,
+            TyKind::Literal(LitValue::Float(_)) => !float,
+            TyKind::Literal(LitValue::String(_))
+            | TyKind::NonEmptyString
+            | TyKind::NumericString
+            | TyKind::ClassString(_) => !string,
+            TyKind::Literal(LitValue::Bool(_)) => !bool_,
             _ => true,
         });
 
-        // `true | false` => `Bool` / `bool`.
-        for (family, base) in [(Family::Safe, Ty::bool()), (Family::Php, Ty::php_bool())] {
-            let t = Ty::literal(LitValue::Bool(true), family);
-            let f = Ty::literal(LitValue::Bool(false), family);
-            if let (Some(ti), Some(fi)) = (
-                out.iter().position(|m| *m == t),
-                out.iter().position(|m| *m == f),
-            ) {
-                let first = ti.min(fi);
-                let second = ti.max(fi);
-                out.remove(second);
-                out[first] = base;
-            }
+        // `true|false` => `bool`.
+        let (t, f) = (Ty::lit_bool(true), Ty::lit_bool(false));
+        if let (Some(ti), Some(fi)) = (
+            out.iter().position(|m| *m == t),
+            out.iter().position(|m| *m == f),
+        ) {
+            let first = ti.min(fi);
+            let second = ti.max(fi);
+            out.remove(second);
+            out[first] = Ty::bool();
         }
 
         match out.len() {
-            0 => Ty::nothing(),
+            0 => Ty::never(),
             1 => out.pop().expect("one member"),
             _ => Ty::raw(TyKind::Union(TyList::new(out))),
         }
@@ -911,7 +703,7 @@ impl Ty {
         fn push(t: Ty, out: &mut Vec<Ty>) -> Option<Ty> {
             match t.kind() {
                 TyKind::Error => return Some(Ty::error()),
-                TyKind::Nothing | TyKind::Never => return Some(Ty::nothing()),
+                TyKind::Never => return Some(Ty::never()),
                 TyKind::Mixed => {}
                 TyKind::Intersection(ms) => {
                     for m in ms.iter() {
@@ -954,9 +746,9 @@ impl Ty {
         matches!(self.kind(), TyKind::Error)
     }
 
-    /// `Nothing` or `never`.
-    pub fn is_bottom(&self) -> bool {
-        matches!(self.kind(), TyKind::Nothing | TyKind::Never)
+    /// `never`.
+    pub fn is_never(&self) -> bool {
+        matches!(self.kind(), TyKind::Never)
     }
 
     pub fn is_null(&self) -> bool {
@@ -967,19 +759,9 @@ impl Ty {
         matches!(self.kind(), TyKind::Union(_))
     }
 
-    /// Whether this is `Any!` (shallow).
-    pub fn is_any_platform(&self) -> bool {
-        matches!(self.kind(), TyKind::AnyPlatform)
-    }
-
-    /// Whether `Any!` occurs anywhere inside this type.
-    pub fn contains_any_platform(&self) -> bool {
-        let mut found = false;
-        self.walk(&mut |t| {
-            found |= t.is_any_platform();
-            !found
-        });
-        found
+    /// Whether this is a value without a known type (shallow).
+    pub fn is_untyped(&self) -> bool {
+        matches!(self.kind(), TyKind::Untyped)
     }
 
     /// Whether an error type occurs anywhere inside this type.
@@ -992,93 +774,21 @@ impl Ty {
         found
     }
 
-    /// The family of this type's outermost constructor, or `None` for family-neutral types
-    /// (`null`, classes, params, `static`, unions, intersections, platform types, `Error`).
-    pub fn family(&self) -> Option<Family> {
-        use TyKind as K;
-        match self.kind() {
-            K::Int
-            | K::Float
-            | K::String
-            | K::Bool
-            | K::Unit
-            | K::Nothing
-            | K::List(_)
-            | K::MutableList(_)
-            | K::Map(..)
-            | K::MutableMap(..)
-            | K::Record(_)
-            | K::RecordRef { .. }
-            | K::Fn(_) => Some(Family::Safe),
-            K::PhpInt
-            | K::PhpFloat
-            | K::PhpString
-            | K::PhpBool
-            | K::Void
-            | K::Never
-            | K::Mixed
-            | K::Object
-            | K::Resource
-            | K::Scalar
-            | K::Numeric
-            | K::ArrayKey
-            | K::NonEmptyString
-            | K::NumericString
-            | K::ClassString(_)
-            | K::IntRange { .. }
-            | K::Array { .. }
-            | K::PhpList { .. }
-            | K::Shape(_)
-            | K::Iterable { .. }
-            | K::Callable { .. } => Some(Family::Php),
-            K::Literal(l) => Some(l.family),
-            K::Null
-            | K::Error
-            | K::Class { .. }
-            | K::Param { .. }
-            | K::SelfType { .. }
-            | K::Union(_)
-            | K::Intersection(_)
-            | K::Platform(_)
-            | K::AnyPlatform => None,
-        }
-    }
-
-    /// Whether the outermost constructor is a StirPHP-family type.
-    pub fn is_safe(&self) -> bool {
-        self.family() == Some(Family::Safe)
-    }
-
-    /// Whether the outermost constructor is a PHP-family type.
-    pub fn is_php(&self) -> bool {
-        self.family() == Some(Family::Php)
-    }
-
     // ----- traversal -----
 
     /// Calls `f` on each direct child type.
     pub fn for_each_child(&self, f: &mut dyn FnMut(&Ty)) {
         use TyKind as K;
         match self.kind() {
-            K::List(t) | K::MutableList(t) | K::Platform(t) => f(t),
             K::ClassString(Some(t)) => f(t),
             K::SelfType { class, .. } => f(class),
-            K::Map(k, v) | K::MutableMap(k, v) => {
-                f(k);
-                f(v);
-            }
             K::Array { key, value, .. } | K::Iterable { key, value } => {
                 f(key);
                 f(value);
             }
-            K::PhpList { elem, .. } => f(elem),
-            K::Record(r) => {
-                r.args.iter().for_each(&mut *f);
-                r.fields.iter().for_each(|fl| f(&fl.ty));
-            }
-            K::RecordRef { args, .. } => args.iter().for_each(f),
+            K::List { elem, .. } => f(elem),
             K::Shape(s) => s.fields.iter().for_each(|fl| f(&fl.ty)),
-            K::Fn(sig) | K::Callable { sig: Some(sig), .. } => {
+            K::Callable { sig: Some(sig), .. } => {
                 sig.params.iter().for_each(|p| f(&p.ty));
                 f(&sig.ret);
             }
@@ -1099,27 +809,6 @@ impl Ty {
     pub fn map_children(&self, f: &mut dyn FnMut(&Ty) -> Ty) -> Ty {
         use TyKind as K;
         let kind = match self.kind() {
-            K::List(t) => K::List(f(t)),
-            K::MutableList(t) => K::MutableList(f(t)),
-            K::Map(k, v) => K::Map(f(k), f(v)),
-            K::MutableMap(k, v) => K::MutableMap(f(k), f(v)),
-            K::RecordRef { name, args } => K::RecordRef {
-                name: name.clone(),
-                args: args.iter().map(&mut *f).collect(),
-            },
-            K::Record(r) => K::Record(RecordTy {
-                name: r.name.clone(),
-                args: r.args.iter().map(&mut *f).collect(),
-                fields: r
-                    .fields
-                    .iter()
-                    .map(|fl| RecordField {
-                        name: fl.name.clone(),
-                        ty: f(&fl.ty),
-                    })
-                    .collect(),
-            }),
-            K::Fn(sig) => K::Fn(sig.map(f)),
             K::ClassString(Some(t)) => K::ClassString(Some(f(t))),
             K::Array {
                 key,
@@ -1130,7 +819,7 @@ impl Ty {
                 value: f(value),
                 non_empty: *non_empty,
             },
-            K::PhpList { elem, non_empty } => K::PhpList {
+            K::List { elem, non_empty } => K::List {
                 elem: f(elem),
                 non_empty: *non_empty,
             },
@@ -1167,7 +856,6 @@ impl Ty {
             },
             K::Union(ms) => K::Union(TyList::new(ms.iter().map(&mut *f).collect())),
             K::Intersection(ms) => K::Intersection(TyList::new(ms.iter().map(&mut *f).collect())),
-            K::Platform(t) => K::Platform(f(t)),
             _ => return self.clone(),
         };
         Ty::new(kind)

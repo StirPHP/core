@@ -4,24 +4,9 @@ use stir_checker::model_api::{ParamInfo, SigInfo};
 use stir_hir::{ClassKind, DocText};
 use stir_types::Ty;
 
-/// A type as PHPDoc writes it, with class names as PHP's errors print them: no
-/// leading backslash.
-pub fn ty(ty: &Ty) -> String {
-    let doc = stir_types::to_phpdoc(ty);
-    let mut out = String::with_capacity(doc.len());
-    let mut in_name = false;
-    for c in doc.chars() {
-        if c != '\\' || in_name {
-            out.push(c);
-        }
-        in_name = c.is_alphanumeric() || c == '_' || c == '\\';
-    }
-    out
-}
-
 /// `int $name`, with `&`, `...` and ` = …` decorations.
 pub fn param(p: &ParamInfo) -> String {
-    let mut s = ty(&p.ty);
+    let mut s = p.ty.to_string();
     s.push(' ');
     if p.by_ref {
         s.push('&');
@@ -45,7 +30,7 @@ pub fn type_params(params: &[(smol_str::SmolStr, Option<Ty>)]) -> String {
     let list: Vec<String> = params
         .iter()
         .map(|(n, b)| match b {
-            Some(b) => format!("{n} of {}", ty(b)),
+            Some(b) => format!("{n} of {b}"),
             None => n.to_string(),
         })
         .collect();
@@ -80,7 +65,7 @@ pub fn signature(sig: &SigInfo, keyword: &str) -> SigLabel {
     label.push(')');
     if sig.ret_declared || !sig.ret.is_error() {
         label.push_str(": ");
-        label.push_str(&ty(&sig.ret));
+        label.push_str(&sig.ret.to_string());
     }
     SigLabel { label, params }
 }

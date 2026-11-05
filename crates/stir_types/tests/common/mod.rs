@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use stir_types::{
-    FnTy, FxHashMap, LitValue, ParamId, ShapeField, Ty, TypeEnv, Variance, check_assignable, subst,
+    FnParam, FnTy, FxHashMap, ParamId, ShapeField, Ty, TypeEnv, Variance, check_assignable, subst,
 };
 
 #[derive(Default)]
@@ -11,7 +11,6 @@ pub struct ClassDecl {
     pub supers: Vec<Ty>,
     pub is_final: bool,
     pub is_interface: bool,
-    pub sealed: Option<Vec<Ty>>,
     pub invoke: Option<FnTy>,
 }
 
@@ -57,11 +56,6 @@ impl TypeEnv for MockEnv {
     fn is_interface(&self, class: &str) -> bool {
         self.classes.get(class).is_some_and(|d| d.is_interface)
     }
-    fn sealed_subclasses(&self, class: &str, args: &[Ty]) -> Option<Vec<Ty>> {
-        let map = self.bind(class, args);
-        let subs = self.classes.get(class)?.sealed.as_ref()?;
-        Some(subs.iter().map(|s| subst(s, &map)).collect())
-    }
     fn invoke_signature(&self, class: &str, _args: &[Ty]) -> Option<FnTy> {
         self.classes.get(class)?.invoke.clone()
     }
@@ -70,14 +64,13 @@ impl TypeEnv for MockEnv {
 // Type parameters used by the fixtures.
 pub const T_ID: ParamId = ParamId(0); // unbounded
 pub const U_ID: ParamId = ParamId(1); // U of Pet
-pub const N_ID: ParamId = ParamId(2); // N of Int?
+pub const N_ID: ParamId = ParamId(2); // N of ?int
 pub const BOX_T: ParamId = ParamId(10);
 pub const SINK_T: ParamId = ParamId(11);
 pub const CELL_T: ParamId = ParamId(12);
 pub const COLL_T: ParamId = ParamId(13);
 pub const TRAV_K: ParamId = ParamId(14);
 pub const TRAV_V: ParamId = ParamId(15);
-pub const RES_T: ParamId = ParamId(16);
 
 pub fn tp() -> Ty {
     Ty::param(T_ID, "T")
@@ -98,14 +91,13 @@ pub fn cls_args(name: &str, args: Vec<Ty>) -> Ty {
 
 /// Hierarchy:
 /// - `interface Animal`, `interface Named`
-/// - `open class Pet : Animal`, `final class Dog : Pet, Named`, `final class Cat : Pet`
-/// - `open class Robot` (unrelated)
-/// - `sealed interface Shape` permits `final Circle`, `sealed Poly` permits `final Square`,
-///   `final Triangle`
-/// - `class Box<out T>`, `class Sink<in T>`, `class Cell<T>`, `final class IntBox : Box<Int>`
-/// - `interface Traversable<K, V>`, `class Coll<T> : Traversable<int, T>`
+/// - `class Pet implements Animal`, `final class Dog extends Pet implements Named`,
+///   `final class Cat extends Pet`
+/// - `class Robot` (unrelated)
+/// - `class Box<covariant T>`, `class Sink<contravariant T>`, `class Cell<T>`,
+///   `final class IntBox extends Box<int>`
+/// - `interface Traversable<K, V>`, `class Coll<T> implements Traversable<int, T>`
 /// - `final class Doubler` with `__invoke(int): int`
-/// - `sealed class Res<out T>` permits `Ok<T>`, `Err`
 pub fn env() -> MockEnv {
     let mut e = MockEnv::default();
     let mut add = |name: &str, decl: ClassDecl| {
@@ -150,46 +142,6 @@ pub fn env() -> MockEnv {
     );
     add("Robot", ClassDecl::default());
     add(
-        "Shape",
-        ClassDecl {
-            is_interface: true,
-            sealed: Some(vec![cls("Circle"), cls("Poly")]),
-            ..Default::default()
-        },
-    );
-    add(
-        "Circle",
-        ClassDecl {
-            supers: vec![cls("Shape")],
-            is_final: true,
-            ..Default::default()
-        },
-    );
-    add(
-        "Poly",
-        ClassDecl {
-            supers: vec![cls("Shape")],
-            sealed: Some(vec![cls("Square"), cls("Triangle")]),
-            ..Default::default()
-        },
-    );
-    add(
-        "Square",
-        ClassDecl {
-            supers: vec![cls("Poly")],
-            is_final: true,
-            ..Default::default()
-        },
-    );
-    add(
-        "Triangle",
-        ClassDecl {
-            supers: vec![cls("Poly")],
-            is_final: true,
-            ..Default::default()
-        },
-    );
-    add(
         "Box",
         ClassDecl {
             params: vec![(BOX_T, Variance::Out)],
@@ -232,7 +184,7 @@ pub fn env() -> MockEnv {
             params: vec![(COLL_T, Variance::Invariant)],
             supers: vec![cls_args(
                 "Traversable",
-                vec![Ty::php_int(), Ty::param(COLL_T, "T")],
+                vec![Ty::int(), Ty::param(COLL_T, "T")],
             )],
             ..Default::default()
         },
@@ -241,36 +193,7 @@ pub fn env() -> MockEnv {
         "Doubler",
         ClassDecl {
             is_final: true,
-            invoke: Some(FnTy::new(
-                vec![stir_types::FnParam::required(Ty::php_int())],
-                Ty::php_int(),
-            )),
-            ..Default::default()
-        },
-    );
-    let res_t = Ty::param(RES_T, "T");
-    add(
-        "Res",
-        ClassDecl {
-            params: vec![(RES_T, Variance::Out)],
-            sealed: Some(vec![cls_args("Ok", vec![res_t.clone()]), cls("Err")]),
-            ..Default::default()
-        },
-    );
-    add(
-        "Ok",
-        ClassDecl {
-            params: vec![(ParamId(17), Variance::Out)],
-            supers: vec![cls_args("Res", vec![Ty::param(ParamId(17), "T")])],
-            is_final: true,
-            ..Default::default()
-        },
-    );
-    add(
-        "Err",
-        ClassDecl {
-            supers: vec![cls_args("Res", vec![Ty::nothing()])],
-            is_final: true,
+            invoke: Some(FnTy::new(vec![FnParam::required(Ty::int())], Ty::int())),
             ..Default::default()
         },
     );
@@ -284,17 +207,8 @@ pub fn env() -> MockEnv {
 pub fn s(v: &str) -> Ty {
     Ty::lit_string(v)
 }
-pub fn ps(v: &str) -> Ty {
-    Ty::php_lit(LitValue::String(v.into()))
-}
-pub fn pi(v: i64) -> Ty {
-    Ty::php_lit(LitValue::Int(v))
-}
 pub fn union(ms: Vec<Ty>) -> Ty {
     Ty::union(ms)
-}
-pub fn rec(fields: &[(&str, Ty)]) -> Ty {
-    Ty::anon_record(fields.iter().map(|(n, t)| (*n, t.clone())))
 }
 pub fn shape(fields: &[(&str, Ty)], sealed: bool) -> Ty {
     Ty::shape(
@@ -305,8 +219,13 @@ pub fn shape(fields: &[(&str, Ty)], sealed: bool) -> Ty {
         sealed,
     )
 }
+/// `Closure(params): ret`, with only required parameters.
 pub fn fun(params: Vec<Ty>, ret: Ty) -> Ty {
-    Ty::simple_func(params, ret)
+    func(params.into_iter().map(FnParam::required).collect(), ret)
+}
+/// `Closure(params): ret`.
+pub fn func(params: Vec<FnParam>, ret: Ty) -> Ty {
+    Ty::closure(Some(FnTy::new(params, ret)))
 }
 
 /// Runs a table of `(from, to, expected)` assignability cases and reports every failure.

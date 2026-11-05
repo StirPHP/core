@@ -11,7 +11,7 @@ use stir_hir::name::Scope;
 use stir_hir::type_ref::{parse_int, unquote};
 use stir_hir::{ClassKind, FileItems, Visibility};
 use stir_syntax::{SyntaxKind, SyntaxKind::*, SyntaxNode, SyntaxToken, TextRange};
-use stir_types::{Family, LitValue, Ty, TyKind};
+use stir_types::{LitValue, Ty, TyKind};
 
 use crate::codes;
 use crate::infer::{Inference, widen_literals};
@@ -25,7 +25,7 @@ pub enum LocalKind {
     /// `$this`
     This,
     /// A variable, or a property path that narrowing tracks.
-    Php,
+    Variable,
     /// A `foreach` / `catch` binding.
     Loop,
 }
@@ -341,11 +341,14 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
         if let Err(m) = stir_types::check_assignable(self.ctx, from, to) {
             let mut msg = format!("type mismatch in {what}: {m}");
-            if from.is_any_platform() {
-                msg.push_str("; narrow the untyped value first (`is` / `as`)");
+            if from.is_untyped() {
+                msg.push_str(
+                    "; narrow the untyped value first (an `is_*()` check or `instanceof`)",
+                );
             }
             let partial = from.is_union() && from.members().iter().any(|m| self.assignable(m, to));
             let implicit_mixed = self.is_implicitly_mixed(from, to);
+            let only_error_mixed = mixed_only_from_errors(&m);
             self.error(range, codes::TYPE_MISMATCH, msg);
             if implicit_mixed {
                 // PHPStan only checks inside `array` from level 9
@@ -354,6 +357,11 @@ impl<'a, 'db> Checker<'a, 'db> {
                 }
             } else if partial {
                 self.tag_partial_union();
+            } else if only_error_mixed {
+                // the `mixed` in the message isn't a real one: not a level 9 problem
+                if let Some(d) = self.diags.last_mut() {
+                    d.php_level = Some(if what.starts_with("argument") { 5 } else { 3 });
+                }
             }
         }
     }
@@ -369,11 +377,11 @@ impl<'a, 'db> Checker<'a, 'db> {
             || (from
                 .members()
                 .iter()
-                .all(|m| matches!(m.kind(), TyKind::Array { .. } | TyKind::PhpList { .. }))
+                .all(|m| matches!(m.kind(), TyKind::Array { .. } | TyKind::List { .. }))
                 && to
                     .members()
                     .iter()
-                    .any(|m| matches!(m.kind(), TyKind::Shape(_) | TyKind::PhpList { .. })))
+                    .any(|m| matches!(m.kind(), TyKind::Shape(_) | TyKind::List { .. })))
     }
 
     // ------------------------------------------------------------ locals
@@ -467,7 +475,7 @@ impl<'a, 'db> Checker<'a, 'db> {
     pub fn check_root(&mut self, root: &SyntaxNode) {
         self.check_declarations();
         self.fns.push(FnCx {
-            ret: Ty::unit(),
+            ret: Ty::void(),
             infer_ret: true,
             returns: Vec::new(),
         });
@@ -514,7 +522,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     || self
                         .types
                         .get(&e.text_range())
-                        .is_some_and(|t| t.is_bottom())
+                        .is_some_and(|t| t.is_never())
             }),
             BLOCK => node.children().any(|s| self.diverges(&s)),
             IF_STMT => {
@@ -654,8 +662,8 @@ impl<'a, 'db> Checker<'a, 'db> {
                     let name = text_of(&v);
                     self.declare(
                         &name[1..],
-                        Ty::any_platform(),
-                        LocalKind::Php,
+                        Ty::untyped(),
+                        LocalKind::Variable,
                         v.text_range(),
                     );
                 }
@@ -667,7 +675,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                         .map(|e| widen_literals(&self.expr(e, None)))
                         .unwrap_or_else(Ty::null);
                     if let Some(v) = sv.token(VARIABLE) {
-                        self.declare(&v.text()[1..], ty, LocalKind::Php, v.text_range());
+                        self.declare(&v.text()[1..], ty, LocalKind::Variable, v.text_range());
                     }
                 }
             }
@@ -841,7 +849,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 for elem in target.children_of(ARRAY_ELEM) {
                     let parts = exprs_of(&elem);
                     if let Some(last) = parts.last() {
-                        let elem_ty = self.index_type(&ty, None).unwrap_or_else(Ty::any_platform);
+                        let elem_ty = self.index_type(&ty, None).unwrap_or_else(Ty::untyped);
                         self.bind_target(last, elem_ty);
                     }
                 }
@@ -881,16 +889,16 @@ impl<'a, 'db> Checker<'a, 'db> {
             return (Ty::union(keys), Ty::union(vals));
         }
         match ty.kind() {
-            TyKind::PhpList { elem, .. } if matches!(elem.kind(), TyKind::Never) => {
-                (Ty::php_int(), Ty::any_platform())
+            TyKind::List { elem, .. } if matches!(elem.kind(), TyKind::Never) => {
+                (Ty::int(), Ty::untyped())
             }
-            TyKind::PhpList { elem, .. } => (Ty::php_int(), elem.clone()),
+            TyKind::List { elem, .. } => (Ty::int(), elem.clone()),
             TyKind::Array { key, value, .. } | TyKind::Iterable { key, value } => {
                 (key.clone(), value.clone())
             }
             TyKind::Shape(_) => (Ty::array_key(), Ty::mixed()),
             TyKind::Error | TyKind::Mixed => (Ty::error(), Ty::error()),
-            TyKind::Never | TyKind::Nothing => (Ty::never(), Ty::never()),
+            TyKind::Never => (Ty::never(), Ty::never()),
             TyKind::Class { name, args } => {
                 // Traversable / Iterator / IteratorAggregate
                 for anc in self.ctx.ancestors(&Ty::class(name.clone(), args.clone())) {
@@ -904,9 +912,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                         return (a[0].clone(), a[1].clone());
                     }
                 }
-                (Ty::any_platform(), Ty::any_platform())
+                (Ty::untyped(), Ty::untyped())
             }
-            _ if ty.is_any_platform() => (Ty::error(), Ty::error()),
+            _ if ty.is_untyped() => (Ty::error(), Ty::error()),
             _ => {
                 self.error(
                     range,
@@ -938,7 +946,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                         self.error(
                             v.text_range(),
                             codes::RETURN_VALUE,
-                            "this function returns `Unit`; it can't return a value",
+                            "this function returns `void`; it can't return a value",
                         );
                     }
                 } else if !in_generator(node) {
@@ -947,7 +955,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             None => {
                 if fcx.infer_ret {
-                    self.fns.last_mut().unwrap().returns.push(Ty::unit());
+                    self.fns.last_mut().unwrap().returns.push(Ty::void());
                 }
             }
         }
@@ -1002,7 +1010,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         for p in &sig.params {
             let mut ty = p.ty.clone();
             if p.variadic {
-                ty = Ty::php_list(ty);
+                ty = Ty::list(ty);
             }
             self.declare(&p.name, ty, LocalKind::Param, p.range);
         }
@@ -1146,7 +1154,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     .ty
                     .members()
                     .iter()
-                    .filter(|m| !matches!(m.kind(), TyKind::Literal(l) if matches!(l.value, LitValue::Bool(false))))
+                    .filter(|m| !matches!(m.kind(), TyKind::Literal(LitValue::Bool(false))))
                     .cloned()
                     .collect::<Vec<_>>();
                 (
@@ -1283,12 +1291,12 @@ impl<'a, 'db> Checker<'a, 'db> {
                     .trim_start_matches('\\')
                     .to_ascii_lowercase();
                 let test = match fname.as_str() {
-                    "is_int" | "is_integer" | "is_long" => Ty::php_int(),
-                    "is_float" | "is_double" => Ty::php_float(),
-                    "is_string" => Ty::php_string(),
-                    "is_bool" => Ty::php_bool(),
+                    "is_int" | "is_integer" | "is_long" => Ty::int(),
+                    "is_float" | "is_double" => Ty::float(),
+                    "is_string" => Ty::string(),
+                    "is_bool" => Ty::bool(),
                     "is_null" => Ty::null(),
-                    "is_array" => Ty::php_array(),
+                    "is_array" => Ty::plain_array(),
                     "is_object" => Ty::object(),
                     "is_resource" => Ty::resource(),
                     // anything callable isn't null; what else it might be, only the value knows
@@ -1395,7 +1403,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         let local = Local {
             ty: ty.clone(),
             declared: ty,
-            kind: LocalKind::Php,
+            kind: LocalKind::Variable,
             range: node.text_range(),
         };
         // the outermost frame, so it outlives the block it was narrowed in
@@ -1481,14 +1489,12 @@ impl<'a, 'db> Checker<'a, 'db> {
                 };
                 match tok.kind() {
                     INT_NUMBER => match parse_int(tok.text()) {
-                        Some(v) => Ty::literal(LitValue::Int(v), Family::Php),
+                        Some(v) => Ty::literal(LitValue::Int(v)),
                         // overflowing integer literals are floats in PHP
-                        None => Ty::php_float(),
+                        None => Ty::float(),
                     },
                     FLOAT_NUMBER => match tok.text().replace('_', "").parse::<f64>() {
-                        Ok(v) => {
-                            Ty::literal(LitValue::Float(stir_types::FloatLit::new(v)), Family::Php)
-                        }
+                        Ok(v) => Ty::literal(LitValue::Float(stir_types::FloatLit::new(v))),
                         Err(_) => Ty::error(),
                     },
                     _ => Ty::error(),
@@ -1496,7 +1502,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             STRING_LITERAL => {
                 let text = text_of(node);
-                Ty::literal(LitValue::String(SmolStr::new(unquote(&text))), Family::Php)
+                Ty::literal(LitValue::String(SmolStr::new(unquote(&text))))
             }
             INTERP_STRING | HEREDOC => {
                 for part in node.children() {
@@ -1506,7 +1512,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                         }
                     }
                 }
-                Ty::php_string()
+                Ty::string()
             }
             SHELL_EXEC => {
                 for part in node.children() {
@@ -1514,15 +1520,11 @@ impl<'a, 'db> Checker<'a, 'db> {
                         self.expr(&e, None);
                     }
                 }
-                Ty::union([
-                    Ty::php_string(),
-                    Ty::null(),
-                    Ty::literal(LitValue::Bool(false), Family::Php),
-                ])
+                Ty::union([Ty::string(), Ty::null(), Ty::literal(LitValue::Bool(false))])
             }
             MAGIC_CONST => match op_token(node).map(|t| t.kind()) {
-                Some(LINE_KW) => Ty::php_int(),
-                _ => Ty::php_string(),
+                Some(LINE_KW) => Ty::int(),
+                _ => Ty::string(),
             },
             PAREN_EXPR => match exprs_of(node).first() {
                 Some(e) => self.expr(e, expected),
@@ -1534,7 +1536,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     self.expr(&e, None);
                 }
 
-                Ty::any_platform()
+                Ty::untyped()
             }
             NAME_EXPR => self.name_expr(node),
             BIN_EXPR => self.binary(node, expected),
@@ -1588,18 +1590,18 @@ impl<'a, 'db> Checker<'a, 'db> {
                         self.expr(&r, None);
                     }
                 }
-                Ty::php_bool()
+                Ty::bool()
             }
             CAST_EXPR => {
                 if let Some(e) = exprs_of(node).first() {
                     self.expr(e, None);
                 }
                 match op_token(node).map(|t| t.kind()) {
-                    Some(INT_CAST) => Ty::php_int(),
-                    Some(FLOAT_CAST) => Ty::php_float(),
-                    Some(STRING_CAST) => Ty::php_string(),
-                    Some(BOOL_CAST) => Ty::php_bool(),
-                    Some(ARRAY_CAST) => Ty::php_array(),
+                    Some(INT_CAST) => Ty::int(),
+                    Some(FLOAT_CAST) => Ty::float(),
+                    Some(STRING_CAST) => Ty::string(),
+                    Some(BOOL_CAST) => Ty::bool(),
+                    Some(ARRAY_CAST) => Ty::plain_array(),
                     Some(OBJECT_CAST) => Ty::class("stdClass", Vec::new()),
                     Some(VOID_CAST) => Ty::void(),
                     _ => Ty::null(),
@@ -1655,7 +1657,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 match self.index_type(&indexed, it.as_ref()) {
                     Some(t) => t,
                     None => {
-                        if !bt.is_error() && !bt.is_any_platform() {
+                        if !bt.is_error() && !bt.is_untyped() {
                             self.error(
                                 base.text_range(),
                                 codes::INVALID_OPERAND,
@@ -1667,7 +1669,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 }
             }
             ARRAY_EXPR => self.array_literal(node, expected),
-            LIST_EXPR => Ty::any_platform(),
+            LIST_EXPR => Ty::untyped(),
             NEW_EXPR => self.new_expr(node, expected),
             CLONE_EXPR => {
                 let es = exprs_of(node);
@@ -1698,7 +1700,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     }
                 }
                 self.probing -= 1;
-                Ty::php_bool()
+                Ty::bool()
             }
             EVAL_EXPR | INCLUDE_EXPR => {
                 self.dynamic_vars_fn = Some(self.fns.len());
@@ -1712,7 +1714,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                         }
                     }
                 }
-                Ty::any_platform()
+                Ty::untyped()
             }
             EXIT_EXPR => {
                 if let Some(args) = node.child(ARG_LIST) {
@@ -1722,25 +1724,25 @@ impl<'a, 'db> Checker<'a, 'db> {
                         }
                     }
                 }
-                Ty::nothing()
+                Ty::never()
             }
             PRINT_EXPR => {
                 for e in exprs_of(node) {
                     self.expr(&e, None);
                 }
-                Ty::literal(LitValue::Int(1), Family::Php)
+                Ty::literal(LitValue::Int(1))
             }
             YIELD_EXPR | YIELD_FROM_EXPR => {
                 for e in exprs_of(node) {
                     self.expr(&e, None);
                 }
-                Ty::any_platform()
+                Ty::untyped()
             }
             THROW_EXPR => {
                 for e in exprs_of(node) {
                     let t = self.expr(&e, None);
                     if !t.is_error()
-                        && !t.is_any_platform()
+                        && !t.is_untyped()
                         && !self.assignable(&t, &Ty::class("Throwable", Vec::new()))
                     {
                         self.error(
@@ -1750,7 +1752,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                         );
                     }
                 }
-                Ty::nothing()
+                Ty::never()
             }
             ERROR_SUPPRESS_EXPR => match exprs_of(node).first() {
                 Some(e) => self.expr(e, expected),
@@ -1784,16 +1786,16 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             None => {
                 if is_superglobal(name) {
-                    return Ty::any_platform();
+                    return Ty::untyped();
                 }
                 if self.dynamic_vars_fn == Some(self.fns.len()) {
-                    self.declare(name, Ty::any_platform(), LocalKind::Php, node.text_range());
-                    return Ty::any_platform();
+                    self.declare(name, Ty::untyped(), LocalKind::Variable, node.text_range());
+                    return Ty::untyped();
                 }
                 if self.probing > 0 {
                     // from here on, it may exist
-                    self.declare(name, Ty::any_platform(), LocalKind::Php, node.text_range());
-                    return Ty::any_platform();
+                    self.declare(name, Ty::untyped(), LocalKind::Variable, node.text_range());
+                    return Ty::untyped();
                 }
                 if self.fns.len() > 1 {
                     self.error(
@@ -1804,7 +1806,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     Ty::error()
                 } else {
                     // top-level PHP code: unknown globals
-                    Ty::any_platform()
+                    Ty::untyped()
                 }
             }
         }
@@ -1830,8 +1832,8 @@ impl<'a, 'db> Checker<'a, 'db> {
     fn name_expr(&mut self, node: &SyntaxNode) -> Ty {
         let text = text_of(node);
         match text.to_ascii_lowercase().as_str() {
-            "true" => return Ty::literal(LitValue::Bool(true), Family::Php),
-            "false" => return Ty::literal(LitValue::Bool(false), Family::Php),
+            "true" => return Ty::literal(LitValue::Bool(true)),
+            "false" => return Ty::literal(LitValue::Bool(false)),
             "null" => return Ty::null(),
             _ => {}
         }
@@ -1850,7 +1852,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 self.def(node.text_range(), Def::Const(loc));
                 self.const_type(loc)
             }
-            None if self.guarded_by("defined", &text) => Ty::any_platform(),
+            None if self.guarded_by("defined", &text) => Ty::untyped(),
             None => {
                 self.error(
                     node.text_range(),
@@ -1866,27 +1868,27 @@ impl<'a, 'db> Checker<'a, 'db> {
         let items = self.ctx.items(loc.file);
         let c = &items.consts[loc.index as usize];
         let Some(ptr) = &c.value else {
-            return Ty::any_platform();
+            return Ty::untyped();
         };
         let root = stir_db::parse(self.ctx.db, loc.file).syntax();
         let node = ptr.to_node(&root);
         // literal constants only (no evaluation)
-        let (int, float, boolean) = (Ty::php_int(), Ty::php_float(), Ty::php_bool());
+        let (int, float, boolean) = (Ty::int(), Ty::float(), Ty::bool());
         match node.kind() {
             LITERAL => match op_token(&node).map(|t| (t.kind(), t.text().to_owned())) {
                 Some((INT_NUMBER, _)) => int,
                 Some((FLOAT_NUMBER, _)) => float,
-                _ => Ty::any_platform(),
+                _ => Ty::untyped(),
             },
             STRING_LITERAL => match unquoted_literal(&node) {
-                Some(value) => Ty::literal(LitValue::String(value.into()), Family::Php),
-                None => Ty::php_string(),
+                Some(value) => Ty::literal(LitValue::String(value.into())),
+                None => Ty::string(),
             },
-            INTERP_STRING => Ty::php_string(),
+            INTERP_STRING => Ty::string(),
             NAME_EXPR => match text_of(&node).to_ascii_lowercase().as_str() {
                 "true" | "false" => boolean,
                 "null" => Ty::null(),
-                _ => Ty::any_platform(),
+                _ => Ty::untyped(),
             },
             PREFIX_EXPR => {
                 // `-9223372036854775808` (PHP_INT_MIN) is an int, not a float
@@ -1902,7 +1904,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     _ => Ty::union([int, float]),
                 }
             }
-            _ => Ty::any_platform(),
+            _ => Ty::untyped(),
         }
     }
 
@@ -1949,39 +1951,36 @@ impl<'a, 'db> Checker<'a, 'db> {
         if l.is_error() || r.is_error() {
             return match op {
                 EQ2 | EQ3 | NEQ | NEQ2 | L_ANGLE | R_ANGLE | LTEQ | GTEQ | AMP2 | PIPE2 => {
-                    Ty::php_bool()
+                    Ty::bool()
                 }
                 _ => Ty::error(),
             };
         }
         match op {
             PLUS | MINUS | STAR | SLASH | PERCENT | POW => self.arith_result(op, &l, &r),
-            DOT => Ty::php_string(),
-            SPACESHIP => Ty::php_int(),
+            DOT => Ty::string(),
+            SPACESHIP => Ty::int(),
             EQ2 | EQ3 | NEQ | NEQ2 | L_ANGLE | R_ANGLE | LTEQ | GTEQ | AMP2 | PIPE2 | AND_KW
-            | OR_KW | XOR_KW => Ty::php_bool(),
-            AMP | PIPE | CARET | SHL | SHR => Ty::php_int(),
+            | OR_KW | XOR_KW => Ty::bool(),
+            AMP | PIPE | CARET | SHL | SHR => Ty::int(),
             QUESTION2 => stir_types::join(self.ctx, &stir_types::without_null(&l), &r),
             PIPE_GT => match r.kind() {
-                TyKind::Fn(f) => f.ret.clone(),
                 TyKind::Callable { sig: Some(s), .. } => s.ret.clone(),
-                _ => Ty::any_platform(),
+                _ => Ty::untyped(),
             },
             _ => Ty::error(),
         }
     }
 
     fn arith_result(&self, op: SyntaxKind, l: &Ty, r: &Ty) -> Ty {
-        let is_float =
-            |t: &Ty| self.assignable(t, &Ty::float()) || self.assignable(t, &Ty::php_float());
-        let is_int = |t: &Ty| self.assignable(t, &Ty::int()) || self.assignable(t, &Ty::php_int());
-        let unknown =
-            |t: &Ty| t.is_any_platform() || matches!(t.kind(), TyKind::Mixed | TyKind::Error);
+        let is_float = |t: &Ty| self.assignable(t, &Ty::float());
+        let is_int = |t: &Ty| self.assignable(t, &Ty::int());
+        let unknown = |t: &Ty| t.is_untyped() || matches!(t.kind(), TyKind::Mixed | TyKind::Error);
         let is_array = |t: &Ty| {
             t.members().iter().all(|m| {
                 matches!(
                     m.kind(),
-                    TyKind::Array { .. } | TyKind::PhpList { .. } | TyKind::Shape(_) | TyKind::Null
+                    TyKind::Array { .. } | TyKind::List { .. } | TyKind::Shape(_) | TyKind::Null
                 )
             })
         };
@@ -1989,7 +1988,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         if op == PLUS && is_array(l) && is_array(r) {
             return Ty::array(Ty::array_key(), Ty::mixed());
         }
-        let (int, float) = (Ty::php_int(), Ty::php_float());
+        let (int, float) = (Ty::int(), Ty::float());
         if unknown(l) || unknown(r) {
             Ty::union([int, float])
         } else if is_int(l) && is_int(r) {
@@ -2023,19 +2022,16 @@ impl<'a, 'db> Checker<'a, 'db> {
         match op.kind() {
             BANG => {
                 self.expr(e, None);
-                Ty::php_bool()
+                Ty::bool()
             }
             MINUS | PLUS => {
                 let t = self.expr(e, None);
                 if let TyKind::Literal(l) = t.kind()
                     && op.kind() == MINUS
                 {
-                    return match &l.value {
-                        LitValue::Int(i) => Ty::literal(LitValue::Int(-i), l.family),
-                        LitValue::Float(f) => Ty::literal(
-                            LitValue::Float(stir_types::FloatLit::new(-f.get())),
-                            l.family,
-                        ),
+                    return match l {
+                        LitValue::Int(i) => Ty::lit_int(-i),
+                        LitValue::Float(f) => Ty::lit_float(-f.get()),
                         _ => widen_literals(&t),
                     };
                 }
@@ -2124,7 +2120,12 @@ impl<'a, 'db> Checker<'a, 'db> {
                     }
                     None => {
                         let vt = self.expr(rhs, None);
-                        self.declare(&n, widen_literals(&vt), LocalKind::Php, lhs.text_range());
+                        self.declare(
+                            &n,
+                            widen_literals(&vt),
+                            LocalKind::Variable,
+                            lhs.text_range(),
+                        );
                         vt
                     }
                 }
@@ -2148,7 +2149,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 let result = match op {
                     EQ => vt.clone(),
                     QUESTION2_EQ => stir_types::join(self.ctx, &stir_types::without_null(&lt), &vt),
-                    DOT_EQ => Ty::php_string(),
+                    DOT_EQ => Ty::string(),
                     PLUS_EQ | MINUS_EQ | STAR_EQ | SLASH_EQ | PERCENT_EQ | POW_EQ => {
                         let k = match op {
                             PLUS_EQ => PLUS,
@@ -2190,7 +2191,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                             Local {
                                 ty: assigned,
                                 declared: declared.clone(),
-                                kind: LocalKind::Php,
+                                kind: LocalKind::Variable,
                                 range: lhs.text_range(),
                             },
                         );
@@ -2225,7 +2226,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             return None;
         }
         let current = self.lookup(name).map(|l| l.ty.clone());
-        let array_like = |t: &Ty| matches!(t.kind(), TyKind::Array { .. } | TyKind::PhpList { .. });
+        let array_like = |t: &Ty| matches!(t.kind(), TyKind::Array { .. } | TyKind::List { .. });
         let grows = match &current {
             None => true,
             Some(t) if t.is_union() => t.members().iter().any(array_like),
@@ -2246,19 +2247,17 @@ impl<'a, 'db> Checker<'a, 'db> {
         };
         // an empty array takes the shape of what is written to it
         let existing = current.as_ref().filter(|t| {
-            !matches!(t.kind(), TyKind::PhpList { elem, .. } if matches!(elem.kind(), TyKind::Never))
+            !matches!(t.kind(), TyKind::List { elem, .. } if matches!(elem.kind(), TyKind::Never))
         });
         let grown = match (keys.as_slice(), existing.map(Ty::kind)) {
-            ([None], None | Some(TyKind::Null)) => Ty::php_list(value),
-            ([None], Some(TyKind::PhpList { elem, .. })) => {
-                Ty::php_list(Ty::union([elem.clone(), value]))
-            }
-            ([Some(k)], Some(TyKind::PhpList { elem, .. })) => Ty::array(
-                Ty::union([Ty::php_int(), k.clone()]),
+            ([None], None | Some(TyKind::Null)) => Ty::list(value),
+            ([None], Some(TyKind::List { elem, .. })) => Ty::list(Ty::union([elem.clone(), value])),
+            ([Some(k)], Some(TyKind::List { elem, .. })) => Ty::array(
+                Ty::union([Ty::int(), k.clone()]),
                 Ty::union([elem.clone(), value]),
             ),
             ([None], Some(TyKind::Array { key, value: v, .. })) => Ty::array(
-                Ty::union([key.clone(), Ty::php_int()]),
+                Ty::union([key.clone(), Ty::int()]),
                 Ty::union([v.clone(), value]),
             ),
             ([Some(k)], Some(TyKind::Array { key, value: v, .. })) => Ty::array(
@@ -2278,7 +2277,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     grown
                 };
             }
-            None => self.declare(name, grown, LocalKind::Php, root.text_range()),
+            None => self.declare(name, grown, LocalKind::Variable, root.text_range()),
         }
         Some(())
     }
@@ -2294,12 +2293,12 @@ impl<'a, 'db> Checker<'a, 'db> {
         match self.lookup_mut(name) {
             Some(l) if l.kind == LocalKind::This => {}
             Some(l) => {
-                if !matches!(l.ty.kind(), TyKind::Array { .. } | TyKind::PhpList { .. }) {
-                    l.ty = Ty::any_platform();
-                    l.declared = Ty::any_platform();
+                if !matches!(l.ty.kind(), TyKind::Array { .. } | TyKind::List { .. }) {
+                    l.ty = Ty::untyped();
+                    l.declared = Ty::untyped();
                 }
             }
-            None => self.declare(name, Ty::any_platform(), LocalKind::Php, arg.text_range()),
+            None => self.declare(name, Ty::untyped(), LocalKind::Variable, arg.text_range()),
         }
     }
 
@@ -2354,18 +2353,18 @@ impl<'a, 'db> Checker<'a, 'db> {
     fn index_type(&self, base: &Ty, _index: Option<&Ty>) -> Option<Ty> {
         match base.kind() {
             // in a loop, an array that starts empty may have been written to by now
-            TyKind::PhpList { elem, .. } if matches!(elem.kind(), TyKind::Never) => {
-                Some(Ty::any_platform())
+            TyKind::List { elem, .. } if matches!(elem.kind(), TyKind::Never) => {
+                Some(Ty::untyped())
             }
-            TyKind::PhpList { elem, .. } => Some(elem.clone()),
+            TyKind::List { elem, .. } => Some(elem.clone()),
             TyKind::Array { value, .. } => Some(value.clone()),
-            TyKind::String | TyKind::PhpString => Some(base.clone()),
-            TyKind::Literal(l) if matches!(l.value, LitValue::String(_)) => Some(Ty::string()),
+            TyKind::String => Some(base.clone()),
+            TyKind::Literal(LitValue::String(_)) => Some(Ty::string()),
             TyKind::Shape(_) | TyKind::Mixed => Some(Ty::mixed()),
             TyKind::Error => Some(Ty::error()),
-            TyKind::Never | TyKind::Nothing => Some(Ty::never()),
-            TyKind::Param { .. } => Some(Ty::any_platform()),
-            TyKind::Class { .. } => Some(Ty::any_platform()),
+            TyKind::Never => Some(Ty::never()),
+            TyKind::Param { .. } => Some(Ty::untyped()),
+            TyKind::Class { .. } => Some(Ty::untyped()),
             _ => None,
         }
     }
@@ -2378,7 +2377,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             && let Some(array) = e.members().iter().find(|m| {
                 matches!(
                     m.kind(),
-                    TyKind::Array { .. } | TyKind::PhpList { .. } | TyKind::Shape(_)
+                    TyKind::Array { .. } | TyKind::List { .. } | TyKind::Shape(_)
                 )
             })
         {
@@ -2399,7 +2398,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 [v] if spread => {
                     let t = self.expr(v, expected);
                     match t.kind() {
-                        TyKind::PhpList { elem, .. } => vals.push(elem.clone()),
+                        TyKind::List { elem, .. } => vals.push(elem.clone()),
                         _ => vals.push(Ty::error()),
                     }
                 }
@@ -2421,7 +2420,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 },
             );
         }
-        Ty::php_list(if vals.is_empty() {
+        Ty::list(if vals.is_empty() {
             Ty::never()
         } else {
             widen_literals(&Ty::union(vals))
@@ -2615,12 +2614,6 @@ impl<'a, 'db> Checker<'a, 'db> {
                     }
                 }
             }
-            TyKind::Fn(f) => {
-                for p in &f.params {
-                    self.variance_walk(&p.ty, !input, invariant, params, range, out);
-                }
-                self.variance_walk(&f.ret, input, invariant, params, range, out);
-            }
             TyKind::Class { name, args } => {
                 for (i, a) in args.iter().enumerate() {
                     match stir_types::TypeEnv::variance(self.ctx, name, i) {
@@ -2688,7 +2681,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
         let args = self.args_of(call);
         if args.iter().any(|a| a.kind() == CALLABLE_PLACEHOLDER) {
-            return Ty::func(sig.fn_ty().params, sig.ret.clone());
+            return Ty::closure(Some(sig.fn_ty()));
         }
         // map arguments to parameters
         let mut assigned: Vec<Option<usize>> = Vec::new(); // arg -> param index
@@ -2788,9 +2781,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
         // PHP code can't spell type arguments: nothing was said about this variable
         let ctx = self.ctx;
-        inf.finish_with(|id| {
-            stir_types::TypeEnv::param_bound(ctx, id).unwrap_or_else(Ty::any_platform)
-        });
+        inf.finish_with(|id| stir_types::TypeEnv::param_bound(ctx, id).unwrap_or_else(Ty::untyped));
         for (i, a) in args.iter().enumerate() {
             let (Some(p), Some(t)) = (assigned[i], &arg_tys[i]) else {
                 continue;
@@ -2801,17 +2792,22 @@ impl<'a, 'db> Checker<'a, 'db> {
                 .map(|v| v.text_range())
                 .unwrap_or(a.text_range());
             // external PHP functions accept untyped values
-            if sig.external && t.is_any_platform() {
+            if sig.external && t.is_untyped() {
                 continue;
             }
             // PHP code isn't asked to prove `non-negative-int`, `non-empty-string`, ...
             let want = widen_refinements(&want);
             // a PHP callback may ignore arguments it's passed
-            if matches!(t.kind(), TyKind::Fn(_))
-                && want
-                    .members()
-                    .iter()
-                    .any(|m| matches!(m.kind(), TyKind::Callable { .. }))
+            if matches!(
+                t.kind(),
+                TyKind::Callable {
+                    sig: Some(_),
+                    closure: true
+                }
+            ) && want
+                .members()
+                .iter()
+                .any(|m| matches!(m.kind(), TyKind::Callable { .. }))
             {
                 continue;
             }
@@ -2865,7 +2861,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             let Some((fqn, loc)) = found else {
                 if self.guarded_by("function_exists", &text) {
                     self.check_args_untyped(node);
-                    return Ty::any_platform();
+                    return Ty::untyped();
                 }
                 self.error(
                     callee.text_range(),
@@ -2942,10 +2938,10 @@ impl<'a, 'db> Checker<'a, 'db> {
             matches!(
                 m.kind(),
                 TyKind::Array { .. }
-                    | TyKind::PhpList { .. }
+                    | TyKind::List { .. }
                     | TyKind::Shape(_)
                     | TyKind::Mixed
-                    | TyKind::AnyPlatform
+                    | TyKind::Untyped
             )
         };
         if t.members().iter().any(is_array) {
@@ -2956,7 +2952,6 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     fn call_value(&mut self, node: &SyntaxNode, ct: &Ty, expected: Option<&Ty>) -> Ty {
         let fn_ty = match ct.kind() {
-            TyKind::Fn(f) => Some(f.clone()),
             TyKind::Callable { sig: Some(s), .. } => Some(s.clone()),
             TyKind::Class { name, args } => {
                 stir_types::TypeEnv::invoke_signature(self.ctx, name, args)
@@ -2991,7 +2986,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 if !ct.is_error()
                     && !matches!(ct.kind(), TyKind::Callable { sig: None, .. })
                     && !matches!(ct.kind(), TyKind::Mixed)
-                    && !ct.is_any_platform()
+                    && !ct.is_untyped()
                     && !php_callable_value(ct)
                 {
                     self.error(
@@ -3004,7 +2999,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 if ct.is_error() {
                     Ty::error()
                 } else {
-                    Ty::any_platform()
+                    Ty::untyped()
                 }
             }
         }
@@ -3043,7 +3038,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             for e in exprs_of(node).iter().skip(1) {
                 self.expr(e, None);
             }
-            return Ty::any_platform();
+            return Ty::untyped();
         };
         let name = text_of(&name_node);
         let t = self.member_type(&recv, &name, name_node.text_range());
@@ -3078,7 +3073,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
         match recv.kind() {
             TyKind::Error => Ty::error(),
-            TyKind::Nothing | TyKind::Never => Ty::nothing(),
+            TyKind::Never => Ty::never(),
             TyKind::Class { .. } | TyKind::SelfType { .. } | TyKind::Intersection(_) => {
                 let cls = class_of(recv);
                 match self.ctx.find_property(&cls, name) {
@@ -3087,7 +3082,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                         self.member_def(range, &class, MemberKind::Property, name);
                         // an inaccessible property goes through `__get`, if there is one
                         if self.has_magic(&cls, "__get") && !self.visible(&p.class, p.visibility) {
-                            return Ty::any_platform();
+                            return Ty::untyped();
                         }
                         self.check_visibility(
                             range,
@@ -3101,10 +3096,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                         if self.has_magic(&cls, "__get")
                             || matches!(cls.kind(), TyKind::Class { name, .. } if name.eq_ignore_ascii_case("stdClass"))
                         {
-                            return Ty::any_platform();
+                            return Ty::untyped();
                         }
                         if self.probing > 0 {
-                            return Ty::any_platform();
+                            return Ty::untyped();
                         }
                         if self.class_known(&cls) {
                             self.error(
@@ -3117,8 +3112,8 @@ impl<'a, 'db> Checker<'a, 'db> {
                     }
                 }
             }
-            TyKind::Mixed | TyKind::Object => Ty::any_platform(),
-            _ if recv.is_any_platform() => Ty::error(),
+            TyKind::Mixed | TyKind::Object => Ty::untyped(),
+            _ if recv.is_untyped() => Ty::error(),
             _ => {
                 self.error(
                     range,
@@ -3220,7 +3215,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         self.types.insert(fetch.text_range(), recv.clone());
         let Some(name_node) = fetch.child(SyntaxKind::NAME) else {
             self.check_args_untyped(node);
-            return Ty::any_platform();
+            return Ty::untyped();
         };
         let name = text_of(&name_node);
         let t = self.call_member(node, &recv, &name, name_node.text_range(), expected);
@@ -3248,9 +3243,9 @@ impl<'a, 'db> Checker<'a, 'db> {
             return Ty::error();
         }
         // narrowing ruled this path out, so it can't run
-        if matches!(recv.kind(), TyKind::Never | TyKind::Nothing) {
+        if matches!(recv.kind(), TyKind::Never) {
             self.check_args_untyped(node);
-            return Ty::nothing();
+            return Ty::never();
         }
         if recv.is_union() {
             return self.union_method_call(node, recv, name, range, expected);
@@ -3263,7 +3258,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             // an inaccessible method goes through `__call`, if there is one
             if self.has_magic(&cls, "__call") && !self.visible(&owner, m.mods.visibility) {
                 self.check_args_untyped(node);
-                return Ty::any_platform();
+                return Ty::untyped();
             }
             self.check_visibility(
                 range,
@@ -3282,11 +3277,11 @@ impl<'a, 'db> Checker<'a, 'db> {
             && (self.has_magic(&cls, "__call") || !self.class_known(&cls))
         {
             self.check_args_untyped(node);
-            return Ty::any_platform();
+            return Ty::untyped();
         }
-        if recv.is_any_platform() || matches!(recv.kind(), TyKind::Mixed | TyKind::Object) {
+        if recv.is_untyped() || matches!(recv.kind(), TyKind::Mixed | TyKind::Object) {
             self.check_args_untyped(node);
-            return Ty::any_platform();
+            return Ty::untyped();
         }
         let cls = class_of(recv);
         if self.class_known(&cls) || !matches!(cls.kind(), TyKind::Class { .. }) {
@@ -3350,7 +3345,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 || self.has_magic(&cls, "__call")
                 || !self.class_known(&cls))
             || matches!(ty.kind(), TyKind::Mixed | TyKind::Object | TyKind::Error)
-            || ty.is_any_platform()
+            || ty.is_untyped()
     }
 
     // ------------------------------------------------------------ static access
@@ -3430,7 +3425,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         let cls = self.static_base(&fetch);
         let Some(name_node) = fetch.child(SyntaxKind::NAME) else {
             self.check_args_untyped(node);
-            return Ty::any_platform();
+            return Ty::untyped();
         };
         let name = text_of(&name_node);
         if cls.is_error() {
@@ -3464,7 +3459,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             None => {
                 if self.has_magic(&cls, "__callStatic") || !self.class_known(&cls) {
                     self.check_args_untyped(node);
-                    return Ty::any_platform();
+                    return Ty::untyped();
                 }
                 self.error(
                     name_node.text_range(),
@@ -3485,7 +3480,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             .filter(|t| t.kind() == VARIABLE)
             .last()
         else {
-            return Ty::any_platform();
+            return Ty::untyped();
         };
         let name = &var.text()[1..];
         if cls.is_error() {
@@ -3518,7 +3513,7 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     fn class_const(&mut self, node: &SyntaxNode) -> Ty {
         let Some(name_node) = node.child(SyntaxKind::NAME) else {
-            return Ty::any_platform();
+            return Ty::untyped();
         };
         let name = text_of(&name_node);
         if name.eq_ignore_ascii_case("class") {
@@ -3589,7 +3584,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         } else {
             self.expr(&target, None);
             self.check_args_untyped(node);
-            return Ty::any_platform();
+            return Ty::untyped();
         };
         let TyKind::Class { name, .. } = cls.kind() else {
             self.check_args_untyped(node);
@@ -3669,7 +3664,6 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     fn closure(&mut self, node: &SyntaxNode, expected: Option<&Ty>) -> Ty {
         let exp_fn = expected.and_then(|e| match e.kind() {
-            TyKind::Fn(f) => Some(f.clone()),
             TyKind::Callable { sig: Some(s), .. } => Some(s.clone()),
             _ => None,
         });
@@ -3698,7 +3692,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                                     Local {
                                         ty: Ty::null(),
                                         declared: Ty::mixed(),
-                                        kind: LocalKind::Php,
+                                        kind: LocalKind::Variable,
                                         range: t.text_range(),
                                     },
                                 );
@@ -3751,7 +3745,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             declared_ret.unwrap_or(t)
         } else {
             let infer = declared_ret.is_none();
-            let ret = declared_ret.clone().unwrap_or_else(Ty::unit);
+            let ret = declared_ret.clone().unwrap_or_else(Ty::void);
             self.fns.push(FnCx {
                 ret: ret.clone(),
                 infer_ret: infer,
@@ -3765,13 +3759,13 @@ impl<'a, 'db> Checker<'a, 'db> {
                 fcx.returns
                     .into_iter()
                     .reduce(|a, b| stir_types::join(self.ctx, &a, &b))
-                    .unwrap_or_else(Ty::unit)
+                    .unwrap_or_else(Ty::void)
             } else {
                 ret
             }
         };
         self.frames = saved;
-        Ty::func(params, ret)
+        Ty::closure(Some(stir_types::FnTy::new(params, ret)))
     }
 
     // ------------------------------------------------------------ match
@@ -3795,7 +3789,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 });
             }
         }
-        result.unwrap_or_else(Ty::nothing)
+        result.unwrap_or_else(Ty::never)
     }
 }
 
@@ -3866,15 +3860,26 @@ fn php_callable_value(ty: &Ty) -> bool {
     ty.members().iter().any(|m| {
         matches!(
             m.kind(),
-            TyKind::PhpString
+            TyKind::String
                 | TyKind::NonEmptyString
                 | TyKind::ClassString(_)
-                | TyKind::PhpList { .. }
+                | TyKind::List { .. }
                 | TyKind::Array { .. }
                 | TyKind::Shape(_)
                 | TyKind::Callable { .. }
-        ) || matches!(m.kind(), TyKind::Literal(l) if matches!(l.value, LitValue::String(_)))
+        ) || matches!(m.kind(), TyKind::Literal(LitValue::String(_)))
     })
+}
+
+/// The error-recovery type prints as `mixed`. Is that the only `mixed` this mismatch shows?
+fn mixed_only_from_errors(m: &stir_types::Mismatch) -> bool {
+    let shown = [&m.root().from, &m.root().to, &m.to];
+    shown.iter().any(|t| t.contains_error())
+        && !shown.iter().any(|t| {
+            t.transform(&mut |t| t.is_error().then(|| Ty::class("error", Vec::new())))
+                .to_string()
+                .contains("mixed")
+        })
 }
 
 fn php_array_of_mixed(from: &Ty, to: &Ty) -> bool {
@@ -3891,29 +3896,28 @@ fn php_array_of_mixed(from: &Ty, to: &Ty) -> bool {
 fn is_php_scalar(ty: &Ty) -> bool {
     matches!(
         ty.kind(),
-        TyKind::PhpInt
-            | TyKind::PhpFloat
-            | TyKind::PhpString
-            | TyKind::PhpBool
+        TyKind::Int
+            | TyKind::Float
+            | TyKind::String
+            | TyKind::Bool
             | TyKind::Numeric
             | TyKind::ArrayKey
             | TyKind::NonEmptyString
             | TyKind::NumericString
             | TyKind::IntRange { .. }
-    ) || matches!(ty.kind(), TyKind::Literal(l) if l.family == Family::Php)
+    ) || matches!(ty.kind(), TyKind::Literal(_))
 }
 
 /// A scalar coerces in a non-strict call, unless it's a literal that isn't a number
 /// going to a parameter that doesn't take strings (a `TypeError` at runtime).
 fn coerces_to(ty: &Ty, want: &Ty) -> bool {
-    if let TyKind::Literal(l) = ty.kind()
-        && let LitValue::String(v) = &l.value
+    if let TyKind::Literal(LitValue::String(v)) = ty.kind()
         && v.trim().parse::<f64>().is_err()
     {
         return want
             .members()
             .iter()
-            .any(|m| matches!(m.kind(), TyKind::PhpString));
+            .any(|m| matches!(m.kind(), TyKind::String));
     }
     is_php_scalar(ty)
 }
@@ -3923,7 +3927,7 @@ fn accepts_php_scalars(ty: &Ty) -> bool {
     ty.members().iter().any(|m| {
         matches!(
             m.kind(),
-            TyKind::PhpInt | TyKind::PhpFloat | TyKind::PhpString | TyKind::PhpBool
+            TyKind::Int | TyKind::Float | TyKind::String | TyKind::Bool
         )
     })
 }
@@ -3949,10 +3953,7 @@ fn narrow_assigned(declared: &Ty, value: &Ty) -> Ty {
         return declared.clone();
     }
     // an array variable stays the array it was declared
-    if matches!(
-        declared.kind(),
-        TyKind::Array { .. } | TyKind::PhpList { .. }
-    ) {
+    if matches!(declared.kind(), TyKind::Array { .. } | TyKind::List { .. }) {
         return declared.clone();
     }
     // keep the declared type unless the value is a strictly narrower non-literal
@@ -3983,14 +3984,14 @@ fn is_write_target(node: &SyntaxNode) -> bool {
 /// `int<0, max>` → `int`, `non-empty-string` → `string`, `non-empty-list<T>` → `list<T>`.
 fn widen_refinements(t: &Ty) -> Ty {
     t.transform(&mut |x| match x.kind() {
-        TyKind::IntRange { .. } => Some(Ty::php_int()),
+        TyKind::IntRange { .. } => Some(Ty::int()),
         TyKind::NonEmptyString | TyKind::NumericString | TyKind::ClassString(_) => {
-            Some(Ty::php_string())
+            Some(Ty::string())
         }
-        TyKind::PhpList {
+        TyKind::List {
             elem,
             non_empty: true,
-        } => Some(Ty::php_list(widen_refinements(elem))),
+        } => Some(Ty::list(widen_refinements(elem))),
         TyKind::Array {
             key,
             value,

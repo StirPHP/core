@@ -5,11 +5,11 @@ use crate::ty::{FnTy, ParamId, Ty};
 /// Declared variance of a type parameter.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Variance {
-    /// `out T`: covariant.
+    /// `@template-covariant`.
     Out,
-    /// `in T`: contravariant.
+    /// `@template-contravariant`.
     In,
-    /// Invariant (the default for classes, and for PHPStan `@template`).
+    /// Invariant (`@template`).
     Invariant,
 }
 
@@ -31,15 +31,8 @@ pub trait TypeEnv {
         Variance::Invariant
     }
 
-    /// The record type a [`TyKind::RecordRef`](crate::TyKind::RecordRef) to record
-    /// `name` instantiated with `args` stands for (one level expanded).
-    fn unfold_record(&self, name: &str, args: &[Ty]) -> Option<Ty> {
-        let _ = (name, args);
-        None
-    }
-
     /// Upper bound of a type parameter (`T of Bound`), or `None` if unbounded (an unbounded
-    /// parameter is only assignable to itself, `mixed` and `Any!`).
+    /// parameter is only assignable to itself and `mixed`).
     fn param_bound(&self, param: ParamId) -> Option<Ty> {
         let _ = param;
         None
@@ -57,13 +50,6 @@ pub trait TypeEnv {
         false
     }
 
-    /// For a sealed class/interface instantiated with `args`: its direct permitted
-    /// subclasses (with arguments substituted). `None` if `class` is not sealed.
-    fn sealed_subclasses(&self, class: &str, args: &[Ty]) -> Option<Vec<Ty>> {
-        let _ = (class, args);
-        None
-    }
-
     /// The `__invoke` signature of `class`, if instances are callable.
     fn invoke_signature(&self, class: &str, args: &[Ty]) -> Option<FnTy> {
         let _ = (class, args);
@@ -78,15 +64,5 @@ pub struct EmptyEnv;
 impl TypeEnv for EmptyEnv {
     fn supertypes(&self, _class: &str, _args: &[Ty]) -> Vec<Ty> {
         Vec::new()
-    }
-}
-
-/// `ty` with a top-level record reference expanded (other types unchanged).
-pub fn unfold(env: &dyn TypeEnv, ty: &Ty) -> Ty {
-    match ty.kind() {
-        crate::TyKind::RecordRef { name, args } => {
-            env.unfold_record(name, args).unwrap_or_else(|| ty.clone())
-        }
-        _ => ty.clone(),
     }
 }

@@ -18,7 +18,7 @@ use stir_hir::{
 };
 use stir_syntax::TextRange;
 use stir_types::{
-    Family, FnParam, FnTy, LitValue, ParamId, ParamKind, ShapeField, ShapeKey, Ty, TyKind, TypeEnv,
+    FnParam, FnTy, LitValue, ParamId, ParamKind, ShapeField, ShapeKey, Ty, TyKind, TypeEnv,
     Variance,
 };
 
@@ -410,20 +410,20 @@ impl<'db> Ctx<'db> {
         match &tr.kind {
             TypeRefKind::Error => Ty::error(),
             TypeRefKind::Php(b) => match b {
-                PhpBuiltin::Int => Ty::php_int(),
-                PhpBuiltin::Float => Ty::php_float(),
-                PhpBuiltin::String => Ty::php_string(),
-                PhpBuiltin::Bool => Ty::php_bool(),
-                PhpBuiltin::Array => Ty::php_array(),
+                PhpBuiltin::Int => Ty::int(),
+                PhpBuiltin::Float => Ty::float(),
+                PhpBuiltin::String => Ty::string(),
+                PhpBuiltin::Bool => Ty::bool(),
+                PhpBuiltin::Array => Ty::plain_array(),
                 PhpBuiltin::Mixed => Ty::mixed(),
                 PhpBuiltin::Void => Ty::void(),
                 PhpBuiltin::Never => Ty::never(),
                 PhpBuiltin::Null => Ty::null(),
-                PhpBuiltin::False => Ty::literal(LitValue::Bool(false), Family::Php),
-                PhpBuiltin::True => Ty::literal(LitValue::Bool(true), Family::Php),
+                PhpBuiltin::False => Ty::literal(LitValue::Bool(false)),
+                PhpBuiltin::True => Ty::literal(LitValue::Bool(true)),
                 PhpBuiltin::Object => Ty::object(),
                 PhpBuiltin::Callable => Ty::callable(None),
-                PhpBuiltin::Iterable => Ty::php_iterable(),
+                PhpBuiltin::Iterable => Ty::plain_iterable(),
                 PhpBuiltin::SelfType => cx.self_ty.clone().unwrap_or_else(Ty::error),
                 PhpBuiltin::Static => match &cx.self_ty {
                     Some(s) => Ty::static_of(s.clone()),
@@ -458,14 +458,14 @@ impl<'db> Ctx<'db> {
                     },
                     LitRef::String(s) => LitValue::String(s.clone()),
                 };
-                Ty::literal(value, Family::Php)
+                Ty::literal(value)
             }
             TypeRefKind::PhpList { elem, non_empty } => {
                 let elem = self.lower(elem, cx, sink);
                 if *non_empty {
                     Ty::non_empty_list(elem)
                 } else {
-                    Ty::php_list(elem)
+                    Ty::list(elem)
                 }
             }
             TypeRefKind::PhpArray {
@@ -635,17 +635,17 @@ impl<'db> Ctx<'db> {
         // PHPStan's refinement keywords this checker doesn't model
         if name.contains('-') {
             if key.ends_with("-string") {
-                return Ty::php_string();
+                return Ty::string();
             }
             if key.ends_with("-int") {
-                return Ty::php_int();
+                return Ty::int();
             }
         }
         if let Some(c) = self.class(name) {
             // PHPDoc may leave out trailing type arguments: `Generator<K, V>`
             let mut args = args;
             if !args.is_empty() && args.len() < c.params.len() {
-                args.resize(c.params.len(), Ty::any_platform());
+                args.resize(c.params.len(), Ty::untyped());
             }
             if c.params.len() != args.len() && !args.is_empty() {
                 sink.push(LowerError {
