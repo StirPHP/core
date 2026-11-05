@@ -417,7 +417,7 @@ Quick fixes are offered on a diagnostic, and marked as preferred where one of th
 - **Unknown names:** a class, function or constant that isn't known can be imported, one action for each that has that
   name in the workspace, nearest namespace first, with the `use` line put where completion puts it. Names that look like
   a typo get **Change to ...**, for classes, functions, constants, methods (only those that could take the arguments),
-  properties and variables.
+  properties and variables, but not for members of a class whose `__call` or `__get` takes any name.
 - **Imports:** an import nothing uses is greyed out in the editor (as a hint, `SPHP0080`, which `stirphp check` doesn't
   report) and can be removed, alone or with all the others. **Organize imports** (`source.organizeImports`) removes them
   and sorts what's left as completion's insertion does: classes, then functions, then constants, a blank line between.

@@ -666,10 +666,26 @@ fn look_for_unresolved(
                     ));
                 }
             }
-            // `[$x, 'foo']`, and `'foo'` given to something that calls it
-            ARRAY_EXPR => {
+            // `[$x, 'foo']`, which only a method can be
+            ARRAY_EXPR if is_method => {
                 let elems = node.children_of(ARRAY_ELEM);
-                if let [_, second] = elems.as_slice()
+                let object_like = |e: &SyntaxNode| {
+                    e.children().last().is_some_and(|v| {
+                        matches!(
+                            v.kind(),
+                            VARIABLE_EXPR
+                                | CLASS_CONST_FETCH_EXPR
+                                | PROPERTY_FETCH_EXPR
+                                | STRING_LITERAL
+                                | LITERAL
+                                | NEW_EXPR
+                                | PAREN_EXPR
+                        )
+                    })
+                };
+                if let [first, second] = elems.as_slice()
+                    && !first.has_token(FAT_ARROW)
+                    && object_like(first)
                     && string_value(second).is_some_and(|s| s.eq_ignore_ascii_case(name))
                 {
                     blockers.add(format!(
@@ -678,6 +694,7 @@ fn look_for_unresolved(
                     ));
                 }
             }
+            // `'foo'` or `'A::foo'` given to something that calls it; asking whether it exists is fine
             CALL_EXPR => {
                 let callee = node.children().next().map(|c| c.text().to_string());
                 let callee = callee
@@ -691,17 +708,17 @@ fn look_for_unresolved(
                             | "array_map"
                             | "array_filter"
                             | "array_walk"
+                            | "array_walk_recursive"
                             | "usort"
                             | "uasort"
                             | "uksort"
                             | "array_reduce"
-                            | "is_callable"
-                            | "function_exists"
-                            | "method_exists"
                             | "forward_static_call"
                             | "forward_static_call_array"
                             | "register_shutdown_function"
                             | "spl_autoload_register"
+                            | "iterator_apply"
+                            | "preg_replace_callback"
                     )
                 });
                 if !takes_callable {
@@ -714,13 +731,19 @@ fn look_for_unresolved(
                     let Some(value) = string_value(&arg) else {
                         continue;
                     };
-                    let last = value.rsplit("::").next().unwrap_or(&value);
-                    if last
-                        .rsplit('\\')
-                        .next()
-                        .unwrap_or(last)
-                        .eq_ignore_ascii_case(name)
-                    {
+                    // a method only by `A::foo`, a function only by its name
+                    let named = match value.rsplit_once("::") {
+                        Some((_, method)) => is_method && method.eq_ignore_ascii_case(name),
+                        None => {
+                            !is_method
+                                && value
+                                    .rsplit('\\')
+                                    .next()
+                                    .unwrap_or(&value)
+                                    .eq_ignore_ascii_case(name)
+                        }
+                    };
+                    if named {
                         blockers.add(format!(
                             "a string at {} might be a callable of it",
                             location(db, file, arg.text_range().start())

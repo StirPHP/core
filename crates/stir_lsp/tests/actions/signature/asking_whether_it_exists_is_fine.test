@@ -1,0 +1,21 @@
+=== action: Remove unused parameter `$b`
+=== input
+<?php
+class A {
+    public function ff(int $a, int $b‸): int { return $a; }
+}
+function g(A $x): int {
+    $names = ['ff', 'gg'];
+    echo method_exists($x, 'ff');
+    return $x->ff(1, 2);
+}
+=== output
+<?php
+class A {
+    public function ff(int $a): int { return $a; }
+}
+function g(A $x): int {
+    $names = ['ff', 'gg'];
+    echo method_exists($x, 'ff');
+    return $x->ff(1);
+}
