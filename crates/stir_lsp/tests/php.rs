@@ -457,9 +457,6 @@ fn semantic_tokens_classify_php() {
     };
     assert_eq!(find("function").ty, tokens::TokenType::Keyword);
     assert_eq!(find("$a").ty, tokens::TokenType::Variable);
-    // every PHP variable is mutable, so marking it says nothing
-    assert_eq!(find("$a").modifiers & tokens::modifier::MUTABLE, 0);
-    assert_eq!(find("$b").modifiers & tokens::modifier::MUTABLE, 0);
     assert_eq!(find("1").ty, tokens::TokenType::Number);
 }
 

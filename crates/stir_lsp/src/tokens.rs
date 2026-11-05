@@ -1,5 +1,5 @@
 //! Semantic highlighting: lexical classes from the syntax tree, refined by name
-//! resolution (readonly properties are `readonly`, other properties are `mutable`).
+//! resolution (readonly properties and constants are `readonly`).
 
 use stir_checker::{Def, LocalKind, MemberKind, typed_file};
 use stir_db::{Db, FileOrigin, SourceFile, Workspace};
@@ -58,8 +58,6 @@ pub mod modifier {
     pub const STATIC: u32 = 1 << 2;
     pub const DEFAULT_LIBRARY: u32 = 1 << 3;
     pub const DOCUMENTATION: u32 = 1 << 4;
-    /// A property that can be written to, or a variable the checker didn't resolve.
-    pub const MUTABLE: u32 = 1 << 5;
 }
 
 pub const TOKEN_MODIFIERS: &[&str] = &[
@@ -68,7 +66,6 @@ pub const TOKEN_MODIFIERS: &[&str] = &[
     "static",
     "defaultLibrary",
     "documentation",
-    "mutable",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,7 +122,6 @@ fn resolved(db: &dyn Db, ws: Workspace, file: SourceFile, def: &Def) -> Option<(
     Some(match def {
         Def::Local { decl } => {
             let (_, kind) = typed_file(db, ws, file).locals.get(decl)?.clone();
-            // every variable is mutable, so marking it says nothing
             let ty = match kind {
                 LocalKind::Param => TokenType::Parameter,
                 _ => TokenType::Variable,
@@ -157,11 +153,7 @@ fn resolved(db: &dyn Db, ws: Workspace, file: SourceFile, def: &Def) -> Option<(
                                 })
                                 .unwrap_or(false)
                     });
-                    let m = if immutable {
-                        modifier::READONLY
-                    } else {
-                        modifier::MUTABLE
-                    };
+                    let m = if immutable { modifier::READONLY } else { 0 };
                     (TokenType::Property, m | lib)
                 }
                 MemberKind::Const => (
@@ -228,7 +220,7 @@ pub fn semantic_tokens(db: &dyn Db, ws: Workspace, file: SourceFile) -> Vec<Toke
             {
                 Some((TokenType::Type, modifier::DEFAULT_LIBRARY))
             }
-            (VARIABLE, None) => Some((TokenType::Variable, modifier::MUTABLE)),
+            (VARIABLE, None) => Some((TokenType::Variable, 0)),
             (k, _) => lexical(k, parent.as_ref().map(|p| p.kind())),
         };
         if let Some((ty, modifiers)) = class {
