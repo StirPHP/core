@@ -575,11 +575,13 @@ impl<'a, 'db> Checker<'a, 'db> {
                 | "__clone"
                 | "__tostring"
                 | "__isset"
-                | "__sleep"
                 | "__set_state"
         ) && def.ret.is_none()
             && def.doc_ret.is_none()
         {
+            return;
+        }
+        if lower == "__sleep" {
             return;
         }
         if def.ret.is_none() && def.doc_ret.is_none() && !sig.ret_documented {
@@ -654,6 +656,11 @@ fn written_iterables(ty: Option<&TypeRef>) -> Vec<&'static str> {
             TypeRefKind::Nullable(inner)
             | TypeRefKind::CovariantArg(inner)
             | TypeRefKind::ContravariantArg(inner) => walk(inner, out),
+            // with `mixed` in it, it's `mixed`
+            TypeRefKind::Union(list)
+                if list
+                    .iter()
+                    .any(|m| matches!(m.kind, TypeRefKind::Php(PhpBuiltin::Mixed))) => {}
             TypeRefKind::Union(list)
             | TypeRefKind::Intersection(list)
             | TypeRefKind::Named(_, list)

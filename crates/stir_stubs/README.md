@@ -12,6 +12,11 @@ Copyright JetBrains s.r.o. and contributors, licensed under the
 git submodule in `phpstorm-stubs/`; only the extensions listed in
 `src/extensions.rs` are embedded into the binary.
 
+`phpstan-stubs/` has PHPStan's stubs for PHP's classes, copied unmodified from
+[phpstan/phpstan-src](https://github.com/phpstan/phpstan-src)'s `stubs/`, Copyright Ondřej
+Mirtes and PHPStan s.r.o., licensed under the [MIT license](phpstan-stubs/LICENSE).
+`src/overrides.php` has some return types from its function map too.
+
 After cloning, fetch them with:
 
 ```sh

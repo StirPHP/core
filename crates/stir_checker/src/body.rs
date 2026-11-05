@@ -1687,7 +1687,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         );
         let what = format!("Function {}()", items.functions[idx].name);
         self.check_missing_signature_types(
-            items.functions[idx].name_range,
+            head_range(node, items.functions[idx].name_range),
             &what,
             items.functions[idx].name.short(),
             &items.functions[idx].sig,
@@ -1911,7 +1911,8 @@ impl<'a, 'db> Checker<'a, 'db> {
         };
         let what = format!("Method {}::{}()", model.name, m.name);
         let in_trait = model.kind() == ClassKind::Trait;
-        self.check_missing_signature_types(m.name_range, &what, &m.name, &m.sig, &sig);
+        let head = head_range(node, m.name_range);
+        self.check_missing_signature_types(head, &what, &m.name, &m.sig, &sig);
         let saved_in_trait = std::mem::replace(&mut self.in_trait_member, in_trait);
         if m.has_body {
             self.function_body(node, &sig, this, &what);
@@ -6345,6 +6346,16 @@ fn is_generator(function: &SyntaxNode) -> bool {
         })
     }
     has_yield(function)
+}
+
+/// From the first token of a declaration to its name: PHPStan has things that are about a
+/// declaration on the line it starts on, with its attributes, and comments ignoring them go there.
+fn head_range(node: &SyntaxNode, name: TextRange) -> TextRange {
+    let first = node
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .find(|t| !t.kind().is_trivia());
+    first.map_or(name, |t| TextRange::new(t.text_range().start(), name.end()))
 }
 
 /// Can an expression of type `never` end a path because of what it runs? A variable narrowed to

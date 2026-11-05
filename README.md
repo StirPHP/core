@@ -85,6 +85,26 @@ A file with `// @stirphp-nocheck` in its leading comments isn't checked for type
 
 `stirphp lsp` runs the language server, and `stirphp init` writes a configuration, as below.
 
+## `stirphp fmt`
+
+```sh
+stirphp fmt                  # the project's sources
+stirphp fmt src tests/A.php  # these files and folders
+stirphp fmt --check          # change nothing, list what would change, and fail if anything would
+stirphp fmt --indent tab     # or a number of spaces, over `parameters.stirphp.indent`
+stirphp fmt -                # from standard input to standard output
+```
+
+It formats in the style of PER-CS, and it only changes whitespace: every token stays as it is, comments and trailing commas
+included, and strings, heredocs and inline HTML aren't touched. A file with syntax errors is left alone. It normalizes spaces,
+indentation, blank lines, brace placement and one statement to a line. It doesn't wrap long lines: line breaks inside
+expressions stay where they are, and lines continuing an expression keep their indentation relative to its start. Alignment
+before `=` and `=>` stays, as PER-CS allows it. In files with HTML around their PHP, only the spaces within lines change.
+
+Run over everything in `corpus/` (about 54,000 files, some of them deliberately odd), tokens didn't change, a second run
+changed nothing, and nothing that parsed stopped parsing. It isn't configurable beyond the indentation, and isn't
+PhpStorm-compatible; PER-CS is the style.
+
 ## Configuration
 
 All of it is optional. StirPHP looks in the current folder and its parents for `stirphp.neon`, then for PHPStan's
@@ -101,6 +121,8 @@ parameters:
         composer: ../composer.json  # default: composer.json in the project folder
         baseline: stirphp-baseline.neon
         rules: [rules/no_var_dump.rhai]  # see Custom rules
+        indent: 4                   # or `tab`, for `stirphp fmt`; in an editor, the default is the editor's
+        deprecations: true          # report the use of what's deprecated; see PHPStan compatibility
 ```
 
 An unknown key is an error.
@@ -139,8 +161,14 @@ they'd hide its own errors.
 
 StirPHP is its own engine. It doesn't run PHPStan, and it doesn't need PHP installed. What's shared:
 
-- **Configuration:** `level`, `paths`, `excludePaths`, `ignoreErrors`, `phpVersion` and `includes` are read from NEON.
-  Includes written in PHP are skipped, because reading them would run your code.
+- **Configuration:** `level`, `paths`, `excludePaths`, `ignoreErrors`, `phpVersion`, `stubFiles` and `includes` are read
+  from NEON. Includes written in PHP are skipped, because reading them would run your code.
+- **Stubs:** what a stub file says of a class is laid over the class, method by method, and a function in one replaces the
+  function. PHPStan's stubs for PHP's own classes are built in, so `FilterIterator<K, V, I>` and the like are generic.
+- **Deprecations:** with `parameters.stirphp.deprecations: true`, or `phpstan-deprecation-rules` among the configured
+  extensions, what's marked `@deprecated` or `#[Deprecated]` is a warning with that package's identifiers
+  (`function.deprecated`, `method.deprecated`, `new.deprecatedClass` and so on). Without that, `stirphp check` says nothing
+  about it, and an editor strikes it through either way.
 - **PHPDoc:** PHPStan's types and tags, such as generics, array shapes, `@template` and `@phpstan-*` tags.
 - **Identifiers:** a check that means the same as a PHPStan rule reports PHPStan's identifier, such as `return.type` or
   `function.notFound`. Checks only StirPHP has report codes such as `SPHP0061`. Rule levels come from these.
@@ -161,7 +189,10 @@ The limits:
   as framework extensions or strict rules, should run PHPStan alongside StirPHP, or write what it needs as
   [scripts](#custom-rules). Until a framework's magic is described that way, expect errors PHPStan's extensions would
   have explained away.
-- The checks don't all exist yet, and those that exist don't always agree with PHPStan.
+- The checks don't all exist yet, and those that exist don't always agree with PHPStan. Conditions and comparisons that can
+  only go one way are reported only where that's certain, so far fewer of them are found. A project with
+  `treatPhpDocTypesAsCertain: false` gets none of them, because types here don't say which came from PHPDoc.
+  `missingType.generics`, `missingType.callable` and `missingType.checkedException` aren't reported at all.
 
 ## Custom rules
 
@@ -284,10 +315,14 @@ server shows it in the editor.
 
 - diagnostics for the project's files, updated as you type
 - hover with types and doc comments
-- completion of members, variables, functions, classes and keywords
+- completion of members, variables and keywords, and of functions, classes and constants from the whole workspace by fuzzy
+  match, adding the `use` line a name needs in the right place
 - signature help and inlay hints for inferred types
 - go to definition and type definition, including into packages and PHP's own stubs
+- go to implementation and declaration, and call and type hierarchies
 - find references, highlights and rename
+- formatting of a document or a range
+- what's deprecated is marked in diagnostics, hover, completion and symbols
 - semantic highlighting, document and workspace symbols, folding and selection ranges
 
 The [VS Code extension](editors/vscode) is the only client this has been tested with. Any editor that can start an LSP
@@ -296,11 +331,12 @@ server for PHP files should work with the command `stirphp lsp`, but that's unte
 ## Current state
 
 This is early, and accuracy against PHPStan is still being improved. On Laravel's framework, Symfony and PHPStan's own
-source, each with its own configuration, it reports about 8500, 1300 and 700 problems, in about 4 to 5 seconds each. Those
-include false alarms, at a rate nobody has measured yet. Reducing them is the current work. If `stirphp check` is wrong
+source, each with its own configuration, it reports about 9000, 1300 and 1300 problems, in about 4 to 5 seconds each. Those
+include false alarms, at a rate nobody has measured overall yet. Reducing them is the current work. If `stirphp check` is wrong
 about your code, please [open an issue](https://github.com/StirPHP/core/issues) with a small example.
 
-Not there yet: formatting, quick fixes and refactoring beyond rename, and framework support out of the box.
+Not there yet: wrapping long lines when formatting, quick fixes and refactoring beyond rename, and framework support out of
+the box.
 
 ## Layout
 
@@ -312,10 +348,11 @@ Not there yet: formatting, quick fixes and refactoring beyond rename, and framew
 | `stir_types` | type representation and relations |
 | `stir_db` | salsa database: files, parsing, diagnostics, settings |
 | `stir_hir` | declarations, name resolution, and PHPDoc and stub attribute lowering |
-| `stir_stubs` | embedded phpstorm-stubs |
+| `stir_stubs` | embedded phpstorm-stubs, and PHPStan's stubs for PHP's classes |
 | `stir_checker` | the type checker, and what scripts see of a project |
 | `stir_script` | the sandbox scripts run in |
 | `stir_composer` | reads Composer's files |
+| `stir_fmt` | the formatter |
 | `stir_project` | configuration, discovery, baselines, `init` and workspace loading |
 | `stir_lsp` | the language server |
 | `stir_wasm` | the checker, hover and completion for the browser (WebAssembly) |
@@ -328,6 +365,7 @@ cargo test --workspace
 scripts/parse-corpus.sh                 # parse Laravel, Symfony and PHPStan (git submodules)
 scripts/check-corpus.sh <label>         # check them and write a summary to .corpus-results/<label>
 scripts/diff-corpus.py <label> <label>  # compare two summaries
+cargo test --release -p stir_fmt --test corpus -- --ignored --nocapture  # format all of them, in memory
 ```
 
 Checker fixtures live in `crates/stir_checker/tests/fixtures/` and mark expected diagnostics inline:
