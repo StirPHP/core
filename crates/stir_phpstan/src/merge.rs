@@ -2,7 +2,8 @@
 //!
 //! Two reports are the same when they have the same file, line and identifier, and never because of
 //! their messages. Ours stays, because it has a real range where PHPStan only has a line, and it
-//! keeps up as you type where PHPStan's results wait for a save.
+//! keeps up as you type where PHPStan's results wait for a save. What's wrong in a doc comment is
+//! at the comment for us and at what it documents for PHPStan, and counts as either.
 
 use std::path::Path;
 
@@ -58,6 +59,19 @@ pub fn diagnostics(path: &Path, text: &str, reported: &[Reported]) -> Vec<Diagno
         .collect()
 }
 
+/// The line of what the doc comment around `offset` documents, if it's in one.
+fn line_documented(text: &str, starts: &[usize], offset: usize) -> Option<usize> {
+    let before = &text[..offset];
+    let open = before.rfind("/*")?;
+    if before[open..].contains("*/") {
+        return None;
+    }
+    let close = offset + text[offset..].find("*/")? + 2;
+    let after = &text[close..];
+    let code = close + after.len() - after.trim_start().len();
+    Some(starts.partition_point(|&s| s <= code) - 1)
+}
+
 /// `theirs` without what `ours` reports as well, for one file with the text `text`. Each of ours
 /// cancels one of theirs at most: two errors on a line with one identifier may be two different
 /// errors, and one too many shown beats a real one hidden. A hint isn't a report of ours: it only
@@ -67,15 +81,28 @@ pub fn merge(ours: &[Diagnostic], theirs: Vec<Diagnostic>, text: &str) -> Vec<Di
         return theirs;
     }
     let starts = line_starts(text);
-    let line_of = |range: TextRange| starts.partition_point(|&s| s <= range.start().into()) - 1;
-    let mut left: FxHashMap<_, usize> = FxHashMap::default();
+    let line_of = |offset: usize| starts.partition_point(|&s| s <= offset) - 1;
+    // which of ours answer to a line and identifier
+    let mut places: FxHashMap<_, Vec<usize>> = FxHashMap::default();
     let mut syntax_error = false;
-    for d in ours {
+    for (index, d) in ours.iter().enumerate() {
         syntax_error |= d.code == codes::SYNTAX;
-        if d.severity != Severity::Hint {
-            *left.entry((line_of(d.range), d.code.clone())).or_default() += 1;
+        if d.severity == Severity::Hint {
+            continue;
+        }
+        let start = usize::from(d.range.start());
+        places
+            .entry((line_of(start), d.code.clone()))
+            .or_default()
+            .push(index);
+        if let Some(line) = line_documented(text, &starts, start) {
+            places
+                .entry((line, d.code.clone()))
+                .or_default()
+                .push(index);
         }
     }
+    let mut used = vec![false; ours.len()];
     theirs
         .into_iter()
         .filter(|d| {
@@ -86,12 +113,16 @@ pub fn merge(ours: &[Diagnostic], theirs: Vec<Diagnostic>, text: &str) -> Vec<Di
             if d.code.is_empty() {
                 return true;
             }
-            match left.get_mut(&(line_of(d.range), d.code.clone())) {
-                Some(count) if *count > 0 => {
-                    *count -= 1;
+            let line = line_of(d.range.start().into());
+            let same = places
+                .get(&(line, d.code.clone()))
+                .and_then(|candidates| candidates.iter().find(|i| !used[**i]));
+            match same {
+                Some(&index) => {
+                    used[index] = true;
                     false
                 }
-                _ => true,
+                None => true,
             }
         })
         .collect()
@@ -239,6 +270,58 @@ mod tests {
         let parse = [reported(Some(3), Some(PHPSTAN_SYNTAX), "theirs")];
         assert!(merge(&[ours(codes::SYNTAX)], theirs(&parse), TEXT).is_empty());
         assert_eq!(merge(&[ours("return.type")], theirs(&parse), TEXT).len(), 1);
+    }
+
+    #[test]
+    fn what_is_wrong_in_a_doc_comment_is_at_the_comment_or_at_what_it_documents() {
+        let text = "<?php\n/**\n * @param array<int> $x\n */\n\nfunction f(int $x) {}\nfoo();\n";
+        let at = text.find("array<int>").unwrap() as u32;
+        let ours = |code| {
+            Diagnostic::error(
+                "/a.php",
+                TextRange::new(at.into(), (at + 10).into()),
+                code,
+                "ours",
+            )
+        };
+        let theirs = |line| {
+            diagnostics(
+                Path::new("/a.php"),
+                text,
+                &[reported(Some(line), Some("parameter.phpDocType"), "theirs")],
+            )
+        };
+        let doc = [ours("parameter.phpDocType")];
+        // at the function, and in the comment itself
+        assert!(merge(&doc, theirs(6), text).is_empty());
+        assert!(merge(&doc, theirs(3), text).is_empty());
+        // not further on
+        assert_eq!(merge(&doc, theirs(7), text).len(), 1);
+        // not another identifier
+        assert_eq!(merge(&[ours("class.notFound")], theirs(6), text).len(), 1);
+        // and one of ours is still one report, wherever it answers
+        let mut two = theirs(6);
+        two.extend(theirs(3));
+        assert_eq!(merge(&doc, two, text).len(), 1);
+    }
+
+    #[test]
+    fn code_after_a_closed_comment_is_not_in_it() {
+        let text = "<?php\n/** doc */\nfoo();\nbar();\n";
+        let starts = line_starts(text);
+        assert_eq!(
+            line_documented(text, &starts, text.find("doc").unwrap()),
+            Some(2)
+        );
+        assert_eq!(
+            line_documented(text, &starts, text.find("foo").unwrap()),
+            None
+        );
+        assert_eq!(
+            line_documented(text, &starts, text.find("bar").unwrap()),
+            None
+        );
+        assert_eq!(line_documented("<?php\nfoo();\n", &starts, 6), None);
     }
 
     #[test]

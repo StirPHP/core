@@ -379,9 +379,14 @@ impl Phpstan {
             .into_iter()
             .partition(|e| stir_phpstan::is_incomplete(e));
         if let Some(first) = stopped.first() {
+            let advice = if stir_phpstan::is_memory(first) {
+                " A higher `memoryLimit` can be set in `parameters.stirphp.phpstan` or the editor's settings."
+            } else {
+                ""
+            };
             self.tell(
                 "incomplete",
-                format!("the run didn't finish: {}", first.trim()),
+                format!("the run didn't finish: {}.{advice}", first.trim()),
             );
             // nothing can be concluded from what isn't there
             if report.files.is_empty() {
