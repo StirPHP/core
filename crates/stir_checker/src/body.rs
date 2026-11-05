@@ -58,6 +58,12 @@ struct LoopExits {
     continues: Vec<FlowState>,
 }
 
+/// What a closure runs as, when that's not where it's written.
+struct ClosureBind<'db> {
+    this: Option<Ty>,
+    class: Option<Rc<ClassModel<'db>>>,
+}
+
 /// What a call that came with `@phpstan-assert`s went to.
 #[derive(Clone)]
 struct CallAsserts {
@@ -110,6 +116,8 @@ pub struct Checker<'a, 'db> {
     in_ctor: bool,
     /// Calls to something with `@phpstan-assert`s, by the range of the call.
     call_targets: FxHashMap<TextRange, CallAsserts>,
+    /// What the next closure checked is bound to.
+    closure_bind: Option<ClosureBind<'db>>,
     /// `@var` tags of a `foreach` about to bind its variables.
     pending_var_tags: Vec<(Option<SmolStr>, Ty)>,
     /// How the last checked call solved its templates.
@@ -243,6 +251,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             lower_cx: LowerCx::default(),
             in_ctor: false,
             call_targets: FxHashMap::default(),
+            closure_bind: None,
             pending_var_tags: Vec::new(),
             last_solved: FxHashMap::default(),
             types: FxHashMap::default(),
@@ -2968,7 +2977,24 @@ impl<'a, 'db> Checker<'a, 'db> {
             })
         };
         // `$a + $b` on arrays is a union of their entries
-        if op == PLUS && is_array(l) && is_array(r) {
+        let any_array = |t: &Ty| {
+            t.members().iter().any(|m| {
+                matches!(
+                    m.kind(),
+                    TyKind::Array { .. } | TyKind::List { .. } | TyKind::Shape(_)
+                )
+            })
+        };
+        if op == PLUS && (any_array(l) || any_array(r)) {
+            if let (TyKind::Shape(a), TyKind::Shape(b)) = (l.kind(), r.kind()) {
+                let mut fields = a.fields.clone();
+                for f in &b.fields {
+                    if !fields.iter().any(|x| x.key == f.key) {
+                        fields.push(f.clone());
+                    }
+                }
+                return Ty::shape(fields, a.sealed && b.sealed);
+            }
             return Ty::array(Ty::array_key(), Ty::mixed());
         }
         let (int, float) = (Ty::int(), Ty::float());
@@ -3197,7 +3223,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     let assigned = if result.is_null() {
                         declared.clone()
                     } else {
-                        narrow_assigned(&declared, &result)
+                        narrow_assigned(self.ctx, &declared, &result)
                     };
                     if let Some(frame) = self.frames.first_mut() {
                         frame.insert(
@@ -4032,6 +4058,12 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             let pty = assigned[i].map(|p| subst_cls(&sig.params[p].ty));
             let exp = pty.as_ref().map(|t| inf.apply(t));
+            if let Some(this) = assigned[i].and_then(|p| sig.params[p].closure_this.as_ref()) {
+                self.closure_bind = Some(ClosureBind {
+                    this: Some(inf.apply(&subst_cls(this))),
+                    class: self.class.clone(),
+                });
+            }
             let t = self.expr(&v, exp.as_ref());
             if let Some(p) = &pty {
                 inf.unify(self.ctx, p, &t);
@@ -4085,6 +4117,20 @@ impl<'a, 'db> Checker<'a, 'db> {
                 &want,
                 &format!("argument `{}` of `{}`", param.name, sig.name),
             );
+        }
+        // `@param-out`: what a by-reference argument holds now
+        for (i, a) in args.iter().enumerate() {
+            let Some(out) = assigned[i].and_then(|p| sig.params[p].out.as_ref()) else {
+                continue;
+            };
+            let out = inf.apply(&subst_cls(out));
+            if let Some(key) = value_of(a).and_then(|v| self.place_key(&v))
+                && let Some(l) = self.lookup_mut(&key)
+                && l.kind != LocalKind::This
+            {
+                l.ty = out.clone();
+                l.declared = out;
+            }
         }
         // what a conditional return type is about
         for (index, id) in &sig.conditional_on {
@@ -4354,6 +4400,8 @@ impl<'a, 'db> Checker<'a, 'db> {
                             range: node.text_range(),
                             documented: false,
                             default: None,
+                            out: None,
+                            closure_this: None,
                         })
                         .collect(),
                     ret: f.ret.clone(),
@@ -4664,6 +4712,26 @@ impl<'a, 'db> Checker<'a, 'db> {
         let Some(fetch) = node.children().next() else {
             return Ty::error();
         };
+        // `(function () { ... })->call($object)` and `->bindTo($object, $scope)`
+        let base = exprs_of(&fetch).into_iter().next();
+        let literal = base.as_ref().is_some_and(|b| {
+            let mut b = b.clone();
+            while b.kind() == PAREN_EXPR {
+                match exprs_of(&b).into_iter().next() {
+                    Some(inner) => b = inner,
+                    None => break,
+                }
+            }
+            matches!(b.kind(), CLOSURE_EXPR | ARROW_FN_EXPR)
+        });
+        if literal && let Some(name) = fetch.child(SyntaxKind::NAME) {
+            let args = self.args_of(node);
+            match text_of(&name).to_ascii_lowercase().as_str() {
+                "bindto" => self.prepare_closure_bind(&args, 0, 1),
+                "call" => self.prepare_closure_bind(&args, 0, 0),
+                _ => {}
+            }
+        }
         let Some((recv, nullable)) = self.receiver(&fetch) else {
             return Ty::error();
         };
@@ -4933,11 +5001,62 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
+    /// `Closure::bind(function () { ... }, $object, Foo::class)`
+    fn prepare_closure_bind(&mut self, args: &[SyntaxNode], this_arg: usize, scope_arg: usize) {
+        let this = args
+            .get(this_arg)
+            .and_then(|a| exprs_of(a).into_iter().next())
+            .map(|e| self.expr(&e, None));
+        let scope = args
+            .get(scope_arg)
+            .and_then(|a| exprs_of(a).into_iter().next())
+            .map(|e| self.expr(&e, None));
+        let class_of_value = |this: &Self, t: &Ty| {
+            let c = match this.named_class(t) {
+                Some(c) => c,
+                None => class_of(t),
+            };
+            match class_of(&c).kind() {
+                TyKind::Class { name, .. } => this.ctx.class(name),
+                _ => None,
+            }
+        };
+        let class = scope.as_ref().and_then(|s| class_of_value(self, s));
+        // no scope given: it keeps the class it has
+        let class = class.or_else(|| self.class.clone());
+        let this_ty = this.filter(|t| !t.is_null() && !t.is_error()).map(|t| {
+            if t.is_untyped() || matches!(t.kind(), TyKind::Mixed | TyKind::Object) {
+                // an object of the scope's class, if nothing says otherwise
+                class.as_ref().map_or_else(Ty::untyped, |c| c.self_ty())
+            } else {
+                t
+            }
+        });
+        self.closure_bind = Some(ClosureBind {
+            this: this_ty,
+            class,
+        });
+    }
+
     fn static_call(&mut self, node: &SyntaxNode, expected: Option<&Ty>) -> Ty {
         let Some(fetch) = node.children().next() else {
             return Ty::error();
         };
         let cls = self.static_base(&fetch);
+        if matches!(cls.kind(), TyKind::Class { name, .. } if name.eq_ignore_ascii_case("Closure"))
+            && fetch
+                .child(SyntaxKind::NAME)
+                .is_some_and(|n| text_of(&n).eq_ignore_ascii_case("bind"))
+        {
+            let args = self.args_of(node);
+            let is_literal = args
+                .first()
+                .and_then(|a| exprs_of(a).into_iter().next())
+                .is_some_and(|e| matches!(e.kind(), CLOSURE_EXPR | ARROW_FN_EXPR));
+            if is_literal {
+                self.prepare_closure_bind(&args, 1, 2);
+            }
+        }
         let Some(name_node) = fetch.child(SyntaxKind::NAME) else {
             self.check_args_untyped(node);
             return Ty::untyped();
@@ -5107,10 +5226,36 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
-    fn new_expr_inner(&mut self, node: &SyntaxNode, expected: Option<&Ty>) -> Ty {
-        if node.child(ANON_CLASS).is_some() {
-            self.check_args_untyped(node);
+    /// `new class(...) { ... }`: checks it, and it's an object of that class.
+    fn anonymous_class(&mut self, anon: &SyntaxNode) -> Ty {
+        let ptr = stir_hir::NodePtr::new(anon);
+        let Some(def) = self.items.classes.iter().find(|c| c.ptr == ptr) else {
+            self.check_args_untyped(anon);
             return Ty::object();
+        };
+        let Some(model) = self.ctx.class(def.name.as_str()) else {
+            self.check_args_untyped(anon);
+            return Ty::object();
+        };
+        match self.ctx.find_method(&model.self_ty(), "__construct") {
+            Some((owner, m, map)) => {
+                let sig = self.ctx.method_sig(&owner, m);
+                self.check_args(anon, &sig, &map, None, &[]);
+            }
+            None => self.check_args_untyped(anon),
+        }
+        // the class isn't reachable from a statement of its own
+        let saved_ctor = std::mem::replace(&mut self.in_ctor, false);
+        let saved_prepass = self.prepass;
+        self.class_decl(anon);
+        self.prepass = saved_prepass;
+        self.in_ctor = saved_ctor;
+        model.self_ty()
+    }
+
+    fn new_expr_inner(&mut self, node: &SyntaxNode, expected: Option<&Ty>) -> Ty {
+        if let Some(anon) = node.child(ANON_CLASS) {
+            return self.anonymous_class(&anon);
         }
         let Some(target) = node.children().find(|c| c.kind() != ARG_LIST) else {
             return Ty::error();
@@ -5231,17 +5376,19 @@ impl<'a, 'db> Checker<'a, 'db> {
                         }
                         None => {
                             if v.has_token(AMP) {
-                                frame.insert(
-                                    SmolStr::new(n),
-                                    // whatever the outer code puts there, even the closure itself
-                                    Local {
-                                        ty: Ty::untyped(),
-                                        declared: Ty::untyped(),
-                                        kind: LocalKind::Variable,
-                                        range: t.text_range(),
-                                        maybe_undefined: false,
-                                    },
-                                );
+                                // whatever the outer code puts there, even the closure itself;
+                                // and with the reference it exists out there from now on
+                                let local = Local {
+                                    ty: Ty::untyped(),
+                                    declared: Ty::untyped(),
+                                    kind: LocalKind::Variable,
+                                    range: t.text_range(),
+                                    maybe_undefined: false,
+                                };
+                                frame.insert(SmolStr::new(n), local.clone());
+                                if let Some(f) = self.frames.first_mut() {
+                                    f.insert(SmolStr::new(n), local);
+                                }
                             } else {
                                 self.error(
                                     t.text_range(),
@@ -5254,9 +5401,27 @@ impl<'a, 'db> Checker<'a, 'db> {
                 }
             }
         }
-        if let Some(this) = self.lookup("this").cloned() {
+        // `Closure::bind()` and `@param-closure-this` say what `$this` and the class are in it
+        let bound = self.closure_bind.take();
+        let is_static = node.has_token(STATIC_KW);
+        let this = match &bound {
+            Some(b) => b.this.clone().map(|t| Local {
+                ty: t.clone(),
+                declared: t,
+                kind: LocalKind::This,
+                range: node.text_range(),
+                maybe_undefined: false,
+            }),
+            None if is_static => None,
+            None => self.lookup("this").cloned(),
+        };
+        if let Some(this) = this {
             frame.insert(SmolStr::new("this"), this);
         }
+        let saved_class = bound
+            .as_ref()
+            .and_then(|b| b.class.clone())
+            .map(|c| self.class.replace(c));
         let saved = std::mem::replace(&mut self.frames, vec![frame]);
         let saved_dead = std::mem::replace(&mut self.dead, false);
         let saved_loops = std::mem::take(&mut self.loops);
@@ -5324,7 +5489,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                 self.block_stmts(&b);
             }
             let fcx = self.fns.pop().unwrap();
-            if infer {
+            if infer && is_generator(node) {
+                Ty::class("Generator", Vec::new())
+            } else if infer {
                 fcx.returns
                     .into_iter()
                     .reduce(|a, b| stir_types::join(self.ctx, &a, &b))
@@ -5333,9 +5500,42 @@ impl<'a, 'db> Checker<'a, 'db> {
                 ret
             }
         };
+        // what it left in what it holds by reference
+        let by_ref: Vec<(SmolStr, Ty)> = node
+            .child(CLOSURE_USE)
+            .iter()
+            .flat_map(|u| u.children_of(CLOSURE_USE_VAR))
+            .filter(|v| v.has_token(AMP))
+            .filter_map(|v| {
+                let t = v.token(VARIABLE)?;
+                let n = SmolStr::new(&t.text()[1..]);
+                let ty = self.lookup(&n)?.ty.clone();
+                Some((n, ty))
+            })
+            .collect();
         self.frames = saved;
+        for (n, t) in by_ref {
+            if let Some(l) = self.lookup_mut(&n) {
+                // it may not run, and if it's still unknown it's unknown
+                let before = if l.ty.is_untyped() {
+                    Ty::null()
+                } else {
+                    l.ty.clone()
+                };
+                let joined = if t.is_untyped() {
+                    Ty::untyped()
+                } else {
+                    Ty::union([before, t])
+                };
+                l.ty = joined.clone();
+                l.declared = joined;
+            }
+        }
         self.dead = saved_dead;
         self.loops = saved_loops;
+        if let Some(c) = saved_class {
+            self.class = c;
+        }
         Ty::closure(Some(stir_types::FnTy::new(params, ret)))
     }
 
@@ -5443,6 +5643,7 @@ fn in_nullsafe_chain(node: &SyntaxNode) -> bool {
 fn class_of(ty: &Ty) -> Ty {
     match ty.kind() {
         TyKind::SelfType { class, .. } => class.clone(),
+        TyKind::Callable { closure: true, .. } => Ty::class("Closure", Vec::new()),
         TyKind::Intersection(_) => ty
             .members()
             .iter()
@@ -5584,7 +5785,7 @@ fn is_superglobal(name: &str) -> bool {
 }
 
 /// After assigning `value` to a variable declared `declared`, its current type.
-fn narrow_assigned(declared: &Ty, value: &Ty) -> Ty {
+fn narrow_assigned(env: &dyn stir_types::TypeEnv, declared: &Ty, value: &Ty) -> Ty {
     if value.is_error() || declared.is_error() {
         return declared.clone();
     }
@@ -5597,7 +5798,7 @@ fn narrow_assigned(declared: &Ty, value: &Ty) -> Ty {
         return Ty::null();
     }
     let w = widen_literals(value);
-    if stir_types::is_assignable(&stir_types::EmptyEnv, &w, declared) {
+    if stir_types::is_assignable(env, &w, declared) {
         w
     } else {
         declared.clone()

@@ -312,6 +312,16 @@ fn attaches_doc_comment(kind: SyntaxKind) -> bool {
             | FOREACH_STMT
             | STATIC_VAR_STMT
             | GLOBAL_STMT
+            | ECHO_STMT
+            | IF_STMT
+            | WHILE_STMT
+            | DO_WHILE_STMT
+            | FOR_STMT
+            | SWITCH_STMT
+            | TRY_STMT
+            | UNSET_STMT
+            | BREAK_STMT
+            | CONTINUE_STMT
     )
 }
 

@@ -91,6 +91,10 @@ pub struct ParamSig {
     pub documented: bool,
     /// The type of the default value, when it's a literal.
     pub default: Option<Ty>,
+    /// `@param-out`.
+    pub out: Option<Ty>,
+    /// `@param-closure-this`.
+    pub closure_this: Option<Ty>,
 }
 
 /// A resolved function or method signature.
@@ -513,6 +517,28 @@ impl<'db> Ctx<'db> {
             .collect()
     }
 
+    /// The PHPDoc type of property `name` on the closest parent that has one.
+    pub fn property_doc_from_parents(&self, c: &ClassModel<'db>, name: &str) -> Option<Ty> {
+        for anc in self.ancestors(&c.self_ty()).iter().skip(1) {
+            let TyKind::Class { name: pn, args } = anc.kind() else {
+                continue;
+            };
+            let Some(pc) = self.class(pn) else { continue };
+            let Some(p) = pc.def.properties.iter().find(|p| p.name == name) else {
+                continue;
+            };
+            if p.mods.visibility == Visibility::Private {
+                continue;
+            }
+            if let Some(doc) = &p.doc_ty {
+                let cx = self.class_cx(&pc);
+                let t = self.lower(doc, &cx, &mut Vec::new());
+                return Some(stir_types::subst(&t, &self.subst_map(&pc, args)));
+            }
+        }
+        None
+    }
+
     pub fn is_subclass(&self, child: &str, ancestor: &str) -> bool {
         let lower = ancestor.to_ascii_lowercase();
         self.ancestors(&Ty::class(child, Vec::new()))
@@ -890,7 +916,7 @@ impl<'db> Ctx<'db> {
         let (ret, ret_declared) =
             match self.merged_ty(sig.ret.as_ref(), sig.doc_ret.as_ref(), &cx, sink) {
                 Some(t) => (t, true),
-                None => (Ty::mixed(), false),
+                None => (Ty::untyped(), false),
             };
         FnSig {
             name: SmolStr::new(name),
@@ -905,9 +931,19 @@ impl<'db> Ctx<'db> {
     }
 
     pub fn param_sig(&self, p: &ParamDef, cx: &LowerCx, sink: &mut Vec<LowerError>) -> ParamSig {
-        let ty = self
-            .merged_ty(p.ty.as_ref(), p.doc_ty.as_ref(), cx, sink)
-            .unwrap_or_else(Ty::mixed);
+        // `@param list<T> $x` on `T ...$x` is about the list of them, and the type is of each
+        let ty = match (p.variadic, p.doc_ty.as_ref()) {
+            (true, Some(doc)) => {
+                let d = self.lower(doc, cx, sink);
+                match d.kind() {
+                    TyKind::List { elem, .. } => Some(elem.clone()),
+                    TyKind::Array { value, .. } => Some(value.clone()),
+                    _ => self.merged_ty(p.ty.as_ref(), p.doc_ty.as_ref(), cx, sink),
+                }
+            }
+            _ => self.merged_ty(p.ty.as_ref(), p.doc_ty.as_ref(), cx, sink),
+        };
+        let ty = ty.unwrap_or_else(Ty::untyped);
         let ty = if p.default_is_null { ty.nullable() } else { ty };
         ParamSig {
             name: p.name.clone(),
@@ -918,6 +954,8 @@ impl<'db> Ctx<'db> {
             range: p.range,
             documented: p.doc_ty.is_some(),
             default: p.default_ty.as_ref().map(|t| self.lower(t, cx, sink)),
+            out: p.out_ty.as_ref().map(|t| self.lower(t, cx, sink)),
+            closure_this: p.closure_this.as_ref().map(|t| self.lower(t, cx, sink)),
         }
     }
 
@@ -1129,6 +1167,56 @@ impl<'db> Ctx<'db> {
                 let map = self.subst_map(&c, args);
                 return Some((c, m, map));
             }
+            // `use T { method as alias; }`
+            if let Some((_, method)) = c
+                .def
+                .trait_aliases
+                .iter()
+                .find(|(alias, _)| alias.eq_ignore_ascii_case(name))
+                && !method.eq_ignore_ascii_case(name)
+            {
+                return self.find_method(&anc.clone(), method);
+            }
+        }
+        self.on_mixins(ty, |this, mixin| {
+            this.find_method(mixin, name)
+                .filter(|(_, m, _)| m.mods.visibility == Visibility::Public)
+        })
+    }
+
+    /// Looks through the `@mixin` types of `ty` and its ancestors.
+    fn on_mixins<T>(&self, ty: &Ty, find: impl Fn(&Self, &Ty) -> Option<T>) -> Option<T> {
+        for anc in self.ancestors(ty).iter() {
+            let TyKind::Class { name, args } = anc.kind() else {
+                continue;
+            };
+            let Some(c) = self.class(name) else { continue };
+            if c.def.mixins.is_empty() {
+                continue;
+            }
+            let guard = SmolStr::new(format!("mixin:{}", c.key));
+            if !self.in_progress.borrow_mut().insert(guard.clone()) {
+                continue;
+            }
+            let cx = self.class_cx(&c);
+            let map = self.subst_map(&c, args);
+            let mut found = None;
+            for mixin in &c.def.mixins {
+                let t = stir_types::subst(&self.lower(mixin, &cx, &mut Vec::new()), &map);
+                // `@mixin T`: what's looked up on it is on its bound
+                let t = match t.kind() {
+                    TyKind::Param { id, .. } => self.param_bound(*id).unwrap_or(t),
+                    _ => t,
+                };
+                found = find(self, &t);
+                if found.is_some() {
+                    break;
+                }
+            }
+            self.in_progress.borrow_mut().remove(&guard);
+            if found.is_some() {
+                return found;
+            }
         }
         None
     }
@@ -1144,7 +1232,17 @@ impl<'db> Ctx<'db> {
             let cx = self.class_cx(&c);
             let mut sink = Vec::new();
             if let Some(p) = c.def.properties.iter().find(|p| p.name == name) {
-                let ty = self.merged_ty(p.ty.as_ref(), p.doc_ty.as_ref(), &cx, &mut sink);
+                let mut ty = self.merged_ty(p.ty.as_ref(), p.doc_ty.as_ref(), &cx, &mut sink);
+                // redeclared without a PHPDoc type: it takes the one it overrides
+                if p.doc_ty.is_none()
+                    && !p.magic
+                    && let Some(doc) = self.property_doc_from_parents(&c, name)
+                {
+                    let native = p.ty.as_ref().map(|t| self.lower(t, &cx, &mut sink));
+                    if let Some(t) = self.refine_native(native, doc) {
+                        ty = Some(t);
+                    }
+                }
                 return Some(PropertyInfo::from_def(&c, p, ty, map));
             }
             let promoted = c
@@ -1169,7 +1267,10 @@ impl<'db> Ctx<'db> {
                 });
             }
         }
-        None
+        self.on_mixins(ty, |this, mixin| {
+            this.find_property(mixin, name)
+                .filter(|p| p.visibility == Visibility::Public)
+        })
     }
 
     /// Finds a class constant or enum case on class `name`.

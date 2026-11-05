@@ -28,6 +28,15 @@ function array_values(array $array): array {}
 function array_filter(array $array, ?callable $callback = null, int $mode = 0): array {}
 
 /**
+ * @template V
+ * @template R
+ * @param (callable(V): R) $callback
+ * @param list<V> $array
+ * @return list<R>
+ */
+function array_map(?callable $callback, array $array): array {}
+
+/**
  * @template K of array-key
  * @template V
  * @template R
@@ -38,9 +47,7 @@ function array_filter(array $array, ?callable $callback = null, int $mode = 0): 
 function array_map(?callable $callback, array $array): array {}
 
 /**
- * @template R
- * @param (callable(mixed, mixed, mixed...): R)|null $callback
- * @return list<R>
+ * @return list<mixed>
  */
 function array_map(?callable $callback, array $array, array ...$arrays): array {}
 
@@ -77,12 +84,26 @@ function array_replace(array $array, array ...$replacements): array {}
 function array_unique(array $array, int $flags = SORT_STRING): array {}
 
 /**
+ * @template V
+ * @param list<V> $array
+ * @return ($preserve_keys is true ? array<int, V> : list<V>)
+ */
+function array_reverse(array $array, bool $preserve_keys = false): array {}
+
+/**
  * @template K of array-key
  * @template V
  * @param array<K, V> $array
  * @return array<K|int, V>
  */
 function array_reverse(array $array, bool $preserve_keys = false): array {}
+
+/**
+ * @template V
+ * @param list<V> $array
+ * @return ($preserve_keys is true ? array<int, V> : list<V>)
+ */
+function array_slice(array $array, int $offset, ?int $length = null, bool $preserve_keys = false): array {}
 
 /**
  * @template K of array-key
@@ -336,3 +357,32 @@ function str_replace(array|string $search, array|string $replace, array|string $
  * @return ($subject is array ? array<string> : string)
  */
 function str_ireplace(array|string $search, array|string $replace, array|string $subject, &$count = null): array|string {}
+
+/**
+ * @template V
+ * @param array<array-key, V> $array
+ * @param-out list<V> $array
+ */
+function sort(array &$array, int $flags = SORT_REGULAR): bool {}
+
+/**
+ * @template V
+ * @param array<array-key, V> $array
+ * @param-out list<V> $array
+ */
+function rsort(array &$array, int $flags = SORT_REGULAR): bool {}
+
+/**
+ * @template V
+ * @param array<array-key, V> $array
+ * @param callable(V, V): int $callback
+ * @param-out list<V> $array
+ */
+function usort(array &$array, callable $callback): bool {}
+
+/**
+ * @template V
+ * @param array<array-key, V> $array
+ * @param-out list<V> $array
+ */
+function shuffle(array &$array): bool {}

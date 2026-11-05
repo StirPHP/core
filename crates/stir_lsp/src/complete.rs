@@ -391,6 +391,9 @@ fn global_items(
     for locs in index.classes.values() {
         let Some(&loc) = locs.first() else { continue };
         let c = &file_items(db, loc.file).classes[loc.index as usize];
+        if c.is_anonymous() {
+            continue;
+        }
         let short = c.name.short();
         if !fuzzy(short, prefix) {
             continue;

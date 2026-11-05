@@ -72,7 +72,7 @@ pub fn document_symbols(db: &dyn Db, file: SourceFile) -> Vec<Symbol> {
         ));
     }
 
-    for c in &items.classes {
+    for c in items.classes.iter().filter(|c| !c.is_anonymous()) {
         let mut s = leaf(
             c.name.short(),
             class_kind(c.kind),
@@ -158,7 +158,7 @@ pub fn workspace_symbols(db: &dyn Db, ws: Workspace, query: &str) -> Vec<Workspa
         for f in &items.functions {
             push(&f.name, SymbolKind::Function, f.name_range);
         }
-        for c in &items.classes {
+        for c in items.classes.iter().filter(|c| !c.is_anonymous()) {
             push(&c.name, class_kind(c.kind), c.name_range);
         }
 

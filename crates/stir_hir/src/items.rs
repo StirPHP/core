@@ -62,6 +62,10 @@ pub struct ParamDef {
     pub default_is_null: bool,
     /// The type of the default value, when it's a literal.
     pub default_ty: Option<TypeRef>,
+    /// `@param-out`: what a by-reference parameter holds after the call.
+    pub out_ty: Option<TypeRef>,
+    /// `@param-closure-this`: what `$this` is inside a closure passed for this parameter.
+    pub closure_this: Option<TypeRef>,
     pub variadic: bool,
     pub by_ref: bool,
     /// Constructor promotion: `private int $x`.
@@ -215,9 +219,20 @@ pub struct ClassDef {
     pub type_aliases: Vec<(SmolStr, TypeRef)>,
     /// Every alias in scope in the class's PHPDoc, imported ones too.
     pub aliases: Aliases,
+    /// `@mixin` types: their members are available on this class.
+    pub mixins: Vec<TypeRef>,
+    /// `use T { method as alias; }`: by alias, the method it stands for.
+    pub trait_aliases: Vec<(SmolStr, SmolStr)>,
     pub doc: Option<DocText>,
     pub ptr: NodePtr,
     pub name_range: TextRange,
+}
+
+impl ClassDef {
+    /// `new class { ... }`: it has a name only inside the checker.
+    pub fn is_anonymous(&self) -> bool {
+        self.name.as_str().starts_with("class@anonymous")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,6 +268,7 @@ impl FileItems {
 
 pub(crate) fn lower_file(root: &SyntaxNode, php_version: (u8, u8)) -> FileItems {
     let mut l = Lowerer {
+        hash: None,
         php_version,
         out: FileItems::default(),
         scope: Scope::default(),
@@ -263,7 +279,15 @@ pub(crate) fn lower_file(root: &SyntaxNode, php_version: (u8, u8)) -> FileItems 
     l.out
 }
 
+/// How a class is named.
+enum ClassName<'a> {
+    Declared(&'a SyntaxNode),
+    Anonymous(String),
+}
+
 struct Lowerer {
+    /// Hash of the file's text, once needed.
+    hash: Option<u64>,
     /// Target version for the phpstorm-stubs attributes.
     php_version: (u8, u8),
     out: FileItems,
@@ -386,9 +410,12 @@ impl Lowerer {
             // Conditional declarations (`if (!function_exists('f')) { function f() {} }`).
             BLOCK | IF_STMT | ELSEIF_CLAUSE | ELSE_CLAUSE | TRY_STMT | CATCH_CLAUSE
             | FINALLY_CLAUSE | WHILE_STMT | FOR_STMT | FOREACH_STMT | SWITCH_STMT | SWITCH_CASE => {
-                self.stmts(node)
+                return self.stmts(node);
             }
             _ => {}
+        }
+        if !matches!(node.kind(), NAMESPACE_DECL | USE_DECL) {
+            self.anonymous_classes(node);
         }
     }
 
@@ -495,6 +522,8 @@ impl Lowerer {
                 has_default: true,
                 default_is_null: false,
                 default_ty: None,
+                out_ty: None,
+                closure_this: None,
                 variadic: true,
                 by_ref: false,
                 promoted: None,
@@ -569,6 +598,27 @@ impl Lowerer {
                     if doc::optional_marker(doc, &def.name) {
                         def.has_default = true;
                     }
+                    for tag in doc.effective_tags() {
+                        match &tag.kind {
+                            TagKind::ParamOut(out)
+                                if out.name.as_ref().is_some_and(|n| n.name == def.name) =>
+                            {
+                                def.out_ty = Some(self.doc_cx(names).lower(&out.ty));
+                            }
+                            // `@param-closure-this Type $name`
+                            TagKind::Generic(g) if tag.name.ends_with("param-closure-this") => {
+                                let Some(text) = &g.description else { continue };
+                                let Some((ty, name)) = text.text.rsplit_once('$') else {
+                                    continue;
+                                };
+                                if name.split_whitespace().next() == Some(def.name.as_str()) {
+                                    let t = stir_phpdoc::parse_type(ty.trim(), text.range.start());
+                                    def.closure_this = Some(self.doc_cx(names).lower(&t));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 Some(def)
             })
@@ -601,6 +651,8 @@ impl Lowerer {
                 c.kind() == NAME_EXPR && c.text().to_string().trim().eq_ignore_ascii_case("null")
             }),
             default_ty: p.children().find_map(|c| literal_type_ref(&c)),
+            out_ty: None,
+            closure_this: None,
             variadic: p.has_token(ELLIPSIS),
             by_ref: p.has_token(AMP),
             promoted,
@@ -642,6 +694,29 @@ impl Lowerer {
         });
     }
 
+    /// `new class { ... }`: named after where it is, which keeps it apart from those in other
+    /// files by the file's text.
+    fn anonymous_classes(&mut self, node: &SyntaxNode) {
+        for anon in node.descendants().filter(|d| d.kind() == ANON_CLASS) {
+            let at = u32::from(anon.text_range().start());
+            let name = format!("class@anonymous#{:x}#{at}", self.file_hash(node));
+            self.class_inner(&anon, ClassName::Anonymous(name), None, Vec::new());
+        }
+    }
+
+    fn file_hash(&mut self, node: &SyntaxNode) -> u64 {
+        if let Some(h) = self.hash {
+            return h;
+        }
+        use std::hash::{Hash, Hasher};
+        let root = node.ancestors().last().unwrap_or_else(|| node.clone());
+        let mut hasher = rustc_hash::FxHasher::default();
+        root.text().to_string().hash(&mut hasher);
+        let h = hasher.finish();
+        self.hash = Some(h);
+        h
+    }
+
     fn class(&mut self, node: &SyntaxNode) {
         let Some(name_node) = node.child(NAME) else {
             return;
@@ -661,14 +736,19 @@ impl Lowerer {
             self.aliases = aliases;
             local_aliases = locals;
         }
-        self.class_inner(node, &name_node, doc.as_ref(), local_aliases);
+        self.class_inner(
+            node,
+            ClassName::Declared(&name_node),
+            doc.as_ref(),
+            local_aliases,
+        );
         self.aliases = Aliases::default();
     }
 
     fn class_inner(
         &mut self,
         node: &SyntaxNode,
-        name_node: &SyntaxNode,
+        name: ClassName<'_>,
         doc: Option<&DocBlock>,
         type_aliases: Vec<(SmolStr, TypeRef)>,
     ) {
@@ -698,8 +778,22 @@ impl Lowerer {
             node.child(clause)
                 .map(|c| {
                     c.children()
-                        .filter(|t| is_type_node(t.kind()))
-                        .map(|t| ctx.lower(&t))
+                        .filter_map(|t| {
+                            if is_type_node(t.kind()) {
+                                Some(ctx.lower(&t))
+                            } else if t.kind() == NAME_REF {
+                                let text = t.text().to_string();
+                                Some(TypeRef {
+                                    kind: TypeRefKind::Named(
+                                        ctx.scope.resolve_class(text.trim()),
+                                        Vec::new(),
+                                    ),
+                                    range: t.text_range(),
+                                })
+                            } else {
+                                None
+                            }
+                        })
                         .collect()
                 })
                 .unwrap_or_default()
@@ -725,7 +819,12 @@ impl Lowerer {
         };
         let mut class = ClassDef {
             kind,
-            name: Fqn::join(&self.scope.namespace, name_node.text().to_string().trim()),
+            name: match &name {
+                ClassName::Declared(n) => {
+                    Fqn::join(&self.scope.namespace, n.text().to_string().trim())
+                }
+                ClassName::Anonymous(n) => Fqn::new(n),
+            },
             scope: self.scope_id(),
             mods,
             type_params,
@@ -739,9 +838,14 @@ impl Lowerer {
             traits: Vec::new(),
             type_aliases,
             aliases: self.aliases.clone(),
+            mixins: Vec::new(),
+            trait_aliases: Vec::new(),
             doc: doc_of(node),
             ptr: NodePtr::new(node),
-            name_range: name_node.text_range(),
+            name_range: match &name {
+                ClassName::Declared(n) => n.text_range(),
+                ClassName::Anonymous(_) => node.text_range(),
+            },
         };
 
         if let Some(body) = node.child(CLASS_BODY) {
@@ -751,6 +855,17 @@ impl Lowerer {
         }
         if let Some(d) = doc {
             self.magic_members(d, node, &mut class, &names);
+            let dcx = self.doc_cx(&names);
+            for tag in d.effective_tags() {
+                if tag.name.ends_with("mixin")
+                    && let TagKind::Generic(g) = &tag.kind
+                    && let Some(text) = &g.description
+                {
+                    let first = text.text.split_whitespace().next().unwrap_or("");
+                    let t = stir_phpdoc::parse_type(first, text.range.start());
+                    class.mixins.push(dcx.lower(&t));
+                }
+            }
         }
         self.out.classes.push(class);
     }
@@ -814,6 +929,8 @@ impl Lowerer {
                             has_default: mp.default.is_some(),
                             default_is_null: false,
                             default_ty: None,
+                            out_ty: None,
+                            closure_this: None,
                             variadic: mp.variadic,
                             by_ref: mp.by_ref,
                             promoted: None,
@@ -947,6 +1064,19 @@ impl Lowerer {
                     for tag in d.effective_tags() {
                         if let TagKind::Use(t) = &tag.kind {
                             refine_super(&mut class.traits, dcx.lower(&t.ty));
+                        }
+                    }
+                }
+                if let Some(adaptations) = m.child(TRAIT_ADAPTATIONS) {
+                    for alias in adaptations.children_of(TRAIT_ALIAS) {
+                        // `[T::]method as [visibility] [alias]`
+                        let names: Vec<SmolStr> = alias
+                            .children_of(NAME)
+                            .iter()
+                            .map(|n| SmolStr::new(n.text().to_string().trim()))
+                            .collect();
+                        if let [method, to] = names.as_slice() {
+                            class.trait_aliases.push((to.clone(), method.clone()));
                         }
                     }
                 }

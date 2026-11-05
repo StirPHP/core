@@ -127,7 +127,8 @@ fn print(w: &mut dyn Write, ty: &Ty, prec: Prec) -> fmt::Result {
         }
         K::Literal(l) => print_literal(w, l),
         K::Class { name, args } => {
-            w.write_str(name)?;
+            // an anonymous class's name is only for telling them apart
+            w.write_str(name.split('#').next().unwrap_or(name))?;
             print_args(w, args)
         }
         K::Param { name, .. } => w.write_str(name),
