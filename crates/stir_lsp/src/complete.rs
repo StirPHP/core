@@ -210,7 +210,7 @@ fn receiver_type(db: &dyn Db, ws: Workspace, file: SourceFile, arrow: TextSize) 
     let base = fetch.children().next()?;
     let typed = typed_file(db, ws, file);
     let mut ty = typed.types.get(&base.text_range()).cloned()?;
-    ty = stir_checker::strip_platform(&stir_types::without_null(&ty));
+    ty = stir_types::without_null(&ty);
     let ctx = Ctx::new(db, ws);
     for _ in 0..8 {
         match ty.kind() {

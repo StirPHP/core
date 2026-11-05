@@ -6,11 +6,9 @@
 //! | 0 | unknown classes/functions/methods/constants/variables, wrong argument counts, syntax |
 //! | 2 | PHPDoc validation (PHPDoc vs native types, generic arity, bounds), visibility, invalid operands |
 //! | 3 | return types, property types, other assignments |
-//! | 4 | always-true/false conditions (unnecessary null checks, incompatible comparisons) |
 //! | 5 | argument types |
-//! | 6 | missing typehints (not reported for `.php`) |
+//! | 6 | overrides (needs a [`Diagnostic::php_level`] tag) |
 //! | 7 | partially wrong unions (needs a [`Diagnostic::php_level`] tag) |
-//! | 8 | member access on nullable types |
 //! | 9 | strictness about `mixed` / untyped values |
 //! | 10 | implicit `mixed` (needs a [`Diagnostic::php_level`] tag) |
 
@@ -34,9 +32,6 @@ pub fn min_level(d: &Diagnostic) -> u8 {
         codes::TYPE_MISMATCH if untyped => 9,
         codes::TYPE_MISMATCH if d.message.contains("in argument") => 5,
         codes::TYPE_MISMATCH | codes::RETURN_VALUE => 3,
-        codes::UNNECESSARY_NULL_CHECK | codes::INCOMPATIBLE_COMPARISON => 4,
-        codes::MISSING_TYPE => 6,
-        codes::NULLABLE_ACCESS => 8,
         codes::ANY_PLATFORM_ESCAPE => 9,
         codes::INVALID_OPERAND | codes::NOT_CALLABLE if untyped => 9,
         codes::INVALID_OPERAND
@@ -45,7 +40,7 @@ pub fn min_level(d: &Diagnostic) -> u8 {
         | codes::GENERIC_ARITY
         | codes::TYPE_BOUND
         | PHPDOC_MISMATCH => 2,
-        // Unknown symbols, argument counts, syntax and everything StirPHP-only.
+        // Unknown symbols, argument counts and syntax.
         _ => 0,
     }
 }

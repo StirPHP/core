@@ -378,7 +378,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             _ => None,
         });
         self.assignable(&bottom, to)
-            || (strip_platform(from)
+            || (from
                 .members()
                 .iter()
                 .all(|m| matches!(m.kind(), TyKind::Array { .. } | TyKind::PhpList { .. }))
@@ -865,7 +865,6 @@ impl<'a, 'db> Checker<'a, 'db> {
     }
 
     fn iter_types(&mut self, range: TextRange, ty: &Ty) -> (Ty, Ty) {
-        let ty = strip_platform(ty);
         if ty.is_union() {
             let start = self.diags.len();
             let (mut keys, mut vals, mut missing) = (Vec::new(), Vec::new(), false);
@@ -894,8 +893,6 @@ impl<'a, 'db> Checker<'a, 'db> {
             return (Ty::union(keys), Ty::union(vals));
         }
         match ty.kind() {
-            TyKind::List(e) | TyKind::MutableList(e) => (Ty::int(), e.clone()),
-            TyKind::Map(k, v) | TyKind::MutableMap(k, v) => (k.clone(), v.clone()),
             TyKind::PhpList { elem, .. } if matches!(elem.kind(), TyKind::Never) => {
                 (Ty::php_int(), Ty::any_platform())
             }
@@ -948,7 +945,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 let t = self.expr(&v, expected.as_ref());
                 if fcx.infer_ret {
                     self.fns.last_mut().unwrap().returns.push(t);
-                } else if matches!(fcx.ret.kind(), TyKind::Unit | TyKind::Void) {
+                } else if matches!(fcx.ret.kind(), TyKind::Void) {
                     if !t.is_null() {
                         self.error(
                             v.text_range(),
@@ -1614,11 +1611,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     return Ty::error();
                 };
                 let target = self.lower_type_node(&tn);
-                if !src.is_error()
-                    && !target.is_error()
-                    && !src.is_any_platform()
-                    && !matches!(src.kind(), TyKind::Platform(_))
-                {
+                if !src.is_error() && !target.is_error() && !src.is_any_platform() {
                     // array types overlap with each other (a map may hold a list)
                     let arrays = |t: &Ty| {
                         t.members().iter().all(|m| {
@@ -1703,7 +1696,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     bt
                 };
 
-                let indexed = strip_platform(&stir_types::without_null(&bt));
+                let indexed = stir_types::without_null(&bt);
                 if indexed.is_union() {
                     let (ok, bad): (Vec<Ty>, Vec<Ty>) = indexed
                         .members()
@@ -2034,7 +2027,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             | OR_KW | XOR_KW => Ty::php_bool(),
             AMP | PIPE | CARET | SHL | SHR => Ty::php_int(),
             QUESTION2 => stir_types::join(self.ctx, &stir_types::without_null(&l), &r),
-            PIPE_GT => match strip_platform(&r).kind() {
+            PIPE_GT => match r.kind() {
                 TyKind::Fn(f) => f.ret.clone(),
                 TyKind::Callable { sig: Some(s), .. } => s.ret.clone(),
                 _ => Ty::any_platform(),
@@ -2052,7 +2045,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         let is_array = |t: &Ty| {
             t.members().iter().all(|m| {
                 matches!(
-                    strip_platform(m).kind(),
+                    m.kind(),
                     TyKind::Array { .. } | TyKind::PhpList { .. } | TyKind::Shape(_) | TyKind::Null
                 )
             })
@@ -2384,18 +2377,6 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     /// The declared (un-narrowed) type of an assignment target.
     fn declared_target_type(&self, node: &SyntaxNode) -> Option<Ty> {
-        if node.kind() == INDEX_EXPR {
-            // writing `m[k] = v`: the element type, without the read's `?`
-            let base = exprs_of(node).into_iter().next()?;
-            let bt = strip_platform(&stir_types::without_null(
-                self.types.get(&base.text_range())?,
-            ));
-            return match bt.kind() {
-                TyKind::MutableList(e) | TyKind::List(e) => Some(e.clone()),
-                TyKind::MutableMap(_, v) | TyKind::Map(_, v) => Some(v.clone()),
-                _ => None,
-            };
-        }
         if node.kind() == PROPERTY_FETCH_EXPR {
             let key = self.place_key(node)?;
             return self.lookup(&key).map(|l| l.declared.clone());
@@ -2417,7 +2398,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         let Some(name) = lhs.child(SyntaxKind::NAME).map(|n| text_of(&n)) else {
             return;
         };
-        let bt = strip_platform(&stir_types::without_null(&bt));
+        let bt = stir_types::without_null(&bt);
         if let Some(p) = self.ctx.find_property(&class_of(&bt), &name)
             && p.immutable
         {
@@ -2437,8 +2418,6 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     fn index_type(&self, base: &Ty, _index: Option<&Ty>) -> Option<Ty> {
         match base.kind() {
-            TyKind::List(e) | TyKind::MutableList(e) => Some(e.clone()),
-            TyKind::Map(_, v) | TyKind::MutableMap(_, v) => Some(v.clone().nullable()),
             // in a loop, an array that starts empty may have been written to by now
             TyKind::PhpList { elem, .. } if matches!(elem.kind(), TyKind::Never) => {
                 Some(Ty::any_platform())
@@ -2458,15 +2437,9 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     fn array_literal(&mut self, node: &SyntaxNode, expected: Option<&Ty>) -> Ty {
         let elems = node.children_of(ARRAY_ELEM);
-        let exp = expected.map(strip_platform);
-        let (exp_key, exp_val) = match exp.as_ref().map(|e| e.kind().clone()) {
-            Some(TyKind::List(e) | TyKind::MutableList(e)) => (None, Some(e)),
-            Some(TyKind::Map(k, v) | TyKind::MutableMap(k, v)) => (Some(k), Some(v)),
-            _ => (None, None),
-        };
         // `[]` where a PHP array type is expected
         if elems.is_empty()
-            && let Some(e) = &exp
+            && let Some(e) = expected
             && let Some(array) = e.members().iter().find(|m| {
                 matches!(
                     m.kind(),
@@ -2485,24 +2458,17 @@ impl<'a, 'db> Checker<'a, 'db> {
             match parts.as_slice() {
                 [k, v] if e.has_token(FAT_ARROW) => {
                     keyed = true;
-                    keys.push(self.expr(k, exp_key.as_ref()));
-                    vals.push(self.expr(v, exp_val.as_ref()));
+                    keys.push(self.expr(k, None));
+                    vals.push(self.expr(v, None));
                 }
                 [v] if spread => {
-                    let t = self.expr(v, exp.as_ref());
-                    match strip_platform(&t).kind() {
-                        TyKind::List(x)
-                        | TyKind::MutableList(x)
-                        | TyKind::PhpList { elem: x, .. } => vals.push(x.clone()),
-                        TyKind::Map(k, x) | TyKind::MutableMap(k, x) => {
-                            keyed = true;
-                            keys.push(k.clone());
-                            vals.push(x.clone());
-                        }
+                    let t = self.expr(v, expected);
+                    match t.kind() {
+                        TyKind::PhpList { elem, .. } => vals.push(elem.clone()),
                         _ => vals.push(Ty::error()),
                     }
                 }
-                [v] => vals.push(self.expr(v, exp_val.as_ref())),
+                [v] => vals.push(self.expr(v, None)),
                 _ => {}
             }
         }
@@ -2714,16 +2680,6 @@ impl<'a, 'db> Checker<'a, 'db> {
                     }
                 }
             }
-            TyKind::List(e) => self.variance_walk(e, input, invariant, params, range, out),
-            TyKind::MutableList(e) => self.variance_walk(e, input, true, params, range, out),
-            TyKind::Map(k, v) => {
-                self.variance_walk(k, input, true, params, range, out);
-                self.variance_walk(v, input, invariant, params, range, out);
-            }
-            TyKind::MutableMap(k, v) => {
-                self.variance_walk(k, input, true, params, range, out);
-                self.variance_walk(v, input, true, params, range, out);
-            }
             TyKind::Fn(f) => {
                 for p in &f.params {
                     self.variance_walk(&p.ty, !input, invariant, params, range, out);
@@ -2785,7 +2741,6 @@ impl<'a, 'db> Checker<'a, 'db> {
                 .map(|p| p.id)
                 .chain(extra_vars.iter().copied()),
         );
-        inf.php_caller = true;
 
         if let Some(e) = expected
             && !e.is_error()
@@ -3054,14 +3009,10 @@ impl<'a, 'db> Checker<'a, 'db> {
         };
         let is_array = |m: &Ty| {
             matches!(
-                strip_platform(m).kind(),
+                m.kind(),
                 TyKind::Array { .. }
                     | TyKind::PhpList { .. }
                     | TyKind::Shape(_)
-                    | TyKind::List(_)
-                    | TyKind::MutableList(_)
-                    | TyKind::Map(..)
-                    | TyKind::MutableMap(..)
                     | TyKind::Mixed
                     | TyKind::AnyPlatform
             )
@@ -3073,7 +3024,6 @@ impl<'a, 'db> Checker<'a, 'db> {
     }
 
     fn call_value(&mut self, node: &SyntaxNode, ct: &Ty, expected: Option<&Ty>) -> Ty {
-        let ct = strip_platform(ct);
         let fn_ty = match ct.kind() {
             TyKind::Fn(f) => Some(f.clone()),
             TyKind::Callable { sig: Some(s), .. } => Some(s.clone()),
@@ -3111,7 +3061,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     && !matches!(ct.kind(), TyKind::Callable { sig: None, .. })
                     && !matches!(ct.kind(), TyKind::Mixed)
                     && !ct.is_any_platform()
-                    && !php_callable_value(&ct)
+                    && !php_callable_value(ct)
                 {
                     self.error(
                         node.text_range(),
@@ -3150,10 +3100,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             .is_some_and(|c| c.kind() == NULLSAFE_PROPERTY_FETCH_EXPR);
         let nullable = stir_types::is_nullable(self.ctx, &bt);
 
-        Some((
-            strip_platform(&stir_types::without_null(&bt)),
-            nullsafe && nullable,
-        ))
+        Some((stir_types::without_null(&bt), nullsafe && nullable))
     }
 
     fn property_fetch(&mut self, node: &SyntaxNode) -> Ty {
@@ -3541,8 +3488,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             let t = text_of(&base);
             self.class_ref_ty(&base, &t)
         } else {
-            let t = self.expr(&base, None);
-            strip_platform(&t)
+            self.expr(&base, None)
         }
     }
 
@@ -3741,7 +3687,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
         // the constructor: `__construct` (possibly inherited)
         let vars: Vec<_> = model.params.iter().map(|p| p.id).collect();
-        let exp_args = expected.and_then(|e| match strip_platform(e).kind() {
+        let exp_args = expected.and_then(|e| match e.kind() {
             TyKind::Class { name: en, args } if en.eq_ignore_ascii_case(&model.name) => {
                 Some(args.clone())
             }
@@ -3791,7 +3737,7 @@ impl<'a, 'db> Checker<'a, 'db> {
     // ------------------------------------------------------------ functions as values
 
     fn closure(&mut self, node: &SyntaxNode, expected: Option<&Ty>) -> Ty {
-        let exp_fn = expected.and_then(|e| match strip_platform(e).kind() {
+        let exp_fn = expected.and_then(|e| match e.kind() {
             TyKind::Fn(f) => Some(f.clone()),
             TyKind::Callable { sig: Some(s), .. } => Some(s.clone()),
             _ => None,
@@ -3926,22 +3872,6 @@ fn is_null_literal(node: &SyntaxNode) -> bool {
     node.kind() == NAME_EXPR && text_of(node).eq_ignore_ascii_case("null")
 }
 
-/// `T!` → `T` (platform types behave like their inner type when used).
-pub fn strip_platform(ty: &Ty) -> Ty {
-    match ty.kind() {
-        TyKind::Platform(inner) => inner.clone(),
-        TyKind::Union(_)
-            if ty
-                .members()
-                .iter()
-                .any(|m| matches!(m.kind(), TyKind::Platform(_))) =>
-        {
-            Ty::union(ty.members().iter().map(strip_platform))
-        }
-        _ => ty.clone(),
-    }
-}
-
 /// The class type to look members up on (`static`/`$this` → their class).
 fn class_of(ty: &Ty) -> Ty {
     match ty.kind() {
@@ -4019,7 +3949,7 @@ fn php_callable_value(ty: &Ty) -> bool {
 
 fn php_array_of_mixed(from: &Ty, to: &Ty) -> bool {
     let bare = matches!(
-        strip_platform(from).kind(),
+        from.kind(),
         TyKind::Array { key, value, .. }
             if matches!(key.kind(), TyKind::ArrayKey) && matches!(value.kind(), TyKind::Mixed)
     );
@@ -4087,9 +4017,9 @@ fn narrow_assigned(declared: &Ty, value: &Ty) -> Ty {
     if value.is_error() || declared.is_error() {
         return declared.clone();
     }
-    // a literal in a PHP array variable is a PHP array, not a read-only collection
+    // an array variable stays the array it was declared
     if matches!(
-        strip_platform(declared).kind(),
+        declared.kind(),
         TyKind::Array { .. } | TyKind::PhpList { .. }
     ) {
         return declared.clone();

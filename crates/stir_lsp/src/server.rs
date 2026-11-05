@@ -794,7 +794,7 @@ impl LanguageServer for Server {
                         .1
                         .clone(),
                 };
-                let ty = stir_checker::strip_platform(&stir_types::without_null(&ty));
+                let ty = stir_types::without_null(&ty);
                 let key = match ty.kind() {
                     stir_types::TyKind::Class { name, .. } => name.to_ascii_lowercase(),
                     _ => return None,

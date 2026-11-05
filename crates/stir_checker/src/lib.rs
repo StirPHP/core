@@ -21,7 +21,7 @@ mod model;
 pub mod model_api;
 mod typed;
 
-pub use body::{Checker, LocalKind, strip_platform};
+pub use body::{Checker, LocalKind};
 pub use infer::widen_literals;
 pub use model::Ctx;
 pub use typed::{Def, MemberKind, TypedFile, typed_file};

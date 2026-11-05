@@ -1,7 +1,7 @@
 //! Generic type-argument inference by structural unification.
 
 use rustc_hash::{FxHashMap, FxHashSet};
-use stir_types::{Family, LitValue, ParamId, Ty, TyKind, TypeEnv};
+use stir_types::{LitValue, ParamId, Ty, TyKind, TypeEnv};
 
 /// Inference variables of one call and their (partial) solutions.
 #[derive(Debug, Default, Clone)]
@@ -10,8 +10,6 @@ pub struct Inference {
     pub solved: FxHashMap<ParamId, Ty>,
     /// Bind literal types as they are (when unifying with an expected type).
     exact: bool,
-    /// The call is in a `.php` file: a list's keys are PHP integers.
-    pub php_caller: bool,
 }
 
 impl Inference {
@@ -20,7 +18,6 @@ impl Inference {
             vars: vars.into_iter().collect(),
             solved: FxHashMap::default(),
             exact: false,
-            php_caller: false,
         }
     }
 
@@ -53,8 +50,7 @@ impl Inference {
         {
             return;
         }
-        // `listOf("a")` is a List<String>, but a declared literal union
-        // (`List<"a" | "b">`) is kept
+        // a literal argument gives its base type, but a declared literal union is kept
         let ty = if self.exact || !matches!(ty.kind(), TyKind::Literal(_)) {
             ty.clone()
         } else {
@@ -75,7 +71,7 @@ impl Inference {
     }
 
     /// Unifies a return type with the type the call is expected to have:
-    /// literal types are kept (`val k: List<"a" | "b"> = listOf("a")`).
+    /// literal types are kept.
     pub fn unify_expected(&mut self, env: &dyn TypeEnv, ret: &Ty, expected: &Ty) {
         let saved = std::mem::replace(&mut self.exact, true);
         self.unify_depth(env, ret, expected, 0);
@@ -86,49 +82,17 @@ impl Inference {
         if depth > 16 || arg.is_error() {
             return;
         }
-        let arg = match arg.kind() {
-            TyKind::Platform(inner) => inner.clone(),
-            _ => arg.clone(),
-        };
-        // a bare `array` says nothing about its keys or elements, so it can't solve `array<K, V>`
-        if !self.php_caller
-            && matches!(param.kind(), TyKind::Array { .. } | TyKind::Iterable { .. })
-            && matches!(arg.kind(), TyKind::Array { key, value, .. }
-                if matches!(key.kind(), TyKind::ArrayKey) && matches!(value.kind(), TyKind::Mixed))
-        {
-            return;
-        }
         match (param.kind(), arg.kind()) {
-            (TyKind::Param { id, .. }, _) if self.vars.contains(id) => self.bind(env, *id, &arg),
-            (TyKind::List(p), TyKind::List(a) | TyKind::MutableList(a))
-            | (TyKind::MutableList(p), TyKind::MutableList(a))
-            | (TyKind::List(p), TyKind::PhpList { elem: a, .. }) => {
+            (TyKind::Param { id, .. }, _) if self.vars.contains(id) => self.bind(env, *id, arg),
+            (TyKind::PhpList { elem: p, .. }, TyKind::PhpList { elem: a, .. }) => {
                 self.unify_depth(env, p, a, depth + 1)
             }
-            (TyKind::Map(pk, pv), TyKind::Map(ak, av) | TyKind::MutableMap(ak, av))
-            | (TyKind::MutableMap(pk, pv), TyKind::MutableMap(ak, av))
-            | (
-                TyKind::Map(pk, pv),
-                TyKind::Array {
-                    key: ak, value: av, ..
-                },
-            ) => {
-                self.unify_depth(env, pk, ak, depth + 1);
-                self.unify_depth(env, pv, av, depth + 1);
-            }
-            // PHP-family generic parameters (generic stubs / PHPDoc) against StirPHP values
-            (
-                TyKind::PhpList { elem: p, .. },
-                TyKind::List(a) | TyKind::MutableList(a) | TyKind::PhpList { elem: a, .. },
-            ) => self.unify_depth(env, p, a, depth + 1),
             (
                 TyKind::Array {
                     key: pk, value: pv, ..
                 }
                 | TyKind::Iterable { key: pk, value: pv },
-                TyKind::Map(ak, av)
-                | TyKind::MutableMap(ak, av)
-                | TyKind::Array {
+                TyKind::Array {
                     key: ak, value: av, ..
                 }
                 | TyKind::Iterable { key: ak, value: av },
@@ -141,14 +105,9 @@ impl Inference {
                     key: pk, value: pv, ..
                 }
                 | TyKind::Iterable { key: pk, value: pv },
-                TyKind::List(a) | TyKind::MutableList(a) | TyKind::PhpList { elem: a, .. },
+                TyKind::PhpList { elem: a, .. },
             ) => {
-                let key = if self.php_caller {
-                    Ty::php_int()
-                } else {
-                    Ty::int()
-                };
-                self.unify_depth(env, pk, &key, depth + 1);
+                self.unify_depth(env, pk, &Ty::php_int(), depth + 1);
                 self.unify_depth(env, pv, a, depth + 1);
             }
             (TyKind::Callable { sig: Some(pf), .. }, TyKind::Fn(af)) => {
@@ -173,34 +132,10 @@ impl Inference {
                 }
                 self.unify_depth(env, &pf.ret, &af.ret, depth + 1);
             }
-            (
-                TyKind::RecordRef { name: pn, args: pa },
-                TyKind::RecordRef { name: an, args: aa },
-            ) if pn.eq_ignore_ascii_case(an) => {
-                for (p, a) in pa.iter().zip(aa) {
-                    self.unify_depth(env, p, a, depth + 1);
-                }
-            }
-            (TyKind::RecordRef { .. }, _) | (_, TyKind::RecordRef { .. }) => {
-                let (p, a) = (
-                    stir_types::unfold(env, param),
-                    stir_types::unfold(env, &arg),
-                );
-                if &p != param || a != arg {
-                    self.unify_depth(env, &p, &a, depth + 1);
-                }
-            }
-            (TyKind::Record(pr), TyKind::Record(ar)) => {
-                for pf in &pr.fields {
-                    if let Some(af) = ar.field(&pf.name) {
-                        self.unify_depth(env, &pf.ty, &af.ty, depth + 1);
-                    }
-                }
-            }
             (TyKind::Class { name: pn, args: pa }, TyKind::Class { .. }) => {
                 // Find the argument's view as the parameter's class.
                 if let Some(TyKind::Class { args: aa, .. }) =
-                    as_class(env, &arg, pn).as_ref().map(|t| t.kind().clone())
+                    as_class(env, arg, pn).as_ref().map(|t| t.kind().clone())
                 {
                     for (p, a) in pa.iter().zip(aa.iter()) {
                         self.unify_depth(env, p, a, depth + 1);
@@ -231,7 +166,6 @@ impl Inference {
                     }
                 }
             }
-            (TyKind::Platform(p), _) => self.unify_depth(env, p, &arg, depth + 1),
             _ => {}
         }
     }
@@ -257,22 +191,15 @@ fn as_class(env: &dyn TypeEnv, ty: &Ty, name: &str) -> Option<Ty> {
     None
 }
 
-/// `1` → `Int`, `"a" | "b"` → `String` (keeps the literal's family).
+/// `1` → `int`, `"a" | "b"` → `string`.
 pub fn widen_literals(ty: &Ty) -> Ty {
     match ty.kind() {
-        TyKind::Literal(l) => {
-            let safe = l.family == Family::Safe;
-            match (&l.value, safe) {
-                (LitValue::Int(_), true) => Ty::int(),
-                (LitValue::Int(_), false) => Ty::php_int(),
-                (LitValue::Float(_), true) => Ty::float(),
-                (LitValue::Float(_), false) => Ty::php_float(),
-                (LitValue::String(_), true) => Ty::string(),
-                (LitValue::String(_), false) => Ty::php_string(),
-                (LitValue::Bool(_), true) => Ty::bool(),
-                (LitValue::Bool(_), false) => Ty::php_bool(),
-            }
-        }
+        TyKind::Literal(l) => match &l.value {
+            LitValue::Int(_) => Ty::php_int(),
+            LitValue::Float(_) => Ty::php_float(),
+            LitValue::String(_) => Ty::php_string(),
+            LitValue::Bool(_) => Ty::php_bool(),
+        },
         // `string|false`: `false` here is a real part of the type, not a value that happens
         // to be false, and checks for it must be able to rule it out
         TyKind::Union(_) => Ty::union(ty.members().iter().map(|m| match m.kind() {

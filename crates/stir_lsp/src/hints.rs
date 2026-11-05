@@ -32,7 +32,7 @@ pub fn inlay_hints(
         let Some(token) = root.covering_element(*decl).into_token() else {
             continue;
         };
-        let ty = stir_checker::widen_literals(&stir_checker::strip_platform(ty));
+        let ty = stir_checker::widen_literals(ty);
         let wanted = match kind {
             LocalKind::Php | LocalKind::Loop => true,
             // a parameter's type is only news if it isn't written next to it
