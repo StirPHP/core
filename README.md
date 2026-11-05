@@ -403,11 +403,98 @@ server shows it in the editor.
 - go to implementation and declaration, and call and type hierarchies
 - find references, highlights and rename
 - formatting of a document or a range
+- quick fixes and refactorings: see [Code actions](#code-actions)
 - what's deprecated is marked in diagnostics, hover, completion and symbols
 - semantic highlighting, document and workspace symbols, folding and selection ranges
 
 The [VS Code extension](editors/vscode) is the only client this has been tested with. Any editor that can start an LSP
 server for PHP files should work with the command `stirphp lsp`, but that's untested.
+
+## Code actions
+
+Quick fixes are offered on a diagnostic, and marked as preferred where one of them is clearly the fix:
+
+- **Unknown names:** a class, function or constant that isn't known can be imported, one action for each that has that
+  name in the workspace, nearest namespace first, with the `use` line put where completion puts it. Names that look like
+  a typo get **Change to ...**, for classes, functions, constants, methods (only those that could take the arguments),
+  properties and variables.
+- **Imports:** an import nothing uses is greyed out in the editor (as a hint, `SPHP0080`, which `stirphp check` doesn't
+  report) and can be removed, alone or with all the others. **Organize imports** (`source.organizeImports`) removes them
+  and sorts what's left as completion's insertion does: classes, then functions, then constants, a blank line between.
+  A comment stays with the line it's on or above, and lists and groups (`use A\{B, C}`) keep their form. An import counts
+  as used if its name appears in the code in any way, or in a doc comment or a comment with a tag, so one may be kept that
+  isn't used, but never the other way round.
+- **Types left out:** a return type from what every `return` gives, when every path ends in one (or `void`, for none), a
+  parameter's type from its PHPDoc or from what it overrides, and a property's from its PHPDoc or, for a private one, from
+  everything assigned to it in its class. Only what the file's PHP version can say natively, and nothing a subclass or
+  what's overridden would stop compiling over. What PHPDoc can say better, such as `list<string>`, goes in a doc comment,
+  and so does a type only PHPDoc can say. These are also refactorings with the cursor on the name, for levels below 6.
+- **What a class has to have:** a class that doesn't implement the abstract or interface methods it has to is now reported
+  (`SPHP0062`, as PHP won't load it), and the fix writes them all, with the signatures and visibility they need, the
+  imports for their types, and a body that throws a `LogicException` saying it's not implemented. A call of a method or
+  property of the class itself that doesn't exist (`$this->foo()`, `self::bar()`) can create it, private, with
+  parameters typed from the arguments where that's known.
+- **Nullable types:** `T $x = null` (`parameter.implicitlyNullable`) as `?T`, `return null;` in something that doesn't
+  allow it, and a property whose default is `null`.
+- **Other:** `return null;` at the end of a function missing a return, if its type allows it (there's no value to make up
+  for other types); removing code that can't be reached, unless something in it is declared or is a `goto` label; removing
+  a variable that's assigned something without effects and never read.
+- **Ignoring:** `// @phpstan-ignore <identifier>` on the line, added to one that's there, or on the line above when the
+  line is in a heredoc or HTML. It's offered for every identifier that can be ignored, StirPHP's own codes too. Not for
+  PHP's syntax errors, which can't be.
+- **PHPStan's errors** get the same fixes where their identifier is one of these and their line can only be about one
+  thing, as they have nothing more precise than a line; and **Ignore** always.
+- **`source.fixAll`**, when an editor asks for it, as on save: removes unused imports and makes implicitly nullable
+  parameters nullable, which can't change what the code does.
+
+Refactorings, with the cursor on something or a selection:
+
+- **Extract to a variable**, and the same value again in the statement if nothing in it can change it; **inline a
+  variable** assigned once (anything if what it's assigned is constant, otherwise only into the next statement, first
+  thing). Both refuse what would run something in another order, or less often, and say why.
+- **Extract method** (or function, outside classes) on whole statements or an expression. See below.
+- **Change signature:** remove a parameter nothing uses, move one left or right, add one, for a function or a method and
+  everything it overrides or is overridden by, updating every call.
+- **Classes:** generate a constructor from the properties without a value, promote properties to the constructor and
+  back, getters and setters, override a parent's method, and add `#[\Override]` on PHP 8.3.
+- **Flow:** flip `if` and `else`, turn an `if` at the end of a function or loop into an early `return` or `continue`,
+  drop the `else` of an `if` that always leaves, and `switch` to `match` where that means the same: the subject and every
+  `case` have to be ints, strings that can't be read as numbers, or enums, so that `==` and `===` agree, every case gives
+  a value in the same way, without falling through to a body, and there has to be a `default`, as `match` throws where
+  `switch` would do nothing.
+- **Import a name** written in full, wherever it's written so in the namespace.
+
+**Extract method** works out what the selection reads and writes in the order things run. What it reads before it's
+certainly written, and that's certainly set before, becomes a parameter; what it writes that's read afterwards (or before,
+around a loop) is returned, as an array that's destructured for more than one. A parameter gets a type only if that's
+certain where the selection starts: the declared type of a parameter of the function that isn't reassigned, or what one
+unconditional assignment before it gives. What a condition narrowed a variable to is left out, since a narrower type than
+the value could have would throw. The method is private, and static if it doesn't need `$this`, and its name is one the
+class and every class related to it don't have. `return` is taken if every path through the selection returns, and then the
+call is returned. It refuses `break` and `continue` out of it, `yield`, `goto`, `global` and `static` variables,
+references (`&`) to what it uses, `compact`, `extract`, `$$x`, `eval` and other ways of reaching variables by name,
+`__FUNCTION__` and `__LINE__`, a selection in a closure (whose `$this` may be bound elsewhere), and a variable that might not
+be set, or that carries over from one time round a loop to the next. A refused action is shown greyed out with the reason,
+in an editor that can show that. In VS Code the name is selected for renaming straight after; elsewhere it's `extracted`.
+
+**Change signature** has no dialog in the protocol, so each change is its own action. All calls are found through what the
+checker resolved, across the project, including `parent::`, `new`, `new static`, attributes and a subclass's `new` that
+uses the parent's constructor. If any can't be updated, nothing is changed and you're told where: a spread argument that
+covers the parameters concerned, an argument with effects that removing it would drop, a call where both arguments being
+swapped have effects, a first-class callable (`foo(...)`), a callable string or `[$x, 'foo']` given to PHP's functions,
+and a call of a method of that name whose receiver's class isn't known. `$x->$name()` can't be seen at all. Named arguments
+are updated by name. A new parameter with a default leaves the calls alone. Without one it's put before any optional
+parameters, and calls pass `TODO_NEW_ARGUMENT`, a constant that doesn't exist, so each call is an error until it's given a
+real value, rather than quietly running with a wrong one; an override passing its arguments on to `parent::` passes the new
+one. VS Code asks for the parameter (`int $limit = 10`) and what calls should pass; other editors add `$newParameter`.
+
+Every edit is checked to leave each file it touches parsing, or it isn't made. Edits use `documentChanges` with the
+version of each open file when the editor can take that, and the file's line endings and indentation. Nothing is offered in
+a file that has syntax errors.
+
+Not offered: adding `declare(strict_types=1)`, which isn't reported and changes what the code does; moving a class to the
+file PSR-4 says, which would mean creating and renaming files, so it's left out; adding to a baseline; extracting from a
+closure; and inlining methods.
 
 ## Current state
 
@@ -416,8 +503,7 @@ source, each with its own configuration, it reports about 9000, 1300 and 1300 pr
 include false alarms, at a rate nobody has measured overall yet. Reducing them is the current work. If `stirphp check` is wrong
 about your code, please [open an issue](https://github.com/StirPHP/core/issues) with a small example.
 
-Not there yet: wrapping long lines when formatting, quick fixes and refactoring beyond rename, and framework support out of
-the box.
+Not there yet: wrapping long lines when formatting, and framework support out of the box.
 
 ## Layout
 
@@ -436,7 +522,7 @@ the box.
 | `stir_phpstan` | runs a project's PHPStan and merges what it reports with ours (not in the browser) |
 | `stir_fmt` | the formatter |
 | `stir_project` | configuration, discovery, baselines, `init` and workspace loading |
-| `stir_lsp` | the language server |
+| `stir_lsp` | the language server, and its code actions |
 | `stir_wasm` | the checker, hover and completion for the browser (WebAssembly) |
 | `stir_cli` | the `stirphp` binary |
 

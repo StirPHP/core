@@ -496,11 +496,13 @@ enum Returning {
 struct Input {
     name: String,
     ty: Option<String>,
+    doc: Option<String>,
 }
 
 struct Output {
     name: String,
     ty: Option<String>,
+    doc: Option<String>,
 }
 
 /// Every occurrence of variables in `function` outside `range`, by name.
@@ -670,7 +672,7 @@ fn input_type(
     function: Option<&SyntaxNode>,
     name: &str,
     selection: &Selection,
-) -> Option<String> {
+) -> Option<(String, Option<String>)> {
     let function = function?;
     let start = selection.range.start();
     // around a loop, it's whatever the last time made it
@@ -699,8 +701,9 @@ fn input_type(
         }
         let ty = written_type(&param)?;
         let text = ty.text().to_string().trim().to_owned();
-        // with the types this leaves as they are, this reads the same anywhere in the class
-        return Some(text);
+        // with the types this leaves as they are, this reads the same anywhere in the class;
+        // what PHPDoc says of it is the function's, and could depend on its templates
+        return Some((text, None));
     }
     let [only] = writes_before.as_slice() else {
         return None;
@@ -718,15 +721,20 @@ fn input_type(
     }
     let value = only.children().nth(1)?;
     let ty = cx.typed().types.get(&value.text_range())?;
-    native_of(cx, namer, ty)
+    written_of(cx, namer, ty)
 }
 
 fn native_of(cx: &Cx<'_>, namer: &mut Namer<'_>, ty: &Ty) -> Option<String> {
+    written_of(cx, namer, ty).map(|w| w.0)
+}
+
+/// The native type of a value of `ty`, and what PHPDoc can say better of it.
+fn written_of(cx: &Cx<'_>, namer: &mut Namer<'_>, ty: &Ty) -> Option<(String, Option<String>)> {
     if ty.is_untyped() || ty.contains_error() {
         return None;
     }
-    let text = native(cx, namer, ty)?.native;
-    (!matches!(text.as_str(), "void" | "never" | "null")).then_some(text)
+    let w = native(cx, namer, ty)?;
+    (!matches!(w.native.as_str(), "void" | "never" | "null")).then_some((w.native, w.doc))
 }
 
 /// Is `node` a plain or compound assignment of the variable `name`?
@@ -890,17 +898,21 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
             if !defined_on_every_path(&scope, function.as_ref(), name, selection) {
                 return Err(format!("`{name}` might not be set by the time it gets here."));
             }
-            let ty = input_type(cx, &mut namer, function.as_ref(), name, selection);
+            let (ty, doc) = input_type(cx, &mut namer, function.as_ref(), name, selection)
+                .map_or((None, None), |(t, d)| (Some(t), d));
             inputs.push(Input {
                 name: name.clone(),
                 ty,
+                doc,
             });
         }
         if output {
-            let ty = output_type(cx, &mut namer, selection, name);
+            let (ty, doc) = output_type(cx, &mut namer, selection, name)
+                .map_or((None, None), |(t, d)| (Some(t), d));
             outputs.push(Output {
                 name: name.clone(),
                 ty,
+                doc,
             });
         }
     }
@@ -957,7 +969,10 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
                     }
                 }
                 let ty = (!types.is_empty()).then(|| Ty::union(types.iter().map(stir_checker::widen_literals)));
-                (ty.and_then(|t| native_of(cx, &mut namer, &t)), None)
+                match ty.and_then(|t| written_of(cx, &mut namer, &t)) {
+                    Some((t, doc)) => (Some(t), doc),
+                    None => (None, None),
+                }
             }
         },
         Returning::Bare => (Some("void".to_owned()), None),
@@ -977,15 +992,21 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
                 Some(t) if matches!(t.kind(), stir_types::TyKind::Void) => {
                     return Err("It doesn't give a value.".into());
                 }
-                Some(t) => (native_of(cx, &mut namer, t), None),
+                Some(t) => match written_of(cx, &mut namer, t) {
+                    Some((t, doc)) => (Some(t), doc),
+                    None => (None, None),
+                },
                 None => (None, None),
             }
         }
         Returning::No => match outputs.as_slice() {
             [] => (Some("void".to_owned()), None),
-            [one] => (one.ty.clone(), None),
+            [one] => (one.ty.clone(), one.doc.clone()),
             many => {
-                let types: Option<Vec<String>> = many.iter().map(|o| o.ty.clone()).collect();
+                let types: Option<Vec<String>> = many
+                    .iter()
+                    .map(|o| o.doc.clone().or_else(|| o.ty.clone()))
+                    .collect();
                 (
                     Some("array".to_owned()),
                     types.map(|t| format!("array{{{}}}", t.join(", "))),
@@ -1073,7 +1094,12 @@ fn return_tag(function: &SyntaxNode) -> Option<String> {
 }
 
 /// The type of `name` once the selection's done, if one unconditional assignment in it says.
-fn output_type(cx: &Cx<'_>, namer: &mut Namer<'_>, selection: &Selection, name: &str) -> Option<String> {
+fn output_type(
+    cx: &Cx<'_>,
+    namer: &mut Namer<'_>,
+    selection: &Selection,
+    name: &str,
+) -> Option<(String, Option<String>)> {
     let writes: Vec<SyntaxNode> = selection
         .nodes
         .iter()
@@ -1095,7 +1121,7 @@ fn output_type(cx: &Cx<'_>, namer: &mut Namer<'_>, selection: &Selection, name: 
     }
     let value = only.children().nth(1)?;
     let ty = cx.typed().types.get(&value.text_range())?;
-    native_of(cx, namer, ty)
+    written_of(cx, namer, ty)
 }
 
 fn unique_method_name(cx: &Cx<'_>, class: &ClassDef) -> String {
@@ -1192,13 +1218,19 @@ fn build(cx: &Cx<'_>, selection: &Selection, plan: Plan) -> Result<Change, Refus
         .return_type
         .as_ref()
         .map_or_else(String::new, |t| format!(": {t}"));
-    let doc = plan.doc_return.as_ref().map(|d| {
-        if d.starts_with('@') {
-            format!("/** {d} */")
+    // what only PHPDoc says, which the code it came from could rely on
+    let mut tags: Vec<String> = plan
+        .inputs
+        .iter()
+        .filter_map(|i| i.doc.as_ref().map(|d| format!("@param {d} {}", i.name)))
+        .collect();
+    if let Some(d) = &plan.doc_return {
+        tags.push(if d.starts_with('@') {
+            d.clone()
         } else {
-            format!("/** @return {d} */")
-        }
-    });
+            format!("@return {d}")
+        });
+    }
     let (decl_indent, insert): (String, Box<dyn Fn(&str) -> FileEdit>) = if in_class {
         let body = anchor
             .ancestors()
@@ -1240,10 +1272,16 @@ fn build(cx: &Cx<'_>, selection: &Selection, plan: Plan) -> Result<Change, Refus
     let body_indent = format!("{decl_indent}{unit}");
     let brace = format!("{decl_indent}{{");
     let mut text = String::new();
-    if let Some(doc) = doc {
-        text.push_str(&decl_indent);
-        text.push_str(&doc);
-        text.push_str(nl);
+    match tags.as_slice() {
+        [] => {}
+        [one] => text.push_str(&format!("{decl_indent}/** {one} */{nl}")),
+        many => {
+            text.push_str(&format!("{decl_indent}/**{nl}"));
+            for tag in many {
+                text.push_str(&format!("{decl_indent} * {tag}{nl}"));
+            }
+            text.push_str(&format!("{decl_indent} */{nl}"));
+        }
     }
     text.push_str(&format!(
         "{decl_indent}{visibility}{stat}function {}({}){ret}{nl}{brace}{nl}",

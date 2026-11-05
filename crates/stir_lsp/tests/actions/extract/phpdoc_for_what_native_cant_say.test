@@ -1,0 +1,24 @@
+=== action: Extract function
+=== input
+<?php
+/** @param non-empty-string $s */
+function f(string $s): array {
+    $t = $s . 'x';
+    ⟦$list = [$t, 1];⟧
+    return $list;
+}
+=== output
+<?php
+/** @param non-empty-string $s */
+function f(string $s): array {
+    $t = $s . 'x';
+    $list = extracted($t);
+    return $list;
+}
+
+/** @return array{string, int} */
+function extracted(string $t): array
+{
+    $list = [$t, 1];
+    return $list;
+}

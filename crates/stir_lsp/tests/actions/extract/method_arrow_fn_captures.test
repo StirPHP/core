@@ -15,6 +15,7 @@ class A {
         return $m;
     }
 
+    /** @return list<int|float> */
     private static function extracted(int $a, array $l): array
     {
         $m = array_map(fn($x) => $x + $a, $l);

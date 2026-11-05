@@ -102,7 +102,9 @@ fn tag(id: &str) -> String {
 struct Run {
     tally: BTreeMap<String, Tally>,
     offers_time: Times,
+    warm_time: Times,
     build_time: Times,
+    by_tag_time: BTreeMap<String, Times>,
     report: String,
     cap: usize,
     tried: usize,
@@ -118,6 +120,11 @@ fn try_at(
     only: Option<Vec<String>>,
     run: &mut Run,
 ) {
+    // what an editor has worked out by the time it asks: the file's diagnostics
+    let warm = Instant::now();
+    let _ = stir_checker::check_file(db, ws, file);
+    let _ = stir_lsp::nav::file_refs(db, ws, file);
+    run.warm_time.add(warm.elapsed());
     let start = Instant::now();
     let chosen: Vec<(String, String, Kind)> = {
         let cx = Cx::new(db, ws, file, range, &[], only.clone(), ClientAbilities::default());
@@ -140,10 +147,17 @@ fn try_at(
         if t.starts_with("ignore") && run.tally[&t].applied > 300 {
             continue;
         }
-        if run.tally[&t].applied + run.tally[&t].build_failed >= run.cap || run.tried >= run.max_tried {
+        let cap = if t.starts_with("signature") { run.cap.min(25) } else { run.cap };
+        if run.tally[&t].applied + run.tally[&t].build_failed >= cap || run.tried >= run.max_tried {
             continue;
         }
         run.tried += 1;
+        // what takes the workspace waits for it to be checked, which an editor has done meanwhile
+        if t.starts_with("signature") {
+            for f in ws.files(db).iter().filter(|f| f.origin(db) == FileOrigin::Source) {
+                let _ = stir_lsp::nav::file_refs(db, ws, *f);
+            }
+        }
         let start = Instant::now();
         let change = {
             let cx = Cx::new(
@@ -158,10 +172,14 @@ fn try_at(
             actions::resolve(&cx, &id)
         };
         run.build_time.add(start.elapsed());
+        run.by_tag_time.entry(t.clone()).or_default().add(start.elapsed());
         let change = match change {
             Ok(c) => c,
             Err(reason) => {
                 let tally = run.tally.get_mut(&t).unwrap();
+                if t.starts_with("signature") && tally.build_failed < 15 {
+                    let _ = writeln!(run.report, "REFUSED {} [{title}]: {reason}", file.path(db).display());
+                }
                 if reason.contains("syntax errors") || reason.contains("overlap") {
                     tally.no_parse += 1;
                     let _ = writeln!(
@@ -365,7 +383,9 @@ async fn run_project(dir: &Path, report_path: Option<&Path>) {
     let mut run = Run {
         tally: BTreeMap::new(),
         offers_time: Times::default(),
+        warm_time: Times::default(),
         build_time: Times::default(),
+        by_tag_time: BTreeMap::new(),
         report: String::new(),
         cap,
         tried: 0,
@@ -427,8 +447,14 @@ async fn run_project(dir: &Path, report_path: Option<&Path>) {
         new_errors += t.new_errors;
     }
     println!("total: {applied} applied, {no_parse} didn't parse, {new_errors} with new errors");
-    println!("offers: {}", run.offers_time.summary());
+    println!("offers, on a checked file: {}", run.offers_time.summary());
+    println!("checking the file first, after the last action was undone: {}", run.warm_time.summary());
     println!("resolve: {}", run.build_time.summary());
+    for (tag, times) in &mut run.by_tag_time {
+        if tag.starts_with("signature") || tag.starts_with("extract") || tag.starts_with("imports") {
+            println!("  resolve {tag}: {}", times.summary());
+        }
+    }
     if let Some(path) = report_path {
         let name = dir.file_name().unwrap_or_default().to_string_lossy();
         std::fs::write(path.with_extension(format!("{name}.txt")), &run.report).unwrap();

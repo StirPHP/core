@@ -18,6 +18,7 @@ class A {
         return $f;
     }
 
+    /** @return Closure(int): int */
     private static function extracted(int $a): Closure
     {
         $f = function (int $b) use ($a) {

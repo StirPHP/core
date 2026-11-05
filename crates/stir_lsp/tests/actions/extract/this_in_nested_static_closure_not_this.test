@@ -15,6 +15,7 @@ class A {
         return $f;
     }
 
+    /** @return Closure(): int */
     private static function extracted(): Closure
     {
         $f = static fn() => 1;

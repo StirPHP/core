@@ -8,6 +8,7 @@ file, and a Composer project needs no configuration.
 - completion, signature help and inlay hints for inferred types
 - go to definition and type definition, including into packages and PHP's own stubs
 - find references, highlights and rename
+- quick fixes and refactorings in the light bulb and **Refactor...** menus, and **Organize Imports**
 - semantic highlighting on top of VS Code's PHP grammar, outline, folding and selection ranges
 
 If a project declares Composer packages that aren't installed, a notice tells you to run `composer install`. Until you
@@ -92,6 +93,32 @@ file, PHPStan's errors in that file go away until the next save's run has finish
 text. If it can't run, you get one notice saying why. Changes made outside VS Code aren't noticed until the next save.
 
 Set `stirphp.phpstan.enable` to `off` if you don't want it, or `on` to be told if it can't be found.
+
+## Code actions
+
+The light bulb has StirPHP's quick fixes for what's under the cursor, such as importing an unknown class, adding a type
+that's left out, implementing what a class has to, or ignoring an error on its line. **Refactor...** (`Ctrl+Shift+R`) has
+extract and inline variable, extract method, changes of signature, and the rest; see the
+[main README](https://github.com/StirPHP/core#code-actions) for the list and for what each refuses to do. What can't be
+done where you are is listed greyed out, with the reason. **Organize Imports** (`Shift+Alt+O`) sorts the `use` lines and
+removes what's unused, which is greyed out in the editor.
+
+Two things are particular to VS Code:
+
+- After **Extract method** and **Extract to a variable**, the new name is selected for renaming, so you can type the name
+  you want and have it changed in both places.
+- **Add parameter...** asks what the parameter is, such as `int $limit = 10`, and if it has no default, what existing calls
+  should pass. Left empty, they pass `TODO_NEW_ARGUMENT`, which is an error at each call until it's replaced.
+
+To have imports organized when you save, add this to your settings:
+
+```json
+{
+  "[php]": {
+    "editor.codeActionsOnSave": { "source.organizeImports": "explicit" }
+  }
+}
+```
 
 ## Settings
 
