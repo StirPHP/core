@@ -263,8 +263,8 @@ Duplicates:
 - One of StirPHP's removes one of PHPStan's. Two on a line with one identifier may be different errors.
 - A report with no identifier is never a duplicate. Neither is a report of StirPHP's own, such as `SPHP0061`, so PHPStan's
   error about the same thing under another identifier is shown too. Nor are the same error on different lines, as with a call
-  over several lines: on Laravel's framework at level 5, 1577 of PHPStan's 2884 errors were removed, and about 40 of the rest had
-  one of StirPHP's with its identifier within 3 lines.
+  over several lines: on Laravel's framework at level 5, 1593 of PHPStan's 2884 errors were removed, and 97 of the other 1291 had
+  one of StirPHP's with its identifier within 3 lines, some of which really are other errors.
 - What StirPHP reports and PHPStan doesn't stays. PHPStan's silence doesn't take anything away, and the checks don't all agree yet.
 
 Baselines and ignore rules don't cross over. PHPStan applies its own to what it reports, and StirPHP's apply to what StirPHP

@@ -311,8 +311,13 @@ impl Phpstan {
                 continue;
             };
 
+            // from here on, shutting down waits for this, and stops it
             let mut stop = self.stop.subscribe();
             self.busy.send_replace(true);
+            if self.shut_down.load(Ordering::Relaxed) {
+                self.busy.send_replace(false);
+                return;
+            }
             let texts = self.texts_on_disk().await;
             let progress = self.begin_progress().await;
             let start = Instant::now();
