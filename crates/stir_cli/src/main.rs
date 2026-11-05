@@ -1,4 +1,5 @@
 mod check;
+mod fmt;
 
 use std::process::ExitCode;
 
@@ -30,6 +31,8 @@ struct Cli {
 enum Command {
     /// Type-check the project.
     Check(check::CheckArgs),
+    /// Format PHP files, in the style of PER-CS.
+    Fmt(fmt::FmtArgs),
     /// Write a configuration, or add to the PHPStan one the project has.
     Init(InitArgs),
     /// Run the language server (over stdin/stdout).
@@ -69,6 +72,7 @@ async fn main() -> anyhow::Result<ExitCode> {
     let cli = Cli::parse();
     match cli.command {
         Command::Check(args) => check::run(args).await,
+        Command::Fmt(args) => fmt::run(args).await,
         Command::Init(args) => init(args).await,
         Command::Lsp => {
             stir_lsp::run_stdio().await;

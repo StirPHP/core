@@ -20,6 +20,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 stir_checker = { path = "crates/stir_checker" }
 stir_composer = { path = "crates/stir_composer" }
 stir_db = { path = "crates/stir_db" }
+stir_fmt = { path = "crates/stir_fmt" }
 stir_hir = { path = "crates/stir_hir" }
 stir_lsp = { path = "crates/stir_lsp", default-features = false }
 stir_neon = { path = "crates/stir_neon" }

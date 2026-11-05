@@ -1475,7 +1475,9 @@ dependencies = [
  "stir_checker",
  "stir_composer",
  "stir_db",
+ "stir_fmt",
  "stir_lsp",
+ "stir_neon",
  "stir_project",
  "stir_syntax",
  "tempfile",
@@ -1499,6 +1501,13 @@ version = "0.1.21"
 dependencies = [
  "salsa",
  "smol_str",
+ "stir_syntax",
+]
+
+[[package]]
+name = "stir_fmt"
+version = "0.1.21"
+dependencies = [
  "stir_syntax",
 ]
 
@@ -1529,7 +1538,9 @@ dependencies = [
  "smol_str",
  "stir_checker",
  "stir_db",
+ "stir_fmt",
  "stir_hir",
+ "stir_neon",
  "stir_project",
  "stir_stubs",
  "stir_syntax",

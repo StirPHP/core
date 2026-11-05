@@ -48,6 +48,8 @@ struct State {
     /// The project's scripts, whether they're allowed to run or not. Those that are in the
     /// workspace's `scripts`, and those alone, run.
     rules: Vec<ScriptFile>,
+    /// How the project says to indent, over what the editor says.
+    indent: Option<stir_neon::phpstan::FormatIndent>,
 }
 
 impl State {
@@ -72,6 +74,7 @@ impl State {
             foreign: vendor.into_iter().chain([stub_dir()]).collect(),
             root,
             rules: Vec::new(),
+            indent: None,
         }
     }
 
@@ -406,6 +409,7 @@ impl Server {
         };
         let notices = loaded.as_ref().map_or_else(Vec::new, |l| l.notices.clone());
         let rules = loaded.as_ref().map(|l| l.rules.clone()).unwrap_or_default();
+        let indent = loaded.as_ref().and_then(|l| l.indent);
         {
             let mut s = self.state.lock().unwrap();
             // documents opened meanwhile keep their editor text
@@ -431,6 +435,7 @@ impl Server {
                 state.open.insert(path, version);
             }
             state.rules = rules;
+            state.indent = indent;
             *s = state;
         }
         self.decide_rules();
@@ -615,6 +620,7 @@ struct LoadedProject {
     vendor_dir: PathBuf,
     notices: Vec<String>,
     rules: Vec<ScriptFile>,
+    indent: Option<stir_neon::phpstan::FormatIndent>,
 }
 
 async fn load_project(dir: &Path) -> Option<LoadedProject> {
@@ -633,6 +639,7 @@ async fn load_project(dir: &Path) -> Option<LoadedProject> {
             vendor_dir: l.vendor_dir,
             notices: l.notices,
             rules: l.rules,
+            indent: project.config.indent,
         }),
         Err(error) => {
             tracing::error!(%error, "failed to load the project");
@@ -884,6 +891,31 @@ fn scalar_or_array(locations: Vec<Location>) -> Option<GotoDefinitionResponse> {
     }
 }
 
+/// How to indent: the project's say, then the editor's.
+fn format_options(
+    project: Option<stir_neon::phpstan::FormatIndent>,
+    editor: &FormattingOptions,
+) -> stir_fmt::Options {
+    use stir_neon::phpstan::FormatIndent;
+    let indent = match project {
+        Some(FormatIndent::Tab) => stir_fmt::Indent::Tabs,
+        Some(FormatIndent::Spaces(n)) => stir_fmt::Indent::Spaces(u32::from(n)),
+        None if editor.insert_spaces => stir_fmt::Indent::Spaces(editor.tab_size.clamp(1, 16)),
+        None => stir_fmt::Indent::Tabs,
+    };
+    stir_fmt::Options { indent }
+}
+
+fn text_edits(map: &LineMap, edits: Vec<stir_fmt::Edit>) -> Vec<TextEdit> {
+    edits
+        .into_iter()
+        .map(|e| TextEdit {
+            range: map.range(e.range),
+            new_text: e.text,
+        })
+        .collect()
+}
+
 impl LanguageServer for Server {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let utf8 = params
@@ -999,6 +1031,8 @@ impl LanguageServer for Server {
                 inlay_hint_provider: Some(OneOf::Left(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
+                document_formatting_provider: Some(OneOf::Left(true)),
+                document_range_formatting_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
         })
@@ -1592,6 +1626,31 @@ impl LanguageServer for Server {
                 }))
             },
         )
+        .await
+    }
+
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let project = self.state.lock().unwrap().indent;
+        let options = format_options(project, &params.options);
+        self.read(&params.text_document.uri, move |db, _, file, map| {
+            // a file that doesn't parse isn't touched: it's probably being typed
+            let edits = stir_fmt::edits(file.text(db), &options).ok()?;
+            Some(text_edits(map, edits))
+        })
+        .await
+    }
+
+    async fn range_formatting(
+        &self,
+        params: DocumentRangeFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        let project = self.state.lock().unwrap().indent;
+        let options = format_options(project, &params.options);
+        let range = params.range;
+        self.read(&params.text_document.uri, move |db, _, file, map| {
+            let edits = stir_fmt::range_edits(file.text(db), map.text_range(range), &options);
+            Some(text_edits(map, edits.ok()?))
+        })
         .await
     }
 

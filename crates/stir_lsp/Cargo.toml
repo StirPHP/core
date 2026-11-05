@@ -15,7 +15,9 @@ sha2 = { version = "0.10.9", optional = true }
 smol_str = "0.3.7"
 stir_checker.workspace = true
 stir_db.workspace = true
+stir_fmt.workspace = true
 stir_hir.workspace = true
+stir_neon = { workspace = true, optional = true }
 stir_project = { workspace = true, optional = true }
 stir_stubs.workspace = true
 stir_syntax.workspace = true
@@ -28,7 +30,7 @@ tracing = { workspace = true, optional = true }
 default = ["server"]
 # The LSP server over stdio (tokio). Without it, only the editor features
 # (hover, completion, ...) are built, e.g. for WebAssembly.
-server = ["dep:serde_json", "dep:sha2", "dep:stir_project", "dep:tokio", "dep:tower-lsp-server", "dep:tracing"]
+server = ["dep:serde_json", "dep:sha2", "dep:stir_neon", "dep:stir_project", "dep:tokio", "dep:tower-lsp-server", "dep:tracing"]
 
 [lints]
 workspace = true

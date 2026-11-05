@@ -19,6 +19,21 @@ pub async fn discover(project: &Project) -> Result<Vec<SourceFile>> {
     tokio::task::spawn_blocking(move || discover_blocking(&project)).await?
 }
 
+/// The PHP files under `dir`, honouring `.gitignore`, without a `vendor/` folder's. Sorted.
+pub fn php_files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = ignore::WalkBuilder::new(dir)
+        .require_git(false)
+        .filter_entry(|e| !(e.depth() > 0 && e.file_name() == "vendor"))
+        .build()
+        .flatten()
+        .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
+        .map(ignore::DirEntry::into_path)
+        .filter(|p| stir_syntax::is_php_path(p))
+        .collect();
+    files.sort();
+    files
+}
+
 fn build_set<'a>(patterns: impl IntoIterator<Item = &'a str>) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {

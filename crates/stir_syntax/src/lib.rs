@@ -7,7 +7,7 @@ mod syntax_kind;
 
 pub use lexer::{LexError, Lexed, Token, lex};
 pub use parser::SyntaxError;
-pub use rowan::{GreenNode, NodeOrToken, TextRange, TextSize};
+pub use rowan::{GreenNode, NodeOrToken, TextRange, TextSize, WalkEvent};
 pub use syntax_kind::{PhpLanguage, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 /// Whether `path` has a PHP source file extension.

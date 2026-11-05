@@ -1008,3 +1008,61 @@ fn what_a_script_prints_is_not_output() {
         .stdout(contains("printed").not())
         .stderr(contains("printed").and(contains("rule.rhai")));
 }
+
+#[test]
+fn fmt_formats_checks_and_reads_standard_input() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("composer.json"), "{}").unwrap();
+    let file = root.join("a.php");
+    std::fs::write(&file, "<?php\nfoo( 1,2 );\n").unwrap();
+    let stirphp = || {
+        let mut c = assert_cmd::Command::cargo_bin("stirphp").unwrap();
+        c.current_dir(root);
+        c
+    };
+    // `--check` changes nothing, and says what would
+    stirphp()
+        .args(["fmt", "--check"])
+        .assert()
+        .failure()
+        .stdout(predicates::str::contains("a.php"));
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "<?php\nfoo( 1,2 );\n"
+    );
+    stirphp().arg("fmt").assert().success();
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "<?php\nfoo(1, 2);\n"
+    );
+    stirphp().args(["fmt", "--check"]).assert().success();
+    // a broken file is left alone and fails
+    let broken = root.join("b.php");
+    std::fs::write(&broken, "<?php\nif (\n").unwrap();
+    stirphp()
+        .args(["fmt", "b.php"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("syntax errors"));
+    assert_eq!(std::fs::read_to_string(&broken).unwrap(), "<?php\nif (\n");
+    // standard input, with the indentation asked for
+    stirphp()
+        .args(["fmt", "--indent", "tab", "-"])
+        .write_stdin("<?php\nif ($a) {\nb();\n}\n")
+        .assert()
+        .success()
+        .stdout("<?php\nif ($a) {\n\tb();\n}\n");
+    // the project's configuration has a say
+    std::fs::write(
+        root.join("stirphp.neon"),
+        "parameters:\n    stirphp:\n        indent: 2\n",
+    )
+    .unwrap();
+    stirphp()
+        .args(["fmt", "-"])
+        .write_stdin("<?php\nif ($a) {\nb();\n}\n")
+        .assert()
+        .success()
+        .stdout("<?php\nif ($a) {\n  b();\n}\n");
+}

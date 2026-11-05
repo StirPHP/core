@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use stir_neon::phpstan::{LoadOptions, PhpstanConfig};
+use stir_neon::phpstan::{FormatIndent, LoadOptions, PhpstanConfig};
 
 use crate::error::{Error, Result};
 
@@ -26,6 +26,12 @@ pub struct Config {
     pub baseline: Option<PathBuf>,
     /// The project's rules, as scripts.
     pub rules: Vec<PathBuf>,
+    /// How `stirphp fmt` indents, if the project says.
+    pub indent: Option<FormatIndent>,
+    /// Report the use of what's deprecated in `stirphp check` too.
+    pub deprecations: bool,
+    /// Report what a function can throw and doesn't say it does.
+    pub checked_exceptions: bool,
 }
 
 impl Default for Config {
@@ -37,6 +43,9 @@ impl Default for Config {
             composer: None,
             baseline: None,
             rules: Vec::new(),
+            indent: None,
+            deprecations: false,
+            checked_exceptions: false,
         }
     }
 }
@@ -55,6 +64,9 @@ impl Config {
             composer: own.composer,
             baseline: own.baseline,
             rules: own.rules,
+            indent: own.indent,
+            deprecations: own.deprecations,
+            checked_exceptions: own.checked_exceptions,
         })
     }
 }

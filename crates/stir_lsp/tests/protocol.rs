@@ -1003,3 +1003,76 @@ async fn completion_adds_a_use_line() {
     assert_eq!(edit["range"]["start"], json!({"line": 4, "character": 0}));
     assert_eq!(edit["range"]["end"], json!({"line": 4, "character": 0}));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn formatting_a_document_and_a_range() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    write(&root.join("composer.json"), "{}");
+    let path = root.join("a.php");
+    let text = "<?php\n$a=1;\n$b=2;\n";
+    write(&path, text);
+    let doc = uri(&path);
+
+    let mut c = Client::start();
+    let init = c
+        .request(
+            "initialize",
+            json!({"processId": null, "rootUri": uri(&root), "capabilities": {}}),
+        )
+        .await;
+    assert_eq!(init["capabilities"]["documentFormattingProvider"], true);
+    assert_eq!(
+        init["capabilities"]["documentRangeFormattingProvider"],
+        true
+    );
+    c.notify("initialized", json!({})).await;
+    c.notify(
+        "textDocument/didOpen",
+        json!({"textDocument": {"uri": doc, "languageId": "php", "version": 1, "text": text}}),
+    )
+    .await;
+    let options = json!({"tabSize": 4, "insertSpaces": true});
+    let edits = c
+        .request(
+            "textDocument/formatting",
+            json!({"textDocument": {"uri": doc}, "options": options}),
+        )
+        .await;
+    let edits = edits.as_array().unwrap();
+    assert_eq!(edits.len(), 4, "{edits:?}");
+    assert_eq!(
+        edits[0],
+        json!({
+            "range": {"start": {"line": 1, "character": 2}, "end": {"line": 1, "character": 2}},
+            "newText": " "
+        })
+    );
+    let edits = c
+        .request(
+            "textDocument/rangeFormatting",
+            json!({
+                "textDocument": {"uri": doc},
+                "options": options,
+                "range": {"start": {"line": 2, "character": 0}, "end": {"line": 2, "character": 5}}
+            }),
+        )
+        .await;
+    let edits = edits.as_array().unwrap();
+    assert_eq!(edits.len(), 2, "{edits:?}");
+    assert_eq!(edits[0]["range"]["start"]["line"], 2);
+    // nothing for a file that doesn't parse
+    c.notify(
+        "textDocument/didChange",
+        json!({"textDocument": {"uri": doc, "version": 2},
+               "contentChanges": [{"text": "<?php\nif (\n"}]}),
+    )
+    .await;
+    let edits = c
+        .request(
+            "textDocument/formatting",
+            json!({"textDocument": {"uri": doc}, "options": options}),
+        )
+        .await;
+    assert_eq!(edits, json!(null));
+}

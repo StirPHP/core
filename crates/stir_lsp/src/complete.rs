@@ -219,17 +219,17 @@ enum ImportKind {
 impl Place {
     fn accepts(self, kind: SymbolKind) -> bool {
         use ClassKind as C;
-        match (self, kind) {
-            (Place::Anywhere, _) => true,
-            (Place::New, SymbolKind::Class(C::Class)) => true,
-            (Place::Class | Place::Type, SymbolKind::Class(_)) => true,
-            (Place::Interface, SymbolKind::Class(C::Interface)) => true,
-            (Place::Trait, SymbolKind::Class(C::Trait)) => true,
-            (Place::Import(ImportKind::Class), SymbolKind::Class(_)) => true,
-            (Place::Import(ImportKind::Function), SymbolKind::Function) => true,
-            (Place::Import(ImportKind::Const), SymbolKind::Const) => true,
-            _ => false,
-        }
+        matches!(
+            (self, kind),
+            (Place::Anywhere, _)
+                | (Place::New, SymbolKind::Class(C::Class))
+                | (Place::Class | Place::Type, SymbolKind::Class(_))
+                | (Place::Interface, SymbolKind::Class(C::Interface))
+                | (Place::Trait, SymbolKind::Class(C::Trait))
+                | (Place::Import(ImportKind::Class), SymbolKind::Class(_))
+                | (Place::Import(ImportKind::Function), SymbolKind::Function)
+                | (Place::Import(ImportKind::Const), SymbolKind::Const)
+        )
     }
 }
 

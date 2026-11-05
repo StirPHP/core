@@ -95,6 +95,19 @@ pub struct StirphpParameters {
     pub baseline: Option<PathBuf>,
     /// `rules`: the project's own rules, as scripts.
     pub rules: Vec<PathBuf>,
+    /// `indent`: how `stirphp fmt` indents, `tab` or a number of spaces.
+    pub indent: Option<FormatIndent>,
+    /// `deprecations`: report the use of what's deprecated on the command line too.
+    pub deprecations: bool,
+    /// `checkedExceptions`: report what a function can throw and doesn't say it does.
+    pub checked_exceptions: bool,
+}
+
+/// How a level of indentation is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormatIndent {
+    Tab,
+    Spaces(u8),
 }
 
 /// Options for [`PhpstanConfig::load_with`].
@@ -382,6 +395,12 @@ impl PhpstanConfig {
                 .and_then(|vs| vs.iter().map(|v| v.as_str().map(str::to_string)).collect())
                 .ok_or_else(|| self.invalid(KEY, format!("`{what}` must be a list of strings")))
         };
+        let boolean = |v: &Value, what: &str| -> Result<bool, ConfigError> {
+            match v {
+                Value::Bool(b) => Ok(*b),
+                _ => Err(self.invalid(KEY, format!("`{what}` must be true or false"))),
+            }
+        };
         for (k, v) in entries {
             let k = key_string(&k);
             match k.as_str() {
@@ -391,6 +410,20 @@ impl PhpstanConfig {
                 "composer" => out.composer = Some(path(v, &k)?),
                 "baseline" => out.baseline = Some(path(v, &k)?),
                 "rules" => out.rules = strings(v, &k)?.into_iter().map(PathBuf::from).collect(),
+                "indent" => {
+                    out.indent = Some(match v {
+                        Value::Int(n @ 1..=16) => FormatIndent::Spaces(*n as u8),
+                        Value::String(s) if s == "tab" => FormatIndent::Tab,
+                        _ => {
+                            return Err(self.invalid(
+                                KEY,
+                                "`indent` must be `tab` or a number of spaces from 1 to 16",
+                            ));
+                        }
+                    });
+                }
+                "deprecations" => out.deprecations = boolean(v, &k)?,
+                "checkedExceptions" => out.checked_exceptions = boolean(v, &k)?,
                 other => return Err(self.invalid(KEY, format!("unknown key `{other}`"))),
             }
         }
