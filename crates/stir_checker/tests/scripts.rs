@@ -571,3 +571,23 @@ fn queries_stay_reachable_from_other_threads() {
     }
     let _ = script::script_index(&s.db, s.ws);
 }
+
+#[test]
+fn an_edit_does_not_wait_for_a_slow_script() {
+    let php = format!("<?php\n{}", "echo 1;\n".repeat(10_000));
+    let slow = r#"fn visit_echo(node, ctx) { let i = 0; while i < 900000 { i += 1; } }"#;
+    let mut s = setup(&[("/a.php", &php)], &[slow]);
+    let (db, ws, file) = (s.db.clone(), s.ws, s.files[0]);
+    let worker = std::thread::spawn(move || {
+        salsa::Cancelled::catch(std::panic::AssertUnwindSafe(|| {
+            check_file(&db, ws, file).len()
+        }))
+    });
+    // once it's busy, the edit has to get through: all of it would take many minutes
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let start = std::time::Instant::now();
+    s.files[0].set_text(&mut s.db).to("<?php\n".to_owned());
+    assert!(start.elapsed().as_secs() < 30, "{:?}", start.elapsed());
+    assert!(worker.join().unwrap().is_err());
+    assert!(codes(&s.db, s.ws, s.files[0]).is_empty());
+}

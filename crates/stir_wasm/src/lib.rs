@@ -6,7 +6,7 @@
 
 use salsa::Setter as _;
 use serde::Serialize;
-use stir_db::{FileOrigin, RootDatabase, Settings, Severity, SourceFile, Workspace};
+use stir_db::{FileOrigin, RootDatabase, ScriptFile, Settings, Severity, SourceFile, Workspace};
 use stir_lsp::convert::{Encoding, LineMap};
 use stir_syntax::{TextRange, TextSize};
 use wasm_bindgen::prelude::*;
@@ -27,6 +27,9 @@ struct Diagnostic {
     severity: &'static str,
     code: String,
     message: String,
+    /// The rule script this is about, if it's not about the source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    script: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -90,23 +93,39 @@ impl Playground {
         Playground { db, ws, file }
     }
 
-    /// The diagnostics of `source`.
+    /// Adds a rule script, in the sandbox `stirphp check` runs them in. A page should run only
+    /// what its visitor chose to.
+    #[wasm_bindgen(js_name = addRule)]
+    pub fn add_rule(&mut self, name: &str, source: &str) {
+        let script = ScriptFile::new(&self.db, name.into(), Ok(source.to_owned()));
+        let mut scripts = self.ws.scripts(&self.db).clone();
+        scripts.push(script);
+        let _ = self.ws.set_scripts(&mut self.db).to(scripts);
+    }
+
+    /// Removes all rule scripts.
+    #[wasm_bindgen(js_name = clearRules)]
+    pub fn clear_rules(&mut self) {
+        let _ = self.ws.set_scripts(&mut self.db).to(Vec::new());
+    }
+
+    /// The diagnostics of `source`, and what's wrong with the rule scripts.
     pub fn check(&mut self, source: &str) -> String {
         self.set(source);
         let map = self.map();
-        let diags: Vec<Diagnostic> = stir_checker::check_file(&self.db, self.ws, self.file)
-            .iter()
-            .map(|d| Diagnostic {
-                span: span(&map, d.range),
-                severity: match d.severity {
-                    Severity::Error => "error",
-                    Severity::Warning => "warning",
-                    Severity::Hint => "hint",
-                },
-                code: d.code.to_string(),
-                message: d.message.clone(),
-            })
-            .collect();
+        let found = stir_checker::check_file(&self.db, self.ws, self.file);
+        let mut diags: Vec<Diagnostic> = found.iter().map(|d| diagnostic(d, &map, None)).collect();
+        for d in stir_checker::script_diagnostics(&self.db, self.ws, &[self.file]) {
+            let name = d.file.display().to_string();
+            let script = self
+                .ws
+                .scripts(&self.db)
+                .iter()
+                .find(|s| s.path(&self.db) == &d.file);
+            let text = script.and_then(|s| s.text(&self.db).as_ref().ok());
+            let map = LineMap::new(text.map_or("", String::as_str), Encoding::Utf16);
+            diags.push(diagnostic(&d, &map, Some(name)));
+        }
         json(&diags)
     }
 
@@ -157,6 +176,20 @@ impl Playground {
 
     fn map(&self) -> LineMap {
         LineMap::new(self.file.text(&self.db), Encoding::Utf16)
+    }
+}
+
+fn diagnostic(d: &stir_db::Diagnostic, map: &LineMap, script: Option<String>) -> Diagnostic {
+    Diagnostic {
+        span: span(map, d.range),
+        severity: match d.severity {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+            Severity::Hint => "hint",
+        },
+        code: d.code.to_string(),
+        message: d.message.clone(),
+        script,
     }
 }
 
@@ -227,5 +260,42 @@ mod tests {
             .map(|i| i["label"].as_str().unwrap())
             .collect();
         assert!(labels.contains(&"open"), "{labels:?}");
+    }
+
+    #[test]
+    fn runs_rules_and_says_what_is_wrong_with_them() {
+        let mut p = Playground::new();
+        let source = "<?php\nvar_dump(1);\n";
+        let check = |p: &mut Playground| -> serde_json::Value {
+            serde_json::from_str(&p.check(source)).unwrap()
+        };
+        assert_eq!(check(&mut p).as_array().unwrap().len(), 0);
+
+        p.add_rule(
+            "no_var_dump.rhai",
+            r#"fn visit_func_call(node, ctx) {
+                if node.name == "var_dump" { ctx.error("no var_dump", "app.noVarDump"); }
+            }"#,
+        );
+        let diags = check(&mut p);
+        assert_eq!(diags.as_array().unwrap().len(), 1, "{diags}");
+        assert_eq!(diags[0]["code"], "app.noVarDump");
+        assert_eq!(diags[0]["startLine"], 2);
+        assert!(diags[0].get("script").is_none());
+
+        p.clear_rules();
+        p.add_rule("bad.rhai", "fn visit_func_call(node, ctx) {\n  let = 1;\n}");
+        let diags = check(&mut p);
+        assert_eq!(diags[0]["code"], "SPHP0071", "{diags}");
+        assert_eq!(diags[0]["script"], "bad.rhai");
+        assert_eq!(diags[0]["startLine"], 2);
+
+        p.clear_rules();
+        p.add_rule("slow.rhai", "fn visit_func_call(node, ctx) { loop {} }");
+        let diags = check(&mut p);
+        assert_eq!(diags[0]["code"], "SPHP0070", "{diags}");
+
+        p.clear_rules();
+        assert_eq!(check(&mut p).as_array().unwrap().len(), 0);
     }
 }

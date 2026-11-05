@@ -33,6 +33,13 @@ pub use rules::{RuleCheck, rule_check};
 /// The engine all scripts share: it holds nothing of any one of them.
 pub(crate) static ENGINE: LazyLock<Engine> = LazyLock::new(|| {
     let mut engine = stir_script::sandbox();
+    // an edit stops what it makes pointless, also in the middle of a call
+    engine.on_progress(|operations| {
+        if operations.trailing_zeros() >= 12 {
+            stir_db::attached(|db| db.unwind_if_revision_cancelled());
+        }
+        None
+    });
     node::register(&mut engine);
     facade::register(&mut engine);
     engine
