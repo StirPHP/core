@@ -492,7 +492,10 @@ fn member_typo<'c>(cx: &'c Cx<'c>, d: &Found, method: bool, out: &mut Vec<Offer<
         return;
     };
     // what's magic is there, by whatever name: a near one wasn't necessarily meant
-    let magic = match (method, is_static_access || fetch.kind() == CLASS_CONST_FETCH_EXPR) {
+    let magic = match (
+        method,
+        is_static_access || fetch.kind() == CLASS_CONST_FETCH_EXPR,
+    ) {
         (true, true) => "__callStatic",
         (true, false) => "__call",
         (false, _) => "__get",
