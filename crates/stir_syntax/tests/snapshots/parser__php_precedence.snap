@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/tests/parser.rs
-expression: "check_ok(concat!\n(\"<?php\\n\",\n\"$a = 1 + 2 * 3 . 'x' ?? $b ?: $c;\\n!$a instanceof B && -$c ** 2;\\n$x = $y = &$z;\\n$a >= $b >> 1;\\n\"),\nDialect :: Php)"
+expression: "check_ok(concat!\n(\"<?php\\n\",\n\"$a = 1 + 2 * 3 . 'x' ?? $b ?: $c;\\n!$a instanceof B && -$c ** 2;\\n$x = $y = &$z;\\n$a >= $b >> 1;\\n\"))"
 ---
 SOURCE_FILE
   OPEN_TAG "<?php\n"
@@ -9,7 +9,7 @@ SOURCE_FILE
       VARIABLE_EXPR
         VARIABLE "$a"
       EQ "="
-      ELVIS_EXPR
+      SHORT_TERNARY_EXPR
         BIN_EXPR
           BIN_EXPR
             BIN_EXPR

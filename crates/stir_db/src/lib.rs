@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use stir_syntax::{Dialect, Parse, TextRange};
+use stir_syntax::{Parse, TextRange};
 
 /// Marker trait for databases that can run StirPHP queries.
 #[salsa::db]
@@ -42,8 +42,6 @@ pub struct SourceFile {
     pub path: PathBuf,
     #[returns(ref)]
     pub text: String,
-    #[returns(copy)]
-    pub dialect: Dialect,
     #[returns(copy)]
     pub origin: FileOrigin,
 }
@@ -116,7 +114,7 @@ pub struct IgnoreRule {
 
 #[salsa::tracked(returns(ref), no_eq)]
 pub fn parse(db: &dyn Db, file: SourceFile) -> Parse {
-    stir_syntax::parse(file.text(db), file.dialect(db))
+    stir_syntax::parse(file.text(db))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -212,13 +210,12 @@ mod tests {
         let mut db = RootDatabase::default();
         let file = SourceFile::new(
             &db,
-            "a.sphp".into(),
-            "val x = 1\n".into(),
-            Dialect::Stir,
+            "a.php".into(),
+            "<?php $x = 1;\n".into(),
             FileOrigin::Source,
         );
         assert!(parse(&db, file).errors().is_empty());
-        file.set_text(&mut db).to("val = \n".into());
+        file.set_text(&mut db).to("<?php $x = ;\n".into());
         assert!(!syntax_diagnostics(&db, file).is_empty());
         assert_eq!(syntax_diagnostics(&db, file)[0].code, codes::SYNTAX);
     }

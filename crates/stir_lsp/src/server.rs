@@ -16,7 +16,7 @@ use stir_db::{
 };
 use stir_project::Project;
 use stir_project::workspace::{LoadOptions, builtin_files, load_workspace};
-use stir_syntax::{Dialect, TextRange, TextSize};
+use stir_syntax::{TextRange, TextSize};
 use tokio::sync::Notify;
 use tower_lsp_server::jsonrpc::{Error, ErrorCode, Result};
 use tower_lsp_server::ls_types::*;
@@ -81,7 +81,7 @@ impl State {
         } else {
             FileOrigin::Source
         };
-        let file = SourceFile::new(&self.db, path.to_owned(), text, Dialect::Php, origin);
+        let file = SourceFile::new(&self.db, path.to_owned(), text, origin);
         let mut files = self.ws.files(&self.db).clone();
         files.push(file);
         self.ws.set_files(&mut self.db).to(files);
@@ -119,7 +119,7 @@ impl State {
 }
 
 fn is_source_path(path: &Path) -> bool {
-    Dialect::from_path(path) == Some(Dialect::Php)
+    stir_syntax::is_php_path(path)
 }
 
 /// The canonical path of a `file://` URI.

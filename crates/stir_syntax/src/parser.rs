@@ -6,7 +6,7 @@
 
 use rowan::{GreenNode, GreenNodeBuilder, TextRange, TextSize};
 
-use crate::{Dialect, Lexed, SyntaxKind, SyntaxKind::*};
+use crate::{Lexed, SyntaxKind, SyntaxKind::*};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyntaxError {
@@ -42,10 +42,6 @@ struct InputToken {
     kind: SyntaxKind,
     start: u32,
     len: u32,
-    /// Trivia before this token contains a newline (or it follows `?>`).
-    newline_before: bool,
-    /// No trivia between this token and the next one.
-    joint: bool,
 }
 
 #[derive(Debug)]
@@ -57,7 +53,6 @@ pub(crate) enum Event {
     Finish,
     Token {
         kind: SyntaxKind,
-        n_raw: u8,
     },
     Error {
         message: String,
@@ -66,58 +61,31 @@ pub(crate) enum Event {
 
 pub(crate) struct Parser<'s> {
     src: &'s str,
-    dialect: Dialect,
     tokens: Vec<InputToken>,
     pos: usize,
     events: Vec<Event>,
-    /// Stack of "newlines terminate expressions" flags (StirPHP only).
-    nl_sensitive: Vec<bool>,
-    /// Inside `when` conditions a `->` followed by whitespace ends the expression.
-    spaced_arrow_stops: Vec<bool>,
-    /// In a `foreach (... as ...)` subject, `as` is not a cast.
-    no_as: Vec<bool>,
     fuel: std::cell::Cell<u32>,
 }
 
 impl<'s> Parser<'s> {
-    pub(crate) fn new(src: &'s str, lexed: &Lexed, dialect: Dialect) -> Parser<'s> {
+    pub(crate) fn new(src: &'s str, lexed: &Lexed) -> Parser<'s> {
         let mut tokens = Vec::new();
         let mut offset = 0u32;
-        let mut newline = false;
-        let mut last_was_trivia = true;
         for tok in &lexed.tokens {
-            let text = &src[offset as usize..(offset + tok.len) as usize];
-            if tok.kind.is_trivia() {
-                if text.contains('\n') {
-                    newline = true;
-                }
-                last_was_trivia = true;
-            } else {
-                if let Some(prev) = tokens.last_mut() {
-                    let prev: &mut InputToken = prev;
-                    prev.joint = !last_was_trivia;
-                }
+            if !tok.kind.is_trivia() {
                 tokens.push(InputToken {
                     kind: tok.kind,
                     start: offset,
                     len: tok.len,
-                    newline_before: newline,
-                    joint: false,
                 });
-                newline = tok.kind == CLOSE_TAG && text.ends_with('\n');
-                last_was_trivia = false;
             }
             offset += tok.len;
         }
         Parser {
             src,
-            dialect,
             tokens,
             pos: 0,
             events: Vec::new(),
-            nl_sensitive: vec![dialect == Dialect::Stir],
-            spaced_arrow_stops: vec![false],
-            no_as: vec![false],
             fuel: std::cell::Cell::new(256),
         }
     }
@@ -126,15 +94,11 @@ impl<'s> Parser<'s> {
         self.events
     }
 
-    pub(crate) fn stir(&self) -> bool {
-        self.dialect == Dialect::Stir
-    }
-
     fn raw(&self, n: usize) -> Option<&InputToken> {
         self.tokens.get(self.pos + n)
     }
 
-    /// Kind of the `n`th upcoming token (no composite gluing).
+    /// Kind of the `n`th upcoming token.
     pub(crate) fn nth(&self, n: usize) -> SyntaxKind {
         assert!(self.fuel.get() > 0, "parser is stuck");
         self.fuel.set(self.fuel.get() - 1);
@@ -145,37 +109,8 @@ impl<'s> Parser<'s> {
         self.nth(0)
     }
 
-    fn joint(&self, n: usize) -> bool {
-        self.raw(n).is_some_and(|t| t.joint)
-    }
-
-    /// Composite-aware check for the current token.
     pub(crate) fn at(&self, kind: SyntaxKind) -> bool {
-        self.nth_at(0, kind)
-    }
-
-    pub(crate) fn nth_at(&self, n: usize, kind: SyntaxKind) -> bool {
-        match kind {
-            GTEQ => self.nth(n) == R_ANGLE && self.joint(n) && self.nth(n + 1) == EQ,
-            SHR => {
-                self.nth(n) == R_ANGLE
-                    && self.joint(n)
-                    && self.nth(n + 1) == R_ANGLE
-                    && !(self.joint(n + 1) && self.nth(n + 2) == EQ)
-            }
-            SHR_EQ => {
-                self.nth(n) == R_ANGLE
-                    && self.joint(n)
-                    && self.nth(n + 1) == R_ANGLE
-                    && self.joint(n + 1)
-                    && self.nth(n + 2) == EQ
-            }
-            R_ANGLE => {
-                self.nth(n) == R_ANGLE
-                    && !(self.joint(n) && matches!(self.nth(n + 1), EQ | R_ANGLE))
-            }
-            _ => self.nth(n) == kind,
-        }
+        self.nth(0) == kind
     }
 
     pub(crate) fn at_ts(&self, set: TokenSet) -> bool {
@@ -198,78 +133,16 @@ impl<'s> Parser<'s> {
         self.nth(n) == IDENT && self.nth_text(n) == kw
     }
 
-    /// Current token is preceded by a newline.
-    pub(crate) fn newline_before(&self) -> bool {
-        self.nth_newline_before(0)
-    }
-
-    pub(crate) fn nth_newline_before(&self, n: usize) -> bool {
-        self.raw(n).is_some_and(|t| t.newline_before)
-    }
-
-    /// The token `n` ahead is immediately followed (no trivia) by the next one.
-    pub(crate) fn nth_joint(&self, n: usize) -> bool {
-        self.joint(n)
-    }
-
-    /// In StirPHP, does a newline before the current token end the expression?
-    pub(crate) fn newline_terminates(&self) -> bool {
-        self.stir() && *self.nl_sensitive.last().unwrap() && self.newline_before()
-    }
-
-    pub(crate) fn with_newlines<T>(
-        &mut self,
-        sensitive: bool,
-        f: impl FnOnce(&mut Self) -> T,
-    ) -> T {
-        self.nl_sensitive.push(sensitive && self.stir());
-        let r = f(self);
-        self.nl_sensitive.pop();
-        r
-    }
-
-    pub(crate) fn with_spaced_arrow_stop<T>(
-        &mut self,
-        stop: bool,
-        f: impl FnOnce(&mut Self) -> T,
-    ) -> T {
-        self.spaced_arrow_stops.push(stop);
-        let r = f(self);
-        self.spaced_arrow_stops.pop();
-        r
-    }
-
-    pub(crate) fn with_no_as<T>(&mut self, on: bool, f: impl FnOnce(&mut Self) -> T) -> T {
-        self.no_as.push(on);
-        let r = f(self);
-        self.no_as.pop();
-        r
-    }
-
-    pub(crate) fn as_allowed(&self) -> bool {
-        !*self.no_as.last().unwrap()
-    }
-
-    /// Is the current `->` an arm/lambda arrow rather than member access?
-    pub(crate) fn at_spaced_arrow_stop(&self) -> bool {
-        *self.spaced_arrow_stops.last().unwrap() && self.at(ARROW) && !self.joint(0)
-    }
-
-    fn do_bump(&mut self, kind: SyntaxKind, n_raw: u8) {
-        self.pos += n_raw as usize;
+    fn do_bump(&mut self, kind: SyntaxKind) {
+        self.pos += 1;
         self.fuel.set(256);
-        self.events.push(Event::Token { kind, n_raw });
+        self.events.push(Event::Token { kind });
     }
 
-    /// Consumes the current token as `kind` (composite-aware).
+    /// Consumes the current token, which must be a `kind`.
     pub(crate) fn bump(&mut self, kind: SyntaxKind) {
         assert!(self.at(kind), "bump({kind:?}) at {:?}", self.current());
-        let n_raw = match kind {
-            GTEQ | SHR => 2,
-            SHR_EQ => 3,
-            _ => 1,
-        };
-        self.do_bump(kind, n_raw);
+        self.do_bump(kind);
     }
 
     /// Consumes the current token whatever it is.
@@ -278,7 +151,7 @@ impl<'s> Parser<'s> {
         if kind == EOF {
             return;
         }
-        self.do_bump(kind, 1);
+        self.do_bump(kind);
     }
 
     /// Consumes the current token, re-tagging it as `kind`.
@@ -286,7 +159,7 @@ impl<'s> Parser<'s> {
         if self.current() == EOF {
             return;
         }
-        self.do_bump(kind, 1);
+        self.do_bump(kind);
     }
 
     pub(crate) fn eat(&mut self, kind: SyntaxKind) -> bool {
@@ -410,7 +283,6 @@ pub(crate) fn describe(kind: SyntaxKind) -> String {
         EQ => "`=`",
         ARROW => "`->`",
         FAT_ARROW => "`=>`",
-        R_ANGLE => "`>`",
         VARIABLE => "a variable",
         IDENT => "an identifier",
         DQUOTE => "`\"`",
@@ -428,17 +300,12 @@ fn attaches_doc_comment(kind: SyntaxKind) -> bool {
             | INTERFACE_DECL
             | TRAIT_DECL
             | ENUM_DECL
-            | RECORD_DECL
-            | TYPEALIAS_DECL
             | METHOD_DECL
             | PROPERTY_DECL
             | CLASS_CONST_DECL
             | CONST_DECL
             | ENUM_CASE
-            | RECORD_FIELD
             | PARAM
-            | VAL_DECL
-            | VAR_DECL
             | EXPR_STMT
             | RETURN_STMT
             | FOREACH_STMT
@@ -550,17 +417,14 @@ pub(crate) fn build_tree(
                 builder.finish_node();
                 depth -= 1;
             }
-            Event::Token { kind, n_raw } => {
-                while tok_idx < tokens.len() && tokens[tok_idx].kind.is_trivia() {
+            Event::Token { kind } => {
+                while tokens[tok_idx].kind.is_trivia() {
                     emit_raw(&mut builder, &mut tok_idx, &mut offset);
                 }
-                let mut len = 0usize;
-                for k in 0..n_raw as usize {
-                    len += tokens[tok_idx + k].len as usize;
-                }
+                let len = tokens[tok_idx].len as usize;
                 builder.token(kind.into(), &src[offset..offset + len]);
                 offset += len;
-                tok_idx += n_raw as usize;
+                tok_idx += 1;
             }
             Event::Error { message } => {
                 if !message.is_empty() {

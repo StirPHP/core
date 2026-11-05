@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 
 use libtest_mimic::{Arguments, Failed, Trial};
 use stir_db::{FileOrigin, RootDatabase, Settings, Severity, SourceFile, Workspace};
-use stir_syntax::Dialect;
 
 fn stubs(db: &RootDatabase) -> Vec<SourceFile> {
     stir_stubs::stub_files()
@@ -21,7 +20,6 @@ fn stubs(db: &RootDatabase) -> Vec<SourceFile> {
                 db,
                 format!("stubs://{}", s.path).into(),
                 s.text.to_owned(),
-                Dialect::Php,
                 FileOrigin::Stub,
             )
         })
@@ -71,13 +69,7 @@ fn run(paths: &[PathBuf]) -> Result<(), Failed> {
         .iter()
         .zip(&texts)
         .map(|(path, text)| {
-            SourceFile::new(
-                &db,
-                path.to_path_buf(),
-                text.clone(),
-                Dialect::from_path(path).unwrap(),
-                FileOrigin::Source,
-            )
+            SourceFile::new(&db, path.to_path_buf(), text.clone(), FileOrigin::Source)
         })
         .collect();
     let mut files = sources.clone();
@@ -163,7 +155,7 @@ fn main() {
                         .unwrap()
                         .flatten()
                         .map(|e| e.path())
-                        .filter(|f| Dialect::from_path(f).is_some())
+                        .filter(|f| stir_syntax::is_php_path(f))
                         .collect();
                     files.sort();
                     run(&files)
@@ -184,7 +176,7 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
             out.push(p);
         } else if p.is_dir() {
             out.extend(walk(&p));
-        } else if Dialect::from_path(&p).is_some() {
+        } else if stir_syntax::is_php_path(&p) {
             out.push(p);
         }
     }

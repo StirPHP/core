@@ -38,7 +38,7 @@ fn alt_stmt_list(p: &mut Parser<'_>, terminators: TokenSet) {
 pub(super) fn block(p: &mut Parser<'_>) {
     let m = p.start();
     p.expect(L_CURLY);
-    p.with_newlines(true, |p| stmt_list(p));
+    stmt_list(p);
     p.expect(R_CURLY);
     m.complete(p, BLOCK);
 }
@@ -82,7 +82,7 @@ pub(super) fn stmt(p: &mut Parser<'_>, top_level: bool) {
                 CONTINUE_STMT
             };
             p.bump_any();
-            if !p.at(SEMI) && !p.at(CLOSE_TAG) && !p.newline_terminates() && !p.at(R_CURLY) {
+            if !p.at(SEMI) && !p.at(CLOSE_TAG) && !p.at(R_CURLY) {
                 expr(p);
             }
             stmt_end(p);
@@ -91,12 +91,7 @@ pub(super) fn stmt(p: &mut Parser<'_>, top_level: bool) {
         RETURN_KW => {
             let m = p.start();
             p.bump(RETURN_KW);
-            if !p.at(SEMI)
-                && !p.at(CLOSE_TAG)
-                && !p.at(EOF)
-                && !p.at(R_CURLY)
-                && !p.newline_terminates()
-            {
+            if !p.at(SEMI) && !p.at(CLOSE_TAG) && !p.at(EOF) && !p.at(R_CURLY) {
                 expr(p);
             }
             stmt_end(p);
@@ -143,15 +138,13 @@ pub(super) fn stmt(p: &mut Parser<'_>, top_level: bool) {
             let m = p.start();
             p.bump(UNSET_KW);
             p.expect(L_PAREN);
-            p.with_newlines(false, |p| {
-                while !p.at(R_PAREN) && !p.at(EOF) {
-                    expr(p);
-                    if !p.eat(COMMA) {
-                        break;
-                    }
+            while !p.at(R_PAREN) && !p.at(EOF) {
+                expr(p);
+                if !p.eat(COMMA) {
+                    break;
                 }
-                p.expect(R_PAREN);
-            });
+            }
+            p.expect(R_PAREN);
             stmt_end(p);
             m.complete(p, UNSET_STMT);
         }
@@ -191,8 +184,6 @@ pub(super) fn stmt(p: &mut Parser<'_>, top_level: bool) {
             p.bump(COLON);
             m.complete(p, LABEL_STMT);
         }
-        VAR_KW if p.stir() => items::var_decl(p),
-        IDENT if p.stir() && p.at_contextual("val") && at_name_after(p, 1) => items::val_decl(p),
         _ => {
             if items::at_item(p) {
                 items::item(p);
@@ -201,11 +192,6 @@ pub(super) fn stmt(p: &mut Parser<'_>, top_level: bool) {
             }
         }
     }
-}
-
-/// Is token `n` a plain declaration name (identifier)?
-fn at_name_after(p: &Parser<'_>, n: usize) -> bool {
-    p.nth(n) == IDENT || p.nth(n).is_keyword()
 }
 
 fn expr_stmt(p: &mut Parser<'_>) {
@@ -230,9 +216,7 @@ fn expr_list(p: &mut Parser<'_>) {
 
 fn paren_cond(p: &mut Parser<'_>) {
     p.expect(L_PAREN);
-    p.with_newlines(false, |p| {
-        expr(p);
-    });
+    expr(p);
     p.expect(R_PAREN);
 }
 
@@ -309,26 +293,20 @@ fn for_stmt(p: &mut Parser<'_>) {
     let m = p.start();
     p.bump(FOR_KW);
     p.expect(L_PAREN);
-    p.with_newlines(false, |p| {
-        for (i, kind) in [FOR_INIT, FOR_COND, FOR_STEP].into_iter().enumerate() {
-            let c = p.start();
-            let end = if i == 2 { R_PAREN } else { SEMI };
-            if i == 0 && p.stir() {
-                // `for (var $i = 0; ...)`
-                p.eat(VAR_KW);
+    for (i, kind) in [FOR_INIT, FOR_COND, FOR_STEP].into_iter().enumerate() {
+        let c = p.start();
+        let end = if i == 2 { R_PAREN } else { SEMI };
+        while !p.at(end) && !p.at(EOF) {
+            if exprs::opt_expr(p).is_none() {
+                p.err_and_bump("expected an expression");
             }
-            while !p.at(end) && !p.at(EOF) {
-                if exprs::opt_expr(p).is_none() {
-                    p.err_and_bump("expected an expression");
-                }
-                if !p.eat(COMMA) {
-                    break;
-                }
+            if !p.eat(COMMA) {
+                break;
             }
-            c.complete(p, kind);
-            p.expect(end);
         }
-    });
+        c.complete(p, kind);
+        p.expect(end);
+    }
     if control_body(p, TokenSet::new(&[ENDFOR_KW])) {
         p.expect(ENDFOR_KW);
         stmt_end(p);
@@ -336,50 +314,19 @@ fn for_stmt(p: &mut Parser<'_>) {
     m.complete(p, FOR_STMT);
 }
 
-fn foreach_has_cast(p: &Parser<'_>) -> bool {
-    let (mut depth, mut seen, mut i) = (0, 0, 0);
-    loop {
-        match p.nth(i) {
-            EOF => return false,
-            L_PAREN | L_BRACK | L_CURLY | L_ANGLE => depth += 1,
-            R_PAREN if depth == 0 => return false,
-            R_PAREN | R_BRACK | R_CURLY | R_ANGLE => depth -= 1,
-            AS_KW if depth == 0 => {
-                seen += 1;
-                if seen == 2 {
-                    return true;
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-}
-
 fn foreach_stmt(p: &mut Parser<'_>) {
     let m = p.start();
     p.bump(FOREACH_KW);
     p.expect(L_PAREN);
-    p.with_newlines(false, |p| {
-        let subject = p.with_no_as(true, |p| expr(p));
-        // `foreach (e as T as $v)`: two `as` here, so the first is a cast
-        if let Some(subject) = subject
-            && foreach_has_cast(p)
-        {
-            let m = subject.precede(p);
-            p.bump(AS_KW);
-            types::type_(p);
-            m.complete(p, AS_EXPR);
-        }
-        p.expect(AS_KW);
+    expr(p);
+    p.expect(AS_KW);
+    p.eat(AMP);
+    expr(p);
+    if p.eat(FAT_ARROW) {
         p.eat(AMP);
         expr(p);
-        if p.eat(FAT_ARROW) {
-            p.eat(AMP);
-            expr(p);
-        }
-        p.expect(R_PAREN);
-    });
+    }
+    p.expect(R_PAREN);
     if control_body(p, TokenSet::new(&[ENDFOREACH_KW])) {
         p.expect(ENDFOREACH_KW);
         stmt_end(p);
@@ -391,7 +338,7 @@ fn switch_stmt(p: &mut Parser<'_>) {
     let m = p.start();
     p.bump(SWITCH_KW);
     paren_cond(p);
-    let alt = if p.at(COLON) && !p.stir() {
+    let alt = if p.at(COLON) {
         p.bump(COLON);
         true
     } else {
@@ -399,26 +346,24 @@ fn switch_stmt(p: &mut Parser<'_>) {
         false
     };
     let end = if alt { ENDSWITCH_KW } else { R_CURLY };
-    p.with_newlines(true, |p| {
-        p.eat(SEMI);
-        while !p.at(end) && !p.at(EOF) {
-            let c = p.start();
-            if p.eat(CASE_KW) {
-                p.with_newlines(false, |p| expr(p));
-            } else if !p.eat(DEFAULT_KW) {
-                c.abandon(p);
-                p.err_and_bump("expected `case` or `default`");
-                continue;
-            }
-            if !p.eat(COLON) {
-                p.expect(SEMI);
-            }
-            while !p.at(CASE_KW) && !p.at(DEFAULT_KW) && !p.at(end) && !p.at(EOF) {
-                stmt(p, false);
-            }
-            c.complete(p, SWITCH_CASE);
+    p.eat(SEMI);
+    while !p.at(end) && !p.at(EOF) {
+        let c = p.start();
+        if p.eat(CASE_KW) {
+            expr(p);
+        } else if !p.eat(DEFAULT_KW) {
+            c.abandon(p);
+            p.err_and_bump("expected `case` or `default`");
+            continue;
         }
-    });
+        if !p.eat(COLON) {
+            p.expect(SEMI);
+        }
+        while !p.at(CASE_KW) && !p.at(DEFAULT_KW) && !p.at(end) && !p.at(EOF) {
+            stmt(p, false);
+        }
+        c.complete(p, SWITCH_CASE);
+    }
     p.expect(end);
     if alt {
         stmt_end(p);
@@ -434,16 +379,14 @@ fn try_stmt(p: &mut Parser<'_>) {
         let c = p.start();
         p.bump(CATCH_KW);
         p.expect(L_PAREN);
-        p.with_newlines(false, |p| {
-            loop {
-                name_ref(p);
-                if !p.eat(PIPE) {
-                    break;
-                }
+        loop {
+            name_ref(p);
+            if !p.eat(PIPE) {
+                break;
             }
-            p.eat(VARIABLE);
-            p.expect(R_PAREN);
-        });
+        }
+        p.eat(VARIABLE);
+        p.expect(R_PAREN);
         block(p);
         c.complete(p, CATCH_CLAUSE);
     }
@@ -460,20 +403,18 @@ fn declare_stmt(p: &mut Parser<'_>) {
     let m = p.start();
     p.bump(DECLARE_KW);
     p.expect(L_PAREN);
-    p.with_newlines(false, |p| {
-        while !p.at(R_PAREN) && !p.at(EOF) {
-            let d = p.start();
-            member_name(p);
-            p.expect(EQ);
-            expr(p);
-            d.complete(p, DECLARE_ITEM);
-            if !p.eat(COMMA) {
-                break;
-            }
+    while !p.at(R_PAREN) && !p.at(EOF) {
+        let d = p.start();
+        member_name(p);
+        p.expect(EQ);
+        expr(p);
+        d.complete(p, DECLARE_ITEM);
+        if !p.eat(COMMA) {
+            break;
         }
-        p.expect(R_PAREN);
-    });
-    if p.at(SEMI) || p.at(CLOSE_TAG) || (p.stir() && p.newline_before()) || p.at(EOF) {
+    }
+    p.expect(R_PAREN);
+    if p.at(SEMI) || p.at(CLOSE_TAG) || p.at(EOF) {
         stmt_end(p);
     } else if control_body(p, TokenSet::new(&[ENDDECLARE_KW])) {
         p.expect(ENDDECLARE_KW);
@@ -525,14 +466,12 @@ fn use_clause(p: &mut Parser<'_>, allow_group: bool) {
         p.bump(BACKSLASH);
         let g = p.start();
         p.bump(L_CURLY);
-        p.with_newlines(false, |p| {
-            while !p.at(R_CURLY) && !p.at(EOF) {
-                use_clause(p, false);
-                if !p.eat(COMMA) {
-                    break;
-                }
+        while !p.at(R_CURLY) && !p.at(EOF) {
+            use_clause(p, false);
+            if !p.eat(COMMA) {
+                break;
             }
-        });
+        }
         p.expect(R_CURLY);
         g.complete(p, USE_GROUP);
     } else if p.eat(AS_KW) {
@@ -545,16 +484,10 @@ pub(super) fn const_elems(p: &mut Parser<'_>) {
     loop {
         let e = p.start();
         // PHP 8.3 typed class constants: `const int X = 1;`
-        if (p.at_ts(NAME_TOKENS) || p.current().is_keyword() || p.at(QUESTION) || p.at(L_PAREN))
-            && !matches!(p.nth(1), EQ | COLON)
-        {
+        if types::at_type_start(p) && p.nth(1) != EQ {
             type_(p);
         }
         member_name(p);
-        if p.stir() && p.at(COLON) {
-            p.bump(COLON);
-            type_(p);
-        }
         p.expect(EQ);
         expr(p);
         e.complete(p, CONST_ELEM);

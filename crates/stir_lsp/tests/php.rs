@@ -3,7 +3,7 @@
 
 use stir_db::{FileOrigin, RootDatabase, Settings, SourceFile, Workspace};
 use stir_lsp::{complete, hints, hover, nav, symbols, tokens};
-use stir_syntax::{Dialect, TextRange, TextSize};
+use stir_syntax::{TextRange, TextSize};
 
 struct Fixture {
     db: RootDatabase,
@@ -30,7 +30,7 @@ impl Fixture {
         for (path, body) in chunks {
             let at = body.find("<|>");
             let body = body.replace("<|>", "");
-            let file = SourceFile::new(&db, path.into(), body, Dialect::Php, FileOrigin::Source);
+            let file = SourceFile::new(&db, path.into(), body, FileOrigin::Source);
             if let Some(at) = at {
                 cursor = Some((file, TextSize::from(at as u32)));
             }

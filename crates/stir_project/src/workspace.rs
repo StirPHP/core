@@ -11,7 +11,6 @@ use crate::{Autoload, Project};
 use anyhow::Context as _;
 use futures::{StreamExt as _, TryStreamExt as _};
 use stir_db::{FileOrigin, IgnoreRule, RootDatabase, Settings, SourceFile, Workspace};
-use stir_syntax::Dialect;
 
 /// Maximum number of files read concurrently.
 const READ_CONCURRENCY: usize = 64;
@@ -74,7 +73,7 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
     let mut files = Vec::new();
     let mut sources = Vec::new();
     for (path, text) in source_texts {
-        let file = SourceFile::new(&db, path, text, Dialect::Php, FileOrigin::Source);
+        let file = SourceFile::new(&db, path, text, FileOrigin::Source);
         sources.push(file);
         files.push(file);
     }
@@ -88,13 +87,7 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
 
     let vendor_count = vendor_texts.len();
     for (path, text) in vendor_texts {
-        files.push(SourceFile::new(
-            &db,
-            path,
-            text,
-            Dialect::Php,
-            FileOrigin::Vendor,
-        ));
+        files.push(SourceFile::new(&db, path, text, FileOrigin::Vendor));
     }
 
     let config = load_phpstan_config(project).await?;
@@ -104,13 +97,7 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
             .filter_map(|f| f.path(&db).canonicalize().ok())
             .collect();
         for (path, text) in read_vendor(scanned_paths(config, &own).await?).await {
-            files.push(SourceFile::new(
-                &db,
-                path,
-                text,
-                Dialect::Php,
-                FileOrigin::Vendor,
-            ));
+            files.push(SourceFile::new(&db, path, text, FileOrigin::Vendor));
         }
     }
     let mut settings = settings_from(config);
@@ -142,7 +129,6 @@ pub fn builtin_files(db: &RootDatabase) -> Vec<SourceFile> {
                 db,
                 PathBuf::from(format!("stubs://{}", stub.path)),
                 stub.text.to_owned(),
-                Dialect::Php,
                 FileOrigin::Stub,
             )
         })

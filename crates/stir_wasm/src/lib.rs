@@ -8,7 +8,7 @@ use salsa::Setter as _;
 use serde::Serialize;
 use stir_db::{FileOrigin, RootDatabase, Settings, Severity, SourceFile, Workspace};
 use stir_lsp::convert::{Encoding, LineMap};
-use stir_syntax::{Dialect, TextRange, TextSize};
+use stir_syntax::{TextRange, TextSize};
 use wasm_bindgen::prelude::*;
 
 #[derive(Serialize)]
@@ -75,7 +75,6 @@ impl Playground {
             &db,
             "/playground/main.php".into(),
             String::new(),
-            Dialect::Php,
             FileOrigin::Source,
         );
         let mut files = vec![file];
@@ -84,7 +83,6 @@ impl Playground {
                 &db,
                 format!("stubs://{}", s.path).into(),
                 s.text.to_owned(),
-                Dialect::Php,
                 FileOrigin::Stub,
             )
         }));

@@ -1,6 +1,6 @@
 ---
 source: crates/stir_syntax/src/lexer/tests.rs
-expression: "dump(\"<?php $a ??= $b ?-> c; $a <=> $b; $a >>= 1; $a **= 2; $a !== $b; $a <> $b; #[Attr] ...\",\nDialect :: Php)"
+expression: "dump(\"<?php $a ??= $b ?-> c; $a <=> $b; $a >>= 1; $a **= 2; $a !== $b; $a <> $b; #[Attr] ...\")"
 ---
 OPEN_TAG "<?php "
 VARIABLE "$a"
@@ -23,9 +23,7 @@ SEMI ";"
 WHITESPACE " "
 VARIABLE "$a"
 WHITESPACE " "
-R_ANGLE ">"
-R_ANGLE ">"
-EQ "="
+SHR_EQ ">>="
 WHITESPACE " "
 INT_NUMBER "1"
 SEMI ";"

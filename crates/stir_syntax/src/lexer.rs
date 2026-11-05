@@ -1,4 +1,4 @@
-//! Tokenizer for PHP and StirPHP source.
+//! Tokenizer for PHP source.
 //!
 //! The lexer is a small mode-stack state machine. Fixed-shape tokens in code
 //! mode (operators, names, numbers, casts) are recognised by a [`logos`]
@@ -7,7 +7,7 @@
 
 use logos::Logos;
 
-use crate::{Dialect, SyntaxKind, SyntaxKind::*};
+use crate::{SyntaxKind, SyntaxKind::*};
 
 /// A lexed token: its kind and its length in bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +115,12 @@ enum Raw {
     LAngle,
     #[token(">")]
     RAngle,
+    #[token(">=")]
+    GtEq,
+    #[token(">>")]
+    Shr,
+    #[token(">>=")]
+    ShrEq,
     #[token("<=")]
     LtEq,
     #[token("<=>")]
@@ -223,6 +229,9 @@ impl Raw {
             Raw::Neq2 => NEQ2,
             Raw::LAngle => L_ANGLE,
             Raw::RAngle => R_ANGLE,
+            Raw::GtEq => GTEQ,
+            Raw::Shr => SHR,
+            Raw::ShrEq => SHR_EQ,
             Raw::LtEq => LTEQ,
             Raw::Spaceship => SPACESHIP,
             Raw::Plus => PLUS,
@@ -277,30 +286,19 @@ enum Mode {
 struct Lexer<'a> {
     src: &'a str,
     pos: usize,
-    dialect: Dialect,
     modes: Vec<Mode>,
     out: Lexed,
     halted: bool,
-    /// A StirPHP file has left inline HTML and is back in code.
-    embedded: bool,
 }
 
 /// Tokenizes `src`. The token lengths always sum to `src.len()`.
-pub fn lex(src: &str, dialect: Dialect) -> Lexed {
-    let start = match dialect {
-        Dialect::Php => Mode::Html,
-        // StirPHP files are code from the first byte; a leading `<?php` is
-        // accepted for familiarity.
-        Dialect::Stir => Mode::Code,
-    };
+pub fn lex(src: &str) -> Lexed {
     let mut lexer = Lexer {
         src,
         pos: 0,
-        dialect,
-        modes: vec![start],
+        modes: vec![Mode::Html],
         out: Lexed::default(),
         halted: false,
-        embedded: false,
     };
     lexer.run();
     debug_assert_eq!(
@@ -321,6 +319,16 @@ fn is_ident_start(b: u8) -> bool {
 
 fn is_ident_continue(b: u8) -> bool {
     is_ident_start(b) || b.is_ascii_digit()
+}
+
+/// Does an interpolation start at the beginning of `b`?
+fn interpolation_at(b: &[u8]) -> Option<SyntaxKind> {
+    match (b.first(), b.get(1)) {
+        (Some(b'$'), Some(b'{')) => Some(DOLLAR_CURLY_OPEN),
+        (Some(b'$'), Some(c)) if is_ident_start(*c) => Some(VARIABLE),
+        (Some(b'{'), Some(b'$')) => Some(CURLY_OPEN),
+        _ => None,
+    }
 }
 
 impl<'a> Lexer<'a> {
@@ -418,26 +426,7 @@ impl<'a> Lexer<'a> {
                 }
                 self.push(kind, len);
                 *self.modes.last_mut().unwrap() = Mode::Code;
-                self.embedded = true;
             }
-        }
-    }
-
-    /// In a StirPHP file, `?>` closes after `<?php` has re-opened code, at the start of a
-    /// line or after `;`: anywhere else it ends a nullable generic argument.
-    fn close_tag_allowed(&self) -> bool {
-        if self.dialect == Dialect::Php || self.embedded {
-            return true;
-        }
-        match self.out.tokens.last().map(|t| t.kind) {
-            None | Some(SEMI) => true,
-            Some(COMMENT | DOC_COMMENT) => true,
-            Some(WHITESPACE) => {
-                let before = &self.src[..self.pos];
-                let line_start = before.rfind('\n').map_or(0, |i| i + 1);
-                before[line_start..].trim().is_empty() || before.trim_end().ends_with(';')
-            }
-            _ => false,
         }
     }
 
@@ -452,8 +441,8 @@ impl<'a> Lexer<'a> {
             return;
         }
 
-        // close tag (in StirPHP `List<T?>` is a type, so only where a statement can end)
-        if c == b'?' && b.get(1) == Some(&b'>') && self.close_tag_allowed() {
+        // close tag
+        if c == b'?' && b.get(1) == Some(&b'>') {
             let mut len = 2;
             if b.get(2) == Some(&b'\n') {
                 len = 3;
@@ -462,15 +451,6 @@ impl<'a> Lexer<'a> {
             }
             self.push(CLOSE_TAG, len);
             *self.modes.last_mut().unwrap() = Mode::Html;
-            return;
-        }
-
-        // `<?php` at the very start of a StirPHP file
-        if self.dialect == Dialect::Stir
-            && self.out.tokens.is_empty()
-            && self.rest().starts_with("<?php")
-        {
-            self.push(OPEN_TAG, 5);
             return;
         }
 
@@ -558,26 +538,8 @@ impl<'a> Lexer<'a> {
         let mut raw = Raw::lexer(self.rest());
         match raw.next() {
             Some(Ok(tok)) => {
-                let mut len = raw.span().end;
+                let len = raw.span().end;
                 let mut kind = tok.kind();
-                // StirPHP has no C-style casts (`as` instead), so `(Int) -> Int`
-                // must lex as a parenthesis.
-                if self.dialect == Dialect::Stir
-                    && matches!(
-                        kind,
-                        INT_CAST
-                            | FLOAT_CAST
-                            | STRING_CAST
-                            | BOOL_CAST
-                            | ARRAY_CAST
-                            | OBJECT_CAST
-                            | UNSET_CAST
-                            | VOID_CAST
-                    )
-                {
-                    kind = L_PAREN;
-                    len = 1;
-                }
                 if kind == IDENT {
                     let text = &self.rest()[..len];
                     if let Some(kw) = SyntaxKind::from_keyword(text) {
@@ -641,8 +603,8 @@ impl<'a> Lexer<'a> {
         while i < b.len() {
             match b[i] {
                 b'\n' | b'\r' => break,
-                // `?>` ends a line comment in PHP mode
-                b'?' if b.get(i + 1) == Some(&b'>') && self.dialect == Dialect::Php => break,
+                // `?>` ends a line comment
+                b'?' if b.get(i + 1) == Some(&b'>') => break,
                 _ => i += 1,
             }
         }
@@ -679,7 +641,7 @@ impl<'a> Lexer<'a> {
                     self.push(STRING_DOUBLE, i + 1);
                     return;
                 }
-                _ if self.interpolation_at(&b[i..]).is_some() => break,
+                _ if interpolation_at(&b[i..]).is_some() => break,
                 _ => i += 1,
             }
         }
@@ -691,18 +653,6 @@ impl<'a> Lexer<'a> {
         }
         self.push(DQUOTE, prefix);
         self.modes.push(Mode::DoubleQuote);
-    }
-
-    /// Does an interpolation start at the beginning of `b`?
-    fn interpolation_at(&self, b: &[u8]) -> Option<SyntaxKind> {
-        match (b.first(), b.get(1)) {
-            (Some(b'$'), Some(b'{')) => Some(DOLLAR_CURLY_OPEN),
-            (Some(b'$'), Some(c)) if is_ident_start(*c) && self.dialect == Dialect::Php => {
-                Some(VARIABLE)
-            }
-            (Some(b'{'), Some(b'$')) if self.dialect == Dialect::Php => Some(CURLY_OPEN),
-            _ => None,
-        }
     }
 
     /// Lexes either literal content or one interpolation inside `"..."` / `` `...` ``.
@@ -722,7 +672,7 @@ impl<'a> Lexer<'a> {
                 i += 2;
                 continue;
             }
-            if b[i] == quote || self.interpolation_at(&b[i..]).is_some() {
+            if b[i] == quote || interpolation_at(&b[i..]).is_some() {
                 break;
             }
             i += 1;
@@ -737,7 +687,7 @@ impl<'a> Lexer<'a> {
     /// Lexes an interpolation if one starts here. Returns whether it did.
     fn lex_interpolation(&mut self) -> bool {
         let b = self.bytes();
-        match self.interpolation_at(b) {
+        match interpolation_at(b) {
             Some(DOLLAR_CURLY_OPEN) => {
                 self.push(DOLLAR_CURLY_OPEN, 2);
                 self.modes.push(Mode::InterpCode { depth: 0 });
@@ -929,7 +879,7 @@ impl<'a> Lexer<'a> {
                     i += 1;
                     line_start = true;
                 }
-                _ if self.interpolation_at(&b[i..]).is_some() => break,
+                _ if interpolation_at(&b[i..]).is_some() => break,
                 _ => i += 1,
             }
         }

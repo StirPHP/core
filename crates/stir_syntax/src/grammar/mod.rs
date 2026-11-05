@@ -1,10 +1,4 @@
-//! The PHP / StirPHP grammar.
-//!
-//! The parser accepts the union of both dialects wherever that is
-//! unambiguous; dialect-specific rules (which constructs are *allowed*) are
-//! enforced later by the checker. The dialect only changes parsing where the
-//! two languages genuinely conflict: string interpolation, newline-terminated
-//! statements, `{` starting a lambda, and `?:` meaning elvis.
+//! The PHP grammar.
 
 mod exprs;
 mod items;
@@ -87,22 +81,20 @@ pub(super) fn attributes(p: &mut Parser<'_>) {
     while p.at(ATTR_OPEN) {
         let g = p.start();
         p.bump(ATTR_OPEN);
-        p.with_newlines(false, |p| {
-            while !p.at(R_BRACK) && !p.at(EOF) {
-                let a = p.start();
-                if name_ref(p).is_none() {
-                    p.bump_any();
-                }
-                if p.at(L_PAREN) {
-                    arg_list(p);
-                }
-                a.complete(p, ATTRIBUTE);
-                if !p.eat(COMMA) {
-                    break;
-                }
+        while !p.at(R_BRACK) && !p.at(EOF) {
+            let a = p.start();
+            if name_ref(p).is_none() {
+                p.bump_any();
             }
-            p.expect(R_BRACK);
-        });
+            if p.at(L_PAREN) {
+                arg_list(p);
+            }
+            a.complete(p, ATTRIBUTE);
+            if !p.eat(COMMA) {
+                break;
+            }
+        }
+        p.expect(R_BRACK);
         g.complete(p, ATTRIBUTE_GROUP);
     }
     list.complete(p, ATTRIBUTE_LIST);
@@ -112,23 +104,19 @@ pub(super) fn attributes(p: &mut Parser<'_>) {
 pub(super) fn arg_list(p: &mut Parser<'_>) {
     let m = p.start();
     p.bump(L_PAREN);
-    p.with_spaced_arrow_stop(false, |p| {
-        p.with_newlines(false, |p| {
-            if p.at(ELLIPSIS) && p.nth(1) == R_PAREN {
-                let c = p.start();
-                p.bump(ELLIPSIS);
-                c.complete(p, CALLABLE_PLACEHOLDER);
-            } else {
-                while !p.at(R_PAREN) && !p.at(EOF) {
-                    arg(p);
-                    if !p.at(R_PAREN) && !p.expect(COMMA) {
-                        break;
-                    }
-                }
+    if p.at(ELLIPSIS) && p.nth(1) == R_PAREN {
+        let c = p.start();
+        p.bump(ELLIPSIS);
+        c.complete(p, CALLABLE_PLACEHOLDER);
+    } else {
+        while !p.at(R_PAREN) && !p.at(EOF) {
+            arg(p);
+            if !p.at(R_PAREN) && !p.expect(COMMA) {
+                break;
             }
-            p.expect(R_PAREN);
-        })
-    });
+        }
+    }
+    p.expect(R_PAREN);
     m.complete(p, ARG_LIST);
 }
 
@@ -149,27 +137,11 @@ fn arg(p: &mut Parser<'_>) {
     m.complete(p, ARG);
 }
 
-/// Statement terminator: `;`, `?>`, or (StirPHP) a newline / closing brace.
+/// Statement terminator: `;` or `?>`.
 pub(super) fn stmt_end(p: &mut Parser<'_>) {
-    if p.eat(SEMI) || p.at(CLOSE_TAG) {
-        return;
-    }
-    if p.stir()
-        && (p.newline_before()
-            || p.at(R_CURLY)
-            || p.at(EOF)
-            // `if (c) a else b` on one line
-            || p.at(ELSE_KW)
-            || p.at(ELSEIF_KW)
-            || p.at(R_PAREN))
-    {
-        return;
-    }
-    if p.at(EOF) {
+    if !p.eat(SEMI) && !p.at(CLOSE_TAG) {
         p.error("expected `;`");
-        return;
     }
-    p.error("expected `;`");
 }
 
 pub(super) use exprs::expr;

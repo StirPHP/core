@@ -1,6 +1,6 @@
 //! Every embedded stub must parse losslessly and without syntax errors.
 
-use stir_syntax::{Dialect, parse};
+use stir_syntax::parse;
 
 fn line_of(text: &str, offset: usize) -> usize {
     text[..offset.min(text.len())].matches('\n').count() + 1
@@ -13,7 +13,7 @@ fn all_stubs_parse_cleanly() {
     let mut files = 0;
     for stub in stir_stubs::stub_files() {
         files += 1;
-        let parsed = parse(stub.text, Dialect::Php);
+        let parsed = parse(stub.text);
         if parsed.syntax().to_string() != stub.text {
             lossy.push(stub.path);
         }
@@ -65,5 +65,5 @@ fn well_known_symbols_are_present() {
 #[test]
 fn parser_reports_errors_on_broken_input() {
     // Guards against the parse-all test passing vacuously.
-    assert!(!parse("<?php function (", Dialect::Php).errors().is_empty());
+    assert!(!parse("<?php function (").errors().is_empty());
 }

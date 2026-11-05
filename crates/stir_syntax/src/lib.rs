@@ -1,4 +1,4 @@
-//! Lexer and parser for PHP and StirPHP, producing a lossless rowan tree.
+//! Lexer and parser for PHP, producing a lossless rowan tree.
 
 mod grammar;
 mod lexer;
@@ -12,23 +12,10 @@ pub use parser::SyntaxError;
 pub use rowan::{TextRange, TextSize};
 pub use syntax_kind::{StirLanguage, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
-/// Which surface language a file is written in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Dialect {
-    /// Plain `.php`: starts in inline-HTML mode, PHP interpolation rules.
-    Php,
-    /// `.sphp`: code from the first byte, only `${...}` interpolates.
-    Stir,
-}
-
-impl Dialect {
-    pub fn from_path(path: &std::path::Path) -> Option<Dialect> {
-        match path.extension()?.to_str()? {
-            "php" | "phtml" | "inc" => Some(Dialect::Php),
-            "sphp" => Some(Dialect::Stir),
-            _ => None,
-        }
-    }
+/// Whether `path` has a PHP source file extension.
+pub fn is_php_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e == "php" || e == "phtml" || e == "inc")
 }
 
 /// The result of parsing a file: a lossless tree plus syntax errors.
@@ -90,9 +77,9 @@ fn dump(node: &SyntaxNode, depth: usize, out: &mut String) {
 }
 
 /// Parses a whole file.
-pub fn parse(src: &str, dialect: Dialect) -> Parse {
-    let lexed = lex(src, dialect);
-    let mut p = parser::Parser::new(src, &lexed, dialect);
+pub fn parse(src: &str) -> Parse {
+    let lexed = lex(src);
+    let mut p = parser::Parser::new(src, &lexed);
     grammar::source_file(&mut p);
     let events = p.finish();
     let (green, mut errors) = parser::build_tree(src, &lexed, events);

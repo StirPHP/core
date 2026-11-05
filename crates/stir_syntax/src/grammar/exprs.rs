@@ -1,6 +1,4 @@
-//! Expressions: a Pratt parser over PHP 8 precedence, extended with the
-//! StirPHP operators (`is`, `as`, elvis `?:`, `!!`, lambdas, `when`, `if`
-//! expressions and record literals).
+//! Expressions: a Pratt parser over PHP 8 precedence.
 
 use super::*;
 
@@ -20,20 +18,12 @@ mod bp {
     pub const BAND: u8 = 22;
     pub const EQUALITY: u8 = 24;
     pub const COMPARISON: u8 = 26;
-    /// StirPHP `is` / `!is`
-    pub const IS: u8 = 27;
-    /// StirPHP elvis `?:`
-    pub const ELVIS: u8 = 28;
     /// PHP 8.5 pipe `|>`
     pub const PIPE: u8 = 29;
     pub const CONCAT: u8 = 30;
-    /// StirPHP infix calls `a to b`
-    pub const INFIX: u8 = 31;
     pub const SHIFT: u8 = 32;
     pub const ADDITIVE: u8 = 34;
     pub const MULTIPLICATIVE: u8 = 36;
-    /// StirPHP `as`
-    pub const AS: u8 = 37;
     pub const INSTANCEOF: u8 = 38;
     /// Operand of `!`
     pub const NOT: u8 = 38;
@@ -74,10 +64,11 @@ const ASSIGN_OPS: TokenSet = TokenSet::new(&[
     PIPE_EQ,
     CARET_EQ,
     SHL_EQ,
+    SHR_EQ,
     QUESTION2_EQ,
 ]);
 
-fn is_assignable(kind: SyntaxKind, stir: bool) -> bool {
+fn is_assignable(kind: SyntaxKind) -> bool {
     matches!(
         kind,
         VARIABLE_EXPR
@@ -88,18 +79,16 @@ fn is_assignable(kind: SyntaxKind, stir: bool) -> bool {
             | STATIC_PROPERTY_FETCH_EXPR
             | ARRAY_EXPR
             | LIST_EXPR
-    ) || (stir && kind == NAME_EXPR)
-        // PHP parses `f() = 1` and rejects it at compile time; so do we (in the checker).
-        || (!stir
-            && matches!(
-                kind,
-                CALL_EXPR | METHOD_CALL_EXPR | NULLSAFE_METHOD_CALL_EXPR | STATIC_CALL_EXPR
-            ))
+            // PHP parses `f() = 1` and rejects it at compile time; so do we (in the checker).
+            | CALL_EXPR
+            | METHOD_CALL_EXPR
+            | NULLSAFE_METHOD_CALL_EXPR
+            | STATIC_CALL_EXPR
+    )
 }
 
 /// Infix operator at the current position: (kind-to-bump, lbp, rbp).
 fn infix_op(p: &Parser<'_>) -> Option<(SyntaxKind, u8, u8)> {
-    let stir = p.stir();
     let op = match p.current() {
         OR_KW => (OR_KW, bp::OR, bp::OR + 1),
         XOR_KW => (XOR_KW, bp::XOR, bp::XOR + 1),
@@ -111,166 +100,48 @@ fn infix_op(p: &Parser<'_>) -> Option<(SyntaxKind, u8, u8)> {
         CARET => (CARET, bp::BXOR, bp::BXOR + 1),
         AMP => (AMP, bp::BAND, bp::BAND + 1),
         EQ2 | EQ3 | NEQ | NEQ2 | SPACESHIP => (p.current(), bp::EQUALITY, bp::EQUALITY + 1),
-        L_ANGLE | LTEQ => (p.current(), bp::COMPARISON, bp::COMPARISON + 1),
-        R_ANGLE => {
-            if p.at(GTEQ) {
-                (GTEQ, bp::COMPARISON, bp::COMPARISON + 1)
-            } else if p.at(SHR) {
-                (SHR, bp::SHIFT, bp::SHIFT + 1)
-            } else if p.at(SHR_EQ) {
-                return None;
-            } else {
-                (R_ANGLE, bp::COMPARISON, bp::COMPARISON + 1)
-            }
-        }
+        L_ANGLE | LTEQ | R_ANGLE | GTEQ => (p.current(), bp::COMPARISON, bp::COMPARISON + 1),
         PIPE_GT => (PIPE_GT, bp::PIPE, bp::PIPE + 1),
         DOT => (DOT, bp::CONCAT, bp::CONCAT + 1),
-        SHL => (SHL, bp::SHIFT, bp::SHIFT + 1),
+        SHL | SHR => (p.current(), bp::SHIFT, bp::SHIFT + 1),
         PLUS | MINUS => (p.current(), bp::ADDITIVE, bp::ADDITIVE + 1),
         STAR | SLASH | PERCENT => (p.current(), bp::MULTIPLICATIVE, bp::MULTIPLICATIVE + 1),
         POW => (POW, bp::POW, bp::POW),
-        _ if stir && p.at_contextual("is") => (IDENT, bp::IS, 0),
-        _ if stir && p.at(BANG) && p.nth_joint(0) && p.nth_at_contextual(1, "is") => {
-            (BANG, bp::IS, 0)
-        }
         _ => return None,
     };
     Some(op)
 }
 
-/// `a name b` in StirPHP: an identifier on the same line between two expressions.
-fn at_infix_call(p: &Parser<'_>) -> bool {
-    if !p.stir() || p.current() != IDENT || p.newline_before() {
-        return false;
-    }
-    if matches!(p.nth_text(0), "is" | "in" | "out" | "of" | "where" | "else") {
-        return false;
-    }
-    // the right side must start an expression on the same line
-    !p.nth_newline_before(1)
-        && matches!(
-            p.nth(1),
-            IDENT
-                | VARIABLE
-                | INT_NUMBER
-                | FLOAT_NUMBER
-                | STRING_SINGLE
-                | STRING_DOUBLE
-                | DQUOTE
-                | L_PAREN
-                | L_BRACK
-                | NAME_QUALIFIED
-                | NAME_FULLY_QUALIFIED
-                | MINUS
-                | BANG
-                | NEW_KW
-                | L_CURLY
-        )
-}
-
-/// `<A, B>(` directly after a name: explicit call type arguments (StirPHP).
-fn at_call_type_args(p: &Parser<'_>) -> bool {
-    if !p.stir() || !p.at(L_ANGLE) {
-        return false;
-    }
-    let mut depth = 0i32;
-    let mut n = 0;
-    loop {
-        match p.nth(n) {
-            L_ANGLE => depth += 1,
-            R_ANGLE => {
-                depth -= 1;
-                if depth == 0 {
-                    return p.nth(n + 1) == L_PAREN;
-                }
-            }
-            IDENT | COMMA | QUESTION | NAME_QUALIFIED | NAME_FULLY_QUALIFIED | PIPE | L_PAREN
-            | R_PAREN | ARROW | STRING_SINGLE | STRING_DOUBLE | INT_NUMBER => {}
-            k if k.is_keyword() => {}
-            _ => return false,
-        }
-        n += 1;
-        if n > 48 {
-            return false;
-        }
-    }
-}
-
-/// Tokens that may start a continuation line in StirPHP.
-const CONTINUATION: TokenSet = TokenSet::new(&[
-    ARROW,
-    NULLSAFE_ARROW,
-    DOT,
-    AMP2,
-    PIPE2,
-    QUESTION2,
-    COLON2,
-    PIPE_GT,
-]);
-
-fn newline_breaks(p: &Parser<'_>) -> bool {
-    if !p.newline_terminates() {
-        return false;
-    }
-    if p.at_ts(CONTINUATION) {
-        return false;
-    }
-    // a ternary or elvis on a continuation line: `?` can't start a statement
-    if p.at(QUESTION) {
-        return false;
-    }
-    true
-}
-
 pub(crate) fn expr_bp(p: &mut Parser<'_>, min_bp: u8) -> Option<CompletedMarker> {
     let mut lhs = unary(p)?;
     loop {
-        if newline_breaks(p) {
-            break;
-        }
         // Assignment binds to any assignable left-hand side regardless of
         // precedence (`!$a = f()` is `!($a = f())` in PHP).
-        if (p.at_ts(ASSIGN_OPS) || p.at(SHR_EQ)) && is_assignable(lhs.kind(), p.stir()) {
+        if p.at_ts(ASSIGN_OPS) && is_assignable(lhs.kind()) {
             let m = lhs.precede(p);
-            if p.at(SHR_EQ) {
-                p.bump(SHR_EQ);
-            } else {
-                let by_ref = p.at(EQ) && p.nth(1) == AMP;
-                p.bump_any();
-                if by_ref {
-                    p.bump(AMP);
-                }
+            let by_ref = p.at(EQ) && p.nth(1) == AMP;
+            p.bump_any();
+            if by_ref {
+                p.bump(AMP);
             }
             operand(p, bp::ASSIGN);
             lhs = m.complete(p, ASSIGN_EXPR);
             continue;
         }
 
-        // ternary / short ternary / elvis
+        // ternary / short ternary
         if p.at(QUESTION) {
-            let elvis = p.nth(1) == COLON;
-            if elvis {
-                let (lbp, rbp) = if p.stir() {
-                    (bp::ELVIS, bp::ELVIS + 1)
-                } else {
-                    (bp::TERNARY, bp::TERNARY + 1)
-                };
-                if lbp < min_bp {
-                    break;
-                }
-                let m = lhs.precede(p);
-                p.bump(QUESTION);
-                p.bump(COLON);
-                operand(p, rbp);
-                lhs = m.complete(p, ELVIS_EXPR);
-                continue;
-            }
             if bp::TERNARY < min_bp {
                 break;
             }
             let m = lhs.precede(p);
             p.bump(QUESTION);
-            p.with_newlines(false, |p| expr_bp(p, 0));
+            if p.eat(COLON) {
+                operand(p, bp::TERNARY + 1);
+                lhs = m.complete(p, SHORT_TERNARY_EXPR);
+                continue;
+            }
+            expr_bp(p, 0);
             p.expect(COLON);
             operand(p, bp::TERNARY + 1);
             lhs = m.complete(p, TERNARY_EXPR);
@@ -288,35 +159,6 @@ pub(crate) fn expr_bp(p: &mut Parser<'_>, min_bp: u8) -> Option<CompletedMarker>
             continue;
         }
 
-        if p.stir() && p.at(AS_KW) && p.as_allowed() {
-            if bp::AS < min_bp {
-                break;
-            }
-            let m = lhs.precede(p);
-            // `as?` is a safe cast; `as ?T` casts to a nullable type
-            let safe_cast = p.nth(1) == QUESTION && p.nth_joint(0);
-            p.bump(AS_KW);
-            if safe_cast {
-                p.bump(QUESTION);
-            }
-            types::type_(p);
-            lhs = m.complete(p, AS_EXPR);
-            continue;
-        }
-
-        if at_infix_call(p) {
-            if bp::INFIX < min_bp {
-                break;
-            }
-            let m = lhs.precede(p);
-            let n = p.start();
-            p.bump_remap(IDENT);
-            n.complete(p, NAME);
-            operand(p, bp::INFIX + 1);
-            lhs = m.complete(p, INFIX_CALL_EXPR);
-            continue;
-        }
-
         let Some((op, lbp, rbp)) = infix_op(p) else {
             break;
         };
@@ -324,16 +166,6 @@ pub(crate) fn expr_bp(p: &mut Parser<'_>, min_bp: u8) -> Option<CompletedMarker>
             break;
         }
         let m = lhs.precede(p);
-        if op == IDENT || op == BANG {
-            // `is` / `!is` take a type on the right
-            if op == BANG {
-                p.bump(BANG);
-            }
-            p.bump_remap(IDENT);
-            types::type_(p);
-            lhs = m.complete(p, IS_EXPR);
-            continue;
-        }
         p.bump(op);
         operand(p, rbp);
         lhs = m.complete(p, BIN_EXPR);
@@ -411,8 +243,7 @@ fn unary(p: &mut Parser<'_>) -> Option<CompletedMarker> {
             if !matches!(
                 p.current(),
                 SEMI | R_PAREN | COMMA | R_BRACK | EOF | CLOSE_TAG
-            ) && !p.newline_terminates()
-            {
+            ) {
                 operand(p, bp::ASSIGN);
                 if p.eat(FAT_ARROW) {
                     operand(p, bp::ASSIGN);
@@ -439,31 +270,10 @@ fn unary(p: &mut Parser<'_>) -> Option<CompletedMarker> {
 fn postfix(p: &mut Parser<'_>) -> Option<CompletedMarker> {
     let mut lhs = primary(p)?;
     loop {
-        if newline_breaks(p) {
-            break;
-        }
-        if matches!(
-            lhs.kind(),
-            NAME_EXPR | PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR | CLASS_CONST_FETCH_EXPR
-        ) && at_call_type_args(p)
-        {
-            let t = p.start();
-            p.bump(L_ANGLE);
-            while !p.at(R_ANGLE) && !p.at(EOF) {
-                types::type_(p);
-                if !p.eat(COMMA) {
-                    break;
-                }
-            }
-            p.bump_remap(R_ANGLE);
-            t.complete(p, CALL_TYPE_ARGS);
-            continue;
-        }
         lhs = match p.current() {
             L_PAREN => {
                 let m = lhs.precede(p);
                 arg_list(p);
-                trailing_lambda(p);
                 let kind = match lhs.kind() {
                     PROPERTY_FETCH_EXPR => METHOD_CALL_EXPR,
                     NULLSAFE_PROPERTY_FETCH_EXPR => NULLSAFE_METHOD_CALL_EXPR,
@@ -476,41 +286,12 @@ fn postfix(p: &mut Parser<'_>) -> Option<CompletedMarker> {
             L_BRACK => {
                 let m = lhs.precede(p);
                 p.bump(L_BRACK);
-                p.with_newlines(false, |p| {
-                    if !p.at(R_BRACK) {
-                        expr(p);
-                    }
-                });
+                if !p.at(R_BRACK) {
+                    expr(p);
+                }
                 p.expect(R_BRACK);
                 m.complete(p, INDEX_EXPR)
             }
-            L_CURLY if p.stir() => {
-                if p.newline_before() {
-                    break;
-                }
-                if lhs.kind() == NAME_EXPR && at_record_literal_body(p) {
-                    let m = lhs.precede(p);
-                    record_literal_body(p);
-                    m.complete(p, RECORD_LITERAL)
-                } else if matches!(
-                    lhs.kind(),
-                    NAME_EXPR | PROPERTY_FETCH_EXPR | NULLSAFE_PROPERTY_FETCH_EXPR
-                ) {
-                    let m = lhs.precede(p);
-                    let a = p.start();
-                    lambda(p);
-                    a.complete(p, ARG_LIST);
-                    let kind = match lhs.kind() {
-                        PROPERTY_FETCH_EXPR => METHOD_CALL_EXPR,
-                        NULLSAFE_PROPERTY_FETCH_EXPR => NULLSAFE_METHOD_CALL_EXPR,
-                        _ => CALL_EXPR,
-                    };
-                    m.complete(p, kind)
-                } else {
-                    break;
-                }
-            }
-            ARROW if p.at_spaced_arrow_stop() => break,
             ARROW | NULLSAFE_ARROW => {
                 let nullsafe = p.at(NULLSAFE_ARROW);
                 let m = lhs.precede(p);
@@ -539,7 +320,7 @@ fn postfix(p: &mut Parser<'_>) -> Option<CompletedMarker> {
                     }
                     L_CURLY => {
                         p.bump(L_CURLY);
-                        p.with_newlines(false, |p| expr(p));
+                        expr(p);
                         p.expect(R_CURLY);
                         m.complete(p, CLASS_CONST_FETCH_EXPR)
                     }
@@ -558,16 +339,6 @@ fn postfix(p: &mut Parser<'_>) -> Option<CompletedMarker> {
                 p.bump_any();
                 m.complete(p, POSTFIX_EXPR)
             }
-            BANG if p.stir()
-                && p.nth(1) == BANG
-                && p.nth_joint(0)
-                && !p.nth_at_contextual(2, "is") =>
-            {
-                let m = lhs.precede(p);
-                p.bump(BANG);
-                p.bump(BANG);
-                m.complete(p, NOT_NULL_EXPR)
-            }
             _ => break,
         };
     }
@@ -584,7 +355,7 @@ fn member_selector(p: &mut Parser<'_>) {
         }
         L_CURLY => {
             p.bump(L_CURLY);
-            p.with_newlines(false, |p| expr(p));
+            expr(p);
             p.expect(R_CURLY);
         }
         DOLLAR => {
@@ -594,40 +365,6 @@ fn member_selector(p: &mut Parser<'_>) {
             member_name(p);
         }
         _ => p.error("expected a member name"),
-    }
-}
-
-/// `Name { ident = ...` starts a record literal (rather than a trailing lambda).
-fn at_record_literal_body(p: &Parser<'_>) -> bool {
-    p.at(L_CURLY) && at_member_name_n(p, 1) && p.nth(2) == EQ && p.nth(3) != EQ
-}
-
-fn at_member_name_n(p: &Parser<'_>, n: usize) -> bool {
-    p.nth(n) == IDENT || p.nth(n).is_keyword()
-}
-
-fn record_literal_body(p: &mut Parser<'_>) {
-    p.bump(L_CURLY);
-    p.with_newlines(false, |p| {
-        while !p.at(R_CURLY) && !p.at(EOF) {
-            let f = p.start();
-            member_name(p);
-            p.expect(EQ);
-            expr(p);
-            f.complete(p, RECORD_LITERAL_FIELD);
-            if !p.eat(COMMA) {
-                break;
-            }
-        }
-    });
-    p.expect(R_CURLY);
-}
-
-fn trailing_lambda(p: &mut Parser<'_>) {
-    if p.stir() && p.at(L_CURLY) && !p.newline_before() {
-        let a = p.start();
-        lambda(p);
-        a.complete(p, ARG);
     }
 }
 
@@ -644,7 +381,7 @@ pub(super) fn simple_variable(p: &mut Parser<'_>) -> Option<CompletedMarker> {
             p.bump(DOLLAR);
             if p.at(L_CURLY) {
                 p.bump(L_CURLY);
-                p.with_newlines(false, |p| expr(p));
+                expr(p);
                 p.expect(R_CURLY);
             } else {
                 simple_variable(p);
@@ -702,7 +439,7 @@ fn class_reference(p: &mut Parser<'_>) {
         L_PAREN => {
             let m = p.start();
             p.bump(L_PAREN);
-            p.with_newlines(false, |p| expr(p));
+            expr(p);
             p.expect(R_PAREN);
             m.complete(p, PAREN_EXPR);
         }
@@ -715,7 +452,6 @@ fn class_reference(p: &mut Parser<'_>) {
 }
 
 fn primary(p: &mut Parser<'_>) -> Option<CompletedMarker> {
-    let stir = p.stir();
     let cm = match p.current() {
         VARIABLE => {
             let m = p.start();
@@ -727,7 +463,7 @@ fn primary(p: &mut Parser<'_>) -> Option<CompletedMarker> {
             p.bump(DOLLAR);
             if p.at(L_CURLY) {
                 p.bump(L_CURLY);
-                p.with_newlines(false, |p| expr(p));
+                expr(p);
                 p.expect(R_CURLY);
             } else {
                 simple_variable(p);
@@ -753,47 +489,10 @@ fn primary(p: &mut Parser<'_>) -> Option<CompletedMarker> {
             p.bump_any();
             m.complete(p, MAGIC_CONST)
         }
-        // `(int) $x` is PHP's cast, which `.sphp` doesn't have
-        L_PAREN
-            if p.stir()
-                && p.nth(1) == IDENT
-                && p.nth(2) == R_PAREN
-                && matches!(
-                    p.nth_text(1).to_ascii_lowercase().as_str(),
-                    "int"
-                        | "integer"
-                        | "float"
-                        | "double"
-                        | "string"
-                        | "bool"
-                        | "boolean"
-                        | "array"
-                        | "object"
-                )
-                && matches!(
-                    p.nth(3),
-                    VARIABLE | IDENT | INT_NUMBER | FLOAT_NUMBER | STRING_LITERAL | L_PAREN
-                ) =>
-        {
-            let target = p.nth_text(1).to_ascii_lowercase();
-            p.error(match target.as_str() {
-                "int" | "integer" => "PHP casts aren't part of `.sphp`: use `intval(...)`, or `as int` for a checked conversion",
-                "float" | "double" => "PHP casts aren't part of `.sphp`: use `floatval(...)`, or `as float` for a checked conversion",
-                "string" => "PHP casts aren't part of `.sphp`: use `strval(...)`, or `as string` for a checked conversion",
-                "bool" | "boolean" => "PHP casts aren't part of `.sphp`: use `boolval(...)`, or `as bool` for a checked conversion",
-                _ => "PHP casts aren't part of `.sphp`: use `as` for a checked conversion",
-            });
-            let m = p.start();
-            p.bump(L_PAREN);
-            p.bump(IDENT);
-            p.bump(R_PAREN);
-            operand(p, bp::ASSIGN);
-            m.complete(p, PAREN_EXPR)
-        }
         L_PAREN => {
             let m = p.start();
             p.bump(L_PAREN);
-            p.with_no_as(false, |p| p.with_newlines(false, |p| expr(p)));
+            expr(p);
             p.expect(R_PAREN);
             m.complete(p, PAREN_EXPR)
         }
@@ -869,38 +568,9 @@ fn primary(p: &mut Parser<'_>) -> Option<CompletedMarker> {
                 }
             }
         }
-        L_CURLY if stir => lambda(p),
-        IF_KW if stir => if_expr(p),
-        IDENT if stir && p.at_contextual("when") && matches!(p.nth(1), L_PAREN | L_CURLY) => {
-            when_expr(p)
-        }
         IDENT | NAME_QUALIFIED | NAME_FULLY_QUALIFIED | NAME_RELATIVE | STATIC_KW => {
             let m = p.start();
             name_ref(p);
-            m.complete(p, NAME_EXPR)
-        }
-        LIST_KW | ARRAY_KW | PRINT_KW | DEFAULT_KW | CLASS_KW | MATCH_KW
-            if stir && !matches!(p.nth(1), L_PAREN) =>
-        {
-            // reserved words can name StirPHP values (`val list = ...`)
-            let m = p.start();
-            let n = p.start();
-            p.bump_remap(IDENT);
-            n.complete(p, NAME_REF);
-            m.complete(p, NAME_EXPR)
-        }
-        k if k.is_keyword()
-            && p.nth(1) == L_PAREN
-            && !matches!(
-                k,
-                IF_KW | WHILE_KW | FOR_KW | FOREACH_KW | SWITCH_KW | CATCH_KW
-            ) =>
-        {
-            // A reserved word used as a function name (`list`, `array` handled above).
-            let m = p.start();
-            let n = p.start();
-            p.bump_remap(IDENT);
-            n.complete(p, NAME_REF);
             m.complete(p, NAME_EXPR)
         }
         _ => return None,
@@ -921,35 +591,33 @@ fn array_literal(
 
 fn array_body(p: &mut Parser<'_>, open: SyntaxKind, close: SyntaxKind) {
     p.bump(open);
-    p.with_newlines(false, |p| {
-        while !p.at(close) && !p.at(EOF) {
-            let e = p.start();
-            if p.at(COMMA) {
-                // skipped element in destructuring: `[, $b]`
-                e.complete(p, ARRAY_ELEM);
-                p.bump(COMMA);
-                continue;
-            }
-            if p.eat(ELLIPSIS) {
-                expr(p);
-            } else {
-                if opt_expr(p).is_none() {
-                    p.err_recover(
-                        "expected an array element",
-                        TokenSet::new(&[COMMA, R_BRACK, R_PAREN]),
-                    );
-                }
-                if p.eat(FAT_ARROW) {
-                    expr(p);
-                }
-            }
+    while !p.at(close) && !p.at(EOF) {
+        let e = p.start();
+        if p.at(COMMA) {
+            // skipped element in destructuring: `[, $b]`
             e.complete(p, ARRAY_ELEM);
-            if !p.eat(COMMA) {
-                break;
+            p.bump(COMMA);
+            continue;
+        }
+        if p.eat(ELLIPSIS) {
+            expr(p);
+        } else {
+            if opt_expr(p).is_none() {
+                p.err_recover(
+                    "expected an array element",
+                    TokenSet::new(&[COMMA, R_BRACK, R_PAREN]),
+                );
+            }
+            if p.eat(FAT_ARROW) {
+                expr(p);
             }
         }
-        p.expect(close);
-    });
+        e.complete(p, ARRAY_ELEM);
+        if !p.eat(COMMA) {
+            break;
+        }
+    }
+    p.expect(close);
 }
 
 fn new_expr(p: &mut Parser<'_>) -> CompletedMarker {
@@ -987,7 +655,6 @@ fn new_expr(p: &mut Parser<'_>) -> CompletedMarker {
     class_reference(p);
     if p.at(L_PAREN) {
         arg_list(p);
-        trailing_lambda(p);
     }
     m.complete(p, NEW_EXPR)
 }
@@ -996,35 +663,33 @@ fn match_expr(p: &mut Parser<'_>) -> CompletedMarker {
     let m = p.start();
     p.bump(MATCH_KW);
     p.bump(L_PAREN);
-    p.with_newlines(false, |p| expr(p));
+    expr(p);
     p.expect(R_PAREN);
     p.expect(L_CURLY);
-    p.with_newlines(false, |p| {
-        while !p.at(R_CURLY) && !p.at(EOF) {
-            let arm = p.start();
-            if p.at(DEFAULT_KW) {
-                p.bump(DEFAULT_KW);
-                p.eat(COMMA);
-            } else {
-                let c = p.start();
-                while !p.at(FAT_ARROW) && !p.at(EOF) && !p.at(R_CURLY) {
-                    if opt_expr(p).is_none() {
-                        p.err_and_bump("expected a match condition");
-                    }
-                    if !p.eat(COMMA) {
-                        break;
-                    }
+    while !p.at(R_CURLY) && !p.at(EOF) {
+        let arm = p.start();
+        if p.at(DEFAULT_KW) {
+            p.bump(DEFAULT_KW);
+            p.eat(COMMA);
+        } else {
+            let c = p.start();
+            while !p.at(FAT_ARROW) && !p.at(EOF) && !p.at(R_CURLY) {
+                if opt_expr(p).is_none() {
+                    p.err_and_bump("expected a match condition");
                 }
-                c.complete(p, MATCH_CONDITIONS);
+                if !p.eat(COMMA) {
+                    break;
+                }
             }
-            p.expect(FAT_ARROW);
-            expr(p);
-            arm.complete(p, MATCH_ARM);
-            if !p.eat(COMMA) {
-                break;
-            }
+            c.complete(p, MATCH_CONDITIONS);
         }
-    });
+        p.expect(FAT_ARROW);
+        expr(p);
+        arm.complete(p, MATCH_ARM);
+        if !p.eat(COMMA) {
+            break;
+        }
+    }
     p.expect(R_CURLY);
     m.complete(p, MATCH_EXPR)
 }
@@ -1039,18 +704,16 @@ fn closure(p: &mut Parser<'_>, m: Option<crate::parser::Marker>) -> CompletedMar
         let u = p.start();
         p.bump(USE_KW);
         p.expect(L_PAREN);
-        p.with_newlines(false, |p| {
-            while !p.at(R_PAREN) && !p.at(EOF) {
-                let v = p.start();
-                p.eat(AMP);
-                p.expect(VARIABLE);
-                v.complete(p, CLOSURE_USE_VAR);
-                if !p.eat(COMMA) {
-                    break;
-                }
+        while !p.at(R_PAREN) && !p.at(EOF) {
+            let v = p.start();
+            p.eat(AMP);
+            p.expect(VARIABLE);
+            v.complete(p, CLOSURE_USE_VAR);
+            if !p.eat(COMMA) {
+                break;
             }
-            p.expect(R_PAREN);
-        });
+        }
+        p.expect(R_PAREN);
         u.complete(p, CLOSURE_USE);
     }
     if p.at(COLON) {
@@ -1080,183 +743,6 @@ fn arrow_fn(p: &mut Parser<'_>, m: Option<crate::parser::Marker>) -> CompletedMa
     m.complete(p, ARROW_FN_EXPR)
 }
 
-/// StirPHP lambda: `{ stmts }`, `{ a, b -> stmts }`, `{ x: Int -> stmts }`.
-///
-/// Because `->` is also member access, a single untyped parameter is only
-/// recognised when its `->` is followed by whitespace: `{ u -> u->name }` has a
-/// parameter, `{ it->name }` does not.
-pub(super) fn lambda(p: &mut Parser<'_>) -> CompletedMarker {
-    let m = p.start();
-    p.bump(L_CURLY);
-    if p.at(ARROW) {
-        let params = p.start();
-        params.complete(p, LAMBDA_PARAM_LIST);
-        p.bump(ARROW);
-    } else if at_lambda_params(p) {
-        let params = p.start();
-        loop {
-            let prm = p.start();
-            if p.at_contextual("mut") && matches!(p.nth(1), IDENT | VARIABLE) {
-                p.bump_remap(IDENT);
-            }
-            if p.at(VARIABLE) {
-                p.bump(VARIABLE);
-            } else {
-                member_name(p);
-            }
-            if p.eat(COLON) {
-                types::type_(p);
-            }
-            prm.complete(p, PARAM);
-            if !p.eat(COMMA) {
-                break;
-            }
-        }
-        params.complete(p, LAMBDA_PARAM_LIST);
-        p.expect(ARROW);
-    }
-    p.with_spaced_arrow_stop(false, |p| p.with_newlines(true, |p| stmts::stmt_list(p)));
-    p.expect(R_CURLY);
-    m.complete(p, LAMBDA_EXPR)
-}
-
-fn at_lambda_params(p: &Parser<'_>) -> bool {
-    let mut n = 0;
-    loop {
-        if p.nth_at_contextual(n, "mut") && matches!(p.nth(n + 1), IDENT | VARIABLE) {
-            n += 1;
-        }
-        if !(matches!(p.nth(n), IDENT | VARIABLE)) {
-            return false;
-        }
-        n += 1;
-        let mut typed = false;
-        if p.nth(n) == COLON {
-            typed = true;
-            // skip a simple type: name [<...>] [?]
-            n += 1;
-            let mut depth = 0;
-            loop {
-                match p.nth(n) {
-                    L_ANGLE | L_PAREN => depth += 1,
-                    R_ANGLE | R_PAREN if depth > 0 => depth -= 1,
-                    EOF | R_CURLY | SEMI => return false,
-                    ARROW | COMMA if depth == 0 => break,
-                    _ => {}
-                }
-                n += 1;
-                if n > 64 {
-                    return false;
-                }
-            }
-        }
-        match p.nth(n) {
-            COMMA => n += 1,
-            ARROW => {
-                if typed || n > 1 {
-                    return true;
-                }
-                // single untyped param: require whitespace after `->`
-                return !p.nth_joint(n);
-            }
-            _ => return false,
-        }
-    }
-}
-
-/// StirPHP `if (c) a else b` used as an expression.
-fn if_expr(p: &mut Parser<'_>) -> CompletedMarker {
-    let m = p.start();
-    p.bump(IF_KW);
-    if_expr_rest(p, m)
-}
-
-fn if_expr_rest(p: &mut Parser<'_>, m: crate::parser::Marker) -> CompletedMarker {
-    p.expect(L_PAREN);
-    p.with_newlines(false, |p| expr(p));
-    p.expect(R_PAREN);
-    branch(p);
-    if p.at(ELSEIF_KW) {
-        // `elseif (c) a else b` is `else if (c) a else b`
-        let nested = p.start();
-        p.bump(ELSEIF_KW);
-        if_expr_rest(p, nested);
-    } else if p.at(ELSE_KW) || (p.newline_before() && p.nth(0) == ELSE_KW) {
-        p.bump(ELSE_KW);
-        branch(p);
-    }
-    m.complete(p, IF_EXPR)
-}
-
-fn branch(p: &mut Parser<'_>) {
-    if p.at(L_CURLY) {
-        stmts::block(p);
-    } else if matches!(
-        p.current(),
-        ECHO_KW | RETURN_KW | BREAK_KW | CONTINUE_KW | UNSET_KW | GLOBAL_KW
-    ) {
-        // statement-only constructs are allowed as `when`/`if` branches
-        stmts::stmt(p, false);
-    } else {
-        expr(p);
-    }
-}
-
-/// `when (subject) { cond, cond -> body; is T -> body; else -> body }`
-fn when_expr(p: &mut Parser<'_>) -> CompletedMarker {
-    let m = p.start();
-    p.bump_remap(IDENT);
-    if p.at(L_PAREN) {
-        p.bump(L_PAREN);
-        p.with_newlines(false, |p| {
-            if p.at_contextual("val") && p.nth(2) == EQ {
-                // `when (val x = f())`
-                p.bump_remap(IDENT);
-                member_name(p);
-                p.bump(EQ);
-            }
-            expr(p)
-        });
-        p.expect(R_PAREN);
-    }
-    p.expect(L_CURLY);
-    p.with_newlines(true, |p| {
-        while !p.at(R_CURLY) && !p.at(EOF) {
-            let arm = p.start();
-            if p.at(ELSE_KW) {
-                p.bump(ELSE_KW);
-            } else {
-                loop {
-                    let c = p.start();
-                    if p.at_contextual("is") {
-                        p.bump_remap(IDENT);
-                        types::type_(p);
-                    } else if p.at(BANG) && p.nth_at_contextual(1, "is") {
-                        p.bump(BANG);
-                        p.bump_remap(IDENT);
-                        types::type_(p);
-                    } else if p
-                        .with_spaced_arrow_stop(true, |p| p.with_newlines(false, |p| opt_expr(p)))
-                        .is_none()
-                    {
-                        p.err_and_bump("expected a `when` condition");
-                    }
-                    c.complete(p, WHEN_CONDITION);
-                    if !p.eat(COMMA) {
-                        break;
-                    }
-                }
-            }
-            p.expect(ARROW);
-            branch(p);
-            p.eat(SEMI);
-            arm.complete(p, WHEN_ARM);
-        }
-    });
-    p.expect(R_CURLY);
-    m.complete(p, WHEN_EXPR)
-}
-
 // ---- strings ----
 
 fn interp_string(p: &mut Parser<'_>, quote: SyntaxKind, kind: SyntaxKind) -> CompletedMarker {
@@ -1276,67 +762,65 @@ fn heredoc(p: &mut Parser<'_>) -> CompletedMarker {
 }
 
 fn interp_parts(p: &mut Parser<'_>, end: SyntaxKind) {
-    p.with_newlines(false, |p| {
-        while !p.at(end) && !p.at(EOF) {
-            match p.current() {
-                STRING_CONTENT => p.bump(STRING_CONTENT),
-                VARIABLE => {
-                    let iv = p.start();
-                    let v = p.start();
-                    p.bump(VARIABLE);
-                    let mut lhs = v.complete(p, VARIABLE_EXPR);
-                    if p.at(L_BRACK) {
-                        let m = lhs.precede(p);
-                        p.bump(L_BRACK);
-                        let e = p.start();
-                        match p.current() {
-                            MINUS => {
-                                p.bump(MINUS);
-                                p.eat(INT_NUMBER);
-                                e.complete(p, PREFIX_EXPR);
-                            }
-                            INT_NUMBER => {
-                                p.bump(INT_NUMBER);
-                                e.complete(p, LITERAL);
-                            }
-                            VARIABLE => {
-                                p.bump(VARIABLE);
-                                e.complete(p, VARIABLE_EXPR);
-                            }
-                            _ => {
-                                // bare key: `$a[key]` means `$a['key']`
-                                p.bump_any();
-                                e.complete(p, STRING_LITERAL);
-                            }
+    while !p.at(end) && !p.at(EOF) {
+        match p.current() {
+            STRING_CONTENT => p.bump(STRING_CONTENT),
+            VARIABLE => {
+                let iv = p.start();
+                let v = p.start();
+                p.bump(VARIABLE);
+                let mut lhs = v.complete(p, VARIABLE_EXPR);
+                if p.at(L_BRACK) {
+                    let m = lhs.precede(p);
+                    p.bump(L_BRACK);
+                    let e = p.start();
+                    match p.current() {
+                        MINUS => {
+                            p.bump(MINUS);
+                            p.eat(INT_NUMBER);
+                            e.complete(p, PREFIX_EXPR);
                         }
-                        p.expect(R_BRACK);
-                        lhs = m.complete(p, INDEX_EXPR);
-                    } else if p.at(ARROW) || p.at(NULLSAFE_ARROW) {
-                        let nullsafe = p.at(NULLSAFE_ARROW);
-                        let m = lhs.precede(p);
-                        p.bump_any();
-                        member_name(p);
-                        lhs = m.complete(
-                            p,
-                            if nullsafe {
-                                NULLSAFE_PROPERTY_FETCH_EXPR
-                            } else {
-                                PROPERTY_FETCH_EXPR
-                            },
-                        );
+                        INT_NUMBER => {
+                            p.bump(INT_NUMBER);
+                            e.complete(p, LITERAL);
+                        }
+                        VARIABLE => {
+                            p.bump(VARIABLE);
+                            e.complete(p, VARIABLE_EXPR);
+                        }
+                        _ => {
+                            // bare key: `$a[key]` means `$a['key']`
+                            p.bump_any();
+                            e.complete(p, STRING_LITERAL);
+                        }
                     }
-                    let _ = lhs;
-                    iv.complete(p, INTERP_VAR);
-                }
-                CURLY_OPEN | DOLLAR_CURLY_OPEN => {
-                    let ie = p.start();
+                    p.expect(R_BRACK);
+                    lhs = m.complete(p, INDEX_EXPR);
+                } else if p.at(ARROW) || p.at(NULLSAFE_ARROW) {
+                    let nullsafe = p.at(NULLSAFE_ARROW);
+                    let m = lhs.precede(p);
                     p.bump_any();
-                    expr(p);
-                    p.expect(R_CURLY);
-                    ie.complete(p, INTERP_EXPR);
+                    member_name(p);
+                    lhs = m.complete(
+                        p,
+                        if nullsafe {
+                            NULLSAFE_PROPERTY_FETCH_EXPR
+                        } else {
+                            PROPERTY_FETCH_EXPR
+                        },
+                    );
                 }
-                _ => p.err_and_bump("unexpected token in string"),
+                let _ = lhs;
+                iv.complete(p, INTERP_VAR);
             }
+            CURLY_OPEN | DOLLAR_CURLY_OPEN => {
+                let ie = p.start();
+                p.bump_any();
+                expr(p);
+                p.expect(R_CURLY);
+                ie.complete(p, INTERP_EXPR);
+            }
+            _ => p.err_and_bump("unexpected token in string"),
         }
-    });
+    }
 }

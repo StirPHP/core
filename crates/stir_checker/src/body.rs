@@ -148,7 +148,7 @@ pub fn is_expr_kind(k: SyntaxKind) -> bool {
             | POSTFIX_EXPR
             | ASSIGN_EXPR
             | TERNARY_EXPR
-            | ELVIS_EXPR
+            | SHORT_TERNARY_EXPR
             | CAST_EXPR
             | AS_EXPR
             | INSTANCEOF_EXPR
@@ -1587,7 +1587,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 self.restore_types(&snap);
                 stir_types::join(self.ctx, &a, &b)
             }
-            ELVIS_EXPR => {
+            SHORT_TERNARY_EXPR => {
                 let es = exprs_of(node);
                 if es.len() < 2 {
                     return Ty::error();

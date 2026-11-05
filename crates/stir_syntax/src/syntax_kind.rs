@@ -1,6 +1,6 @@
 //! The single kind enum shared by the lexer, the parser and the rowan tree.
 
-/// Every token and node kind in a StirPHP / PHP syntax tree.
+/// Every token and node kind in a PHP syntax tree.
 ///
 /// Tokens come first, then nodes. The `#[repr(u16)]` lets the kind round-trip
 /// through `rowan::SyntaxKind`.
@@ -92,9 +92,10 @@ pub enum SyntaxKind {
     NEQ,
     NEQ2,
     L_ANGLE,
-    /// Always a single `>`; `>=`, `>>` and `>>=` are composed by the parser so
-    /// that nested generics (`List<List<Int>>`) need no token splitting.
     R_ANGLE,
+    GTEQ,
+    SHR,
+    SHR_EQ,
     LTEQ,
     SPACESHIP,
     PLUS,
@@ -210,14 +211,6 @@ pub enum SyntaxKind {
     NAMESPACE_C_KW,
     TRAIT_C_KW,
     PROPERTY_C_KW,
-
-    // ---- composite tokens (never produced by the lexer) ----
-    /// `>=`, composed from `>` `=`.
-    GTEQ,
-    /// `>>`, composed from `>` `>`.
-    SHR,
-    /// `>>=`, composed from `>` `>` `=`.
-    SHR_EQ,
 
     EOF,
 
@@ -351,8 +344,8 @@ pub enum SyntaxKind {
     POSTFIX_EXPR,
     ASSIGN_EXPR,
     TERNARY_EXPR,
-    /// Elvis (`a ?: b` in StirPHP) or PHP short ternary.
-    ELVIS_EXPR,
+    /// `a ?: b`
+    SHORT_TERNARY_EXPR,
     /// Postfix `!!`
     NOT_NULL_EXPR,
     CAST_EXPR,
@@ -523,7 +516,7 @@ impl From<SyntaxKind> for rowan::SyntaxKind {
     }
 }
 
-/// The rowan language tag for StirPHP trees.
+/// The rowan language tag for PHP trees.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum StirLanguage {}
 

@@ -1,7 +1,6 @@
 //! Signatures of stub functions.
 
 use stir_db::{FileOrigin, RootDatabase, Settings, SourceFile, Workspace};
-use stir_syntax::Dialect;
 
 use crate::Ctx;
 
@@ -12,7 +11,6 @@ fn workspace(db: &RootDatabase) -> Workspace {
                 db,
                 format!("stubs://{}", s.path).into(),
                 s.text.to_owned(),
-                Dialect::Php,
                 FileOrigin::Stub,
             )
         })

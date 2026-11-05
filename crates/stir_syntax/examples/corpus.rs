@@ -18,8 +18,7 @@ fn main() {
         };
         files += 1;
         bytes += src.len();
-        let parse =
-            std::panic::catch_unwind(|| stir_syntax::parse(&src, stir_syntax::Dialect::Php));
+        let parse = std::panic::catch_unwind(|| stir_syntax::parse(&src));
         let parse = match parse {
             Ok(p) => p,
             Err(_) => {

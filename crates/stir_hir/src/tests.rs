@@ -1,16 +1,9 @@
 use stir_db::{FileOrigin, RootDatabase, SourceFile, Workspace};
-use stir_syntax::Dialect;
 
 use super::*;
 
 fn file(db: &RootDatabase, path: &str, text: &str) -> SourceFile {
-    SourceFile::new(
-        db,
-        path.into(),
-        text.into(),
-        Dialect::Php,
-        FileOrigin::Source,
-    )
+    SourceFile::new(db, path.into(), text.into(), FileOrigin::Source)
 }
 
 #[test]
