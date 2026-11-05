@@ -5525,7 +5525,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     var.text_range(),
                     &cls,
                     stir_hir::LimitedMemberKind::Property,
-                    &name,
+                    name,
                 ) {
                     return Ty::error();
                 }

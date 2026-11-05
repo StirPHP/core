@@ -125,6 +125,11 @@ const CASES: &[(Feature, &str)] = &[
         v::CLOSURES_IN_CONSTANTS,
         "function f($a = static function () {}) {}",
     ),
+    (
+        v::CLOSURES_IN_CONSTANTS,
+        "class A { public $x = static function () {}; }",
+    ),
+    (v::CALLABLES_IN_CONSTANTS, "const A = strlen(...);"),
 ];
 
 #[test]

@@ -305,8 +305,8 @@ pub fn library_message(what: &str, available: Availability, versions: PhpVersion
     }
 }
 
-/// A piece of syntax, and the release that added it. The versions are those of PHP's manual and
-/// release announcements (the 8.x "New Features" migration guides).
+/// A piece of syntax, and the release that added it, by the "New Features" migration guides of
+/// PHP's manual. `__PROPERTY__` is from the property hooks RFC, and the manual's magic constants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Feature {
     /// Reads after "PHP 8.4 added".
@@ -373,6 +373,8 @@ pub const FINAL_PROMOTED: Feature = feature("final promoted properties", 8, 5);
 pub const ATTRIBUTES_ON_CONSTANTS: Feature = feature("attributes on constants", 8, 5);
 pub const ASYMMETRIC_STATIC: Feature = feature("asymmetric visibility on static properties", 8, 5);
 pub const CLOSURES_IN_CONSTANTS: Feature = feature("closures in constant expressions", 8, 5);
+pub const CALLABLES_IN_CONSTANTS: Feature =
+    feature("first-class callables in constant expressions", 8, 5);
 
 /// Syntax in `file` newer than the versions it's for.
 #[salsa::tracked(returns(ref))]
@@ -816,6 +818,9 @@ impl SyntaxPass<'_> {
                         self.report(trimmed(&node), NEW_IN_INITIALIZERS);
                     }
                     CLOSURE_EXPR => self.report(head(&node), CLOSURES_IN_CONSTANTS),
+                    CALLABLE_PLACEHOLDER => {
+                        self.report(trimmed(&node), CALLABLES_IN_CONSTANTS);
+                    }
                     ANON_CLASS | ARROW_FN_EXPR => {}
                     _ => stack.extend(node.children()),
                 }

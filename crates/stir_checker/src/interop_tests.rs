@@ -83,3 +83,34 @@ fn a_new_property_is_a_dynamic_one_on_any_version() {
     assert_eq!(notes, [1, 0], "{diags:?}");
     assert!(diags[0].notes[0].contains("PHP 8.2"));
 }
+
+#[test]
+fn signatures_follow_the_target() {
+    let at = |major, minor| {
+        let db = RootDatabase::default();
+        let files = stir_stubs::stub_files()
+            .map(|s| {
+                SourceFile::new(
+                    &db,
+                    format!("stubs://{}", s.path).into(),
+                    s.text.to_owned(),
+                    FileOrigin::Stub,
+                )
+            })
+            .collect();
+        let settings = Settings {
+            php_version: stir_db::PhpVersions::exactly(stir_db::PhpVersion::new(major, minor)),
+            ..Settings::default()
+        };
+        let ws = Workspace::new(&db, files, settings);
+        let ctx = Ctx::new(&db, ws);
+        let found = ctx.function("curl_init").map(|_| sig(&ctx, "curl_init"));
+        let has_list = ctx.function("array_is_list").is_some();
+        (found, has_list)
+    };
+    let (old, old_has) = at(7, 4);
+    let (new, new_has) = at(8, 1);
+    assert!(!old.unwrap().contains("CurlHandle"));
+    assert!(new.unwrap().contains("CurlHandle"));
+    assert!(!old_has && new_has);
+}
