@@ -1,0 +1,14 @@
+=== action: Change to `$cache`
+=== fixes: staticProperty.notFound
+=== input
+<?php
+class A {
+    public static array $cache = [];
+    public function run(): array { return self::$cach‸; }
+}
+=== output
+<?php
+class A {
+    public static array $cache = [];
+    public function run(): array { return self::$cache; }
+}

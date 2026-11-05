@@ -1,0 +1,14 @@
+=== action: Change to `getName`
+=== fixes: method.notFound
+=== input
+<?php
+class A {
+    public function getName(): string { return ''; }
+    public function run(): string { return $this->getNme‸(); }
+}
+=== output
+<?php
+class A {
+    public function getName(): string { return ''; }
+    public function run(): string { return $this->getName(); }
+}

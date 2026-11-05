@@ -1,0 +1,8 @@
+=== action: Organize imports
+=== no-offer
+=== input
+<?php
+use App\A;
+use App\B;‸
+
+new A; new B;

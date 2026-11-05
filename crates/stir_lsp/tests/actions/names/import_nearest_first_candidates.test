@@ -1,0 +1,21 @@
+=== action: Import `App\Http\Thing`
+=== fixes: class.notFound
+=== file: /src/A.php
+<?php
+namespace Far\Away;
+class Thing {}
+=== file: /src/B.php
+<?php
+namespace App\Http;
+class Thing {}
+=== input
+<?php
+namespace App\Other;
+new Thi‸ng();
+=== output
+<?php
+namespace App\Other;
+
+use App\Http\Thing;
+
+new Thing();

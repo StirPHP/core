@@ -1,0 +1,9 @@
+=== action: Remove unused import `App\B`
+=== no-offer
+=== input
+<?php
+namespace X;
+use App\B‸;
+
+/** @return B */
+function f() { return null; }

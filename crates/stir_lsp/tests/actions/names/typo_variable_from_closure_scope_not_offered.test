@@ -1,0 +1,7 @@
+=== action: Change to `$total`
+=== no-offer
+=== input
+<?php
+function f(int $total): callable {
+    return function () { return $totla‸; };
+}

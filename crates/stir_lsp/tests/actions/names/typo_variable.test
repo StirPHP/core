@@ -1,0 +1,12 @@
+=== action: Change to `$total`
+=== fixes: variable.undefined
+=== input
+<?php
+function f(int $total): int {
+    return $totla‸;
+}
+=== output
+<?php
+function f(int $total): int {
+    return $total;
+}

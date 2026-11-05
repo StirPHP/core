@@ -1,0 +1,25 @@
+=== action: Organize imports
+=== input
+<?php
+namespace X {
+    use App\B;
+    use App\A;‸
+    new A; new B;
+}
+namespace Y {
+    use App\D;
+    use App\C;
+    new C; new D;
+}
+=== output
+<?php
+namespace X {
+    use App\A;
+    use App\B;
+    new A; new B;
+}
+namespace Y {
+    use App\C;
+    use App\D;
+    new C; new D;
+}

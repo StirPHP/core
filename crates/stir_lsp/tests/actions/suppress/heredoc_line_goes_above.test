@@ -1,0 +1,10 @@
+=== action: Ignore `variable.undefined` on this line
+=== fixes: variable.undefined
+=== input
+<?php
+function f(): string {
+    return <<<EOT
+    a {$nope‸}
+    EOT;
+}
+=== no-offer

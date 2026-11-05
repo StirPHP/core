@@ -1,0 +1,18 @@
+=== action: Organize imports
+=== crlf
+=== input
+<?php
+namespace X;
+
+use Zed\Z;
+use App\{A, B};‸
+
+new Z; new A; new B;
+=== output
+<?php
+namespace X;
+
+use App\{A, B};
+use Zed\Z;
+
+new Z; new A; new B;

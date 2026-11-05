@@ -1,0 +1,8 @@
+=== action: Change to `secret`
+=== no-offer
+=== file: /src/B.php
+<?php
+class B { private function secret(): void {} }
+=== input
+<?php
+function f(B $b): void { $b->secre‸(); }

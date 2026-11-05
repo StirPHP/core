@@ -13,6 +13,8 @@ use stir_syntax::{SyntaxKind::*, SyntaxNode, TextRange, TextSize};
 pub struct ImportEdit {
     pub at: TextSize,
     pub text: String,
+    /// The `use` line in `text`, for putting several in one place.
+    pub line: String,
 }
 
 /// What to write for a name, and the import that takes.
@@ -51,7 +53,7 @@ pub struct Imports<'a> {
 }
 
 /// PER-CS's order of the kinds of imports.
-fn kind_order(kind: UseKind) -> u8 {
+pub(crate) fn kind_order(kind: UseKind) -> u8 {
     match kind {
         UseKind::Class => 0,
         UseKind::Function => 1,
@@ -59,7 +61,7 @@ fn kind_order(kind: UseKind) -> u8 {
     }
 }
 
-fn use_kind(node: &SyntaxNode) -> UseKind {
+pub(crate) fn use_kind(node: &SyntaxNode) -> UseKind {
     let has = |kind| node.children_with_tokens().any(|e| e.kind() == kind);
     if has(FUNCTION_KW) {
         UseKind::Function
@@ -70,7 +72,7 @@ fn use_kind(node: &SyntaxNode) -> UseKind {
     }
 }
 
-fn sort_key(name: &str) -> String {
+pub(crate) fn sort_key(name: &str) -> String {
     // a shorter path sorts before what's below it
     name.trim_start_matches('\\')
         .to_ascii_lowercase()
@@ -373,12 +375,14 @@ impl<'a> Imports<'a> {
                 return Some(ImportEdit {
                     at: line_start(self.text, next.range.start()),
                     text: format!("{line}{nl}"),
+                    line,
                 });
             }
             let _ = first;
             return Some(ImportEdit {
                 at: line_end(self.text, last.range.end()),
                 text: format!("{nl}{line}"),
+                line,
             });
         }
         // the kinds are kept in order, with a blank line between them
@@ -388,12 +392,14 @@ impl<'a> Imports<'a> {
             return Some(ImportEdit {
                 at: line_end(self.text, before.range.end()),
                 text: format!("{nl}{nl}{line}"),
+                line,
             });
         }
         if let Some(after) = self.uses.iter().find(|u| kind_order(u.kind) > order) {
             return Some(ImportEdit {
                 at: line_start(self.text, after.range.start()),
                 text: format!("{line}{nl}{nl}"),
+                line,
             });
         }
         let at = line_end(self.text, self.anchor?);
@@ -401,6 +407,7 @@ impl<'a> Imports<'a> {
             return Some(ImportEdit {
                 at,
                 text: format!("{nl}{line}{nl}"),
+                line,
             });
         }
         let after = self.text[usize::from(at)..].trim_start_matches([' ', '\t']);
@@ -413,8 +420,30 @@ impl<'a> Imports<'a> {
         Some(ImportEdit {
             at,
             text: format!("{lead}{nl}{line}{trailer}"),
+            line,
         })
     }
+}
+
+/// `edits`, with those going in one place as one: a line each, in the order they're given.
+pub fn merged(edits: Vec<ImportEdit>) -> Vec<ImportEdit> {
+    let mut out: Vec<ImportEdit> = Vec::new();
+    for edit in edits {
+        match out.iter_mut().find(|e| e.at == edit.at) {
+            Some(first) => {
+                let nl = if first.text.contains("\r\n") {
+                    "\r\n"
+                } else {
+                    "\n"
+                };
+                let joined = format!("{}{nl}{}", first.line, edit.line);
+                first.text = first.text.replacen(&first.line, &joined, 1);
+                first.line = joined;
+            }
+            None => out.push(edit),
+        }
+    }
+    out
 }
 
 fn plain(text: String) -> NameRef {
@@ -429,14 +458,14 @@ fn same_namespace(fqn: &Fqn, namespace: &str) -> bool {
     fqn.namespace().eq_ignore_ascii_case(namespace)
 }
 
-fn line_start(text: &str, at: TextSize) -> TextSize {
+pub(crate) fn line_start(text: &str, at: TextSize) -> TextSize {
     let at = usize::from(at);
     let start = text[..at].rfind('\n').map_or(0, |i| i + 1);
     TextSize::from(start as u32)
 }
 
 /// The end of the line of `at`, before its line break.
-fn line_end(text: &str, at: TextSize) -> TextSize {
+pub(crate) fn line_end(text: &str, at: TextSize) -> TextSize {
     let at = usize::from(at);
     // the opening tag has the line break in it
     if at > 0 && text.as_bytes()[at - 1] == b'\n' {
@@ -452,7 +481,7 @@ fn line_end(text: &str, at: TextSize) -> TextSize {
     TextSize::from((at + end) as u32)
 }
 
-fn line_indent(text: &str, at: TextSize) -> String {
+pub(crate) fn line_indent(text: &str, at: TextSize) -> String {
     let start = usize::from(line_start(text, at));
     text[start..usize::from(at)]
         .chars()

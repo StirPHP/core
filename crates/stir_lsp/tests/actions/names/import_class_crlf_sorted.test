@@ -1,0 +1,26 @@
+=== action: Import `App\Models\User`
+=== crlf
+=== fixes: class.notFound
+=== file: /src/User.php
+<?php
+namespace App\Models;
+class User {}
+=== input
+<?php
+
+namespace App\Http;
+
+use App\Alpha;
+use App\Zeta;
+
+new Us‸er();
+=== output
+<?php
+
+namespace App\Http;
+
+use App\Alpha;
+use App\Models\User;
+use App\Zeta;
+
+new User();

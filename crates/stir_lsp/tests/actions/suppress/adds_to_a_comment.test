@@ -1,0 +1,8 @@
+=== action: Ignore `function.notFound` on this line
+=== fixes: function.notFound
+=== input
+<?php
+new Nope(nope‸()); // @phpstan-ignore class.notFound (because)
+=== output
+<?php
+new Nope(nope()); // @phpstan-ignore class.notFound, function.notFound (because)

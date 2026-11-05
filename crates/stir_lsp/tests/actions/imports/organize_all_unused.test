@@ -1,0 +1,13 @@
+=== action: Organize imports
+=== input
+<?php
+namespace X;
+
+use App\A;‸
+
+echo 1;
+=== output
+<?php
+namespace X;
+
+echo 1;

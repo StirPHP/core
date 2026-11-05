@@ -1,0 +1,17 @@
+=== action: Import function `App\helper`
+=== fixes: function.notFound
+=== file: /src/f.php
+<?php
+namespace App;
+function helper(): int { return 1; }
+=== input
+<?php
+namespace Other;
+echo hel‸per();
+=== output
+<?php
+namespace Other;
+
+use function App\helper;
+
+echo helper();

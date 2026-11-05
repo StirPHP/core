@@ -1,0 +1,26 @@
+=== action: Organize imports
+=== input
+<?php
+namespace X;
+
+use function App\f;
+use App\Zeta; // why
+// about Alpha
+use App\Alpha;
+use App\Unused;
+use const App\K;‸
+
+new Zeta; new Alpha; f(); echo K;
+=== output
+<?php
+namespace X;
+
+// about Alpha
+use App\Alpha;
+use App\Zeta; // why
+
+use function App\f;
+
+use const App\K;
+
+new Zeta; new Alpha; f(); echo K;

@@ -1,0 +1,14 @@
+=== action: Change to `count`
+=== fixes: property.notFound
+=== input
+<?php
+class A {
+    public int $count = 0;
+    public function run(): int { return $this->coun‸; }
+}
+=== output
+<?php
+class A {
+    public int $count = 0;
+    public function run(): int { return $this->count; }
+}

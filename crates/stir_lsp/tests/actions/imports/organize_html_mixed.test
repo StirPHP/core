@@ -1,0 +1,15 @@
+=== action: Organize imports
+=== input
+<html>
+<?php
+use App\B;
+use App\A;‸
+?>
+<b><?= A::x() . B::y() ?></b>
+=== output
+<html>
+<?php
+use App\A;
+use App\B;
+?>
+<b><?= A::x() . B::y() ?></b>

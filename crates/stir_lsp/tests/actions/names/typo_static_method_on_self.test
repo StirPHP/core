@@ -1,0 +1,14 @@
+=== action: Change to `create`
+=== fixes: staticMethod.notFound
+=== input
+<?php
+class A {
+    public static function create(): void {}
+    public function run(): void { self::crea‸e(); }
+}
+=== output
+<?php
+class A {
+    public static function create(): void {}
+    public function run(): void { self::create(); }
+}

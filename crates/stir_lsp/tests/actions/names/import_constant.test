@@ -1,0 +1,17 @@
+=== action: Import constant `App\LIMIT`
+=== fixes: constant.notFound
+=== file: /src/f.php
+<?php
+namespace App;
+const LIMIT = 1;
+=== input
+<?php
+namespace Other;
+echo LIM‸IT;
+=== output
+<?php
+namespace Other;
+
+use const App\LIMIT;
+
+echo LIMIT;

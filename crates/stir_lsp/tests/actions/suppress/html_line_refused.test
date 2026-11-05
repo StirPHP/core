@@ -1,0 +1,4 @@
+=== action: Ignore `function.notFound` on this line
+=== no-offer
+=== input
+<b><?= nope‸() ?></b>

@@ -27,6 +27,7 @@ use crate::convert::{Encoding, LineMap};
 use crate::trust::{self, TrustStore};
 use crate::{complete, hierarchy, hints, hover, nav, symbols, tokens};
 
+mod actions;
 mod phpstan;
 
 /// Delay between an edit and the diagnostics run it triggers.
@@ -254,8 +255,12 @@ fn lsp_diagnostic(
         source: Some(if d.from_phpstan { "phpstan" } else { "stirphp" }.into()),
         message,
         related_information: related,
-        tags: stir_checker::deprecations::is_deprecation(&d.code)
-            .then(|| vec![DiagnosticTag::DEPRECATED]),
+        tags: if d.code == stir_checker::codes::UNUSED_IMPORT {
+            Some(vec![DiagnosticTag::UNNECESSARY])
+        } else {
+            stir_checker::deprecations::is_deprecation(&d.code)
+                .then(|| vec![DiagnosticTag::DEPRECATED])
+        },
         ..Default::default()
     }
 }
@@ -284,6 +289,7 @@ pub struct Server {
     notices: Mutex<Vec<String>>,
     rules: RulesTrust,
     phpstan: phpstan::Phpstan,
+    action_support: Mutex<actions::ActionSupport>,
 }
 
 /// What it takes to decide whether a workspace's scripts run. See [`trust`].
@@ -351,6 +357,7 @@ impl Server {
             notices: Mutex::new(Vec::new()),
             rules,
             phpstan,
+            action_support: Mutex::new(actions::ActionSupport::default()),
         };
         tokio::spawn(diagnostics_loop(
             server.client.clone(),
@@ -762,6 +769,7 @@ async fn diagnostics_loop(
                                     .map(|d| d.with_severity(Severity::Hint)),
                             );
                         }
+                        diags.extend(crate::actions::unused_import_hints(&db, f));
                         let theirs = from_phpstan(&path, f.text(&db), &diags);
                         diags.extend(theirs);
                         let lsp = to_lsp(&path, f.text(&db), &diags);
@@ -1015,6 +1023,7 @@ impl LanguageServer for Server {
             .as_ref()
             .and_then(|g| g.position_encodings.as_ref())
             .is_some_and(|e| e.contains(&PositionEncodingKind::UTF8));
+        *self.action_support.lock().unwrap() = actions::ActionSupport::read(&params);
         *self.encoding.lock().unwrap() = if utf8 {
             Encoding::Utf8
         } else {
@@ -1134,6 +1143,19 @@ impl LanguageServer for Server {
                 selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
                 document_formatting_provider: Some(OneOf::Left(true)),
                 document_range_formatting_provider: Some(OneOf::Left(true)),
+                code_action_provider: Some(CodeActionProviderCapability::Options(
+                    CodeActionOptions {
+                        code_action_kinds: Some(
+                            actions::KINDS.iter().map(|k| CodeActionKind::new(k)).collect(),
+                        ),
+                        resolve_provider: Some(true),
+                        ..Default::default()
+                    },
+                )),
+                execute_command_provider: Some(ExecuteCommandOptions {
+                    commands: vec![actions::ADD_PARAMETER_COMMAND.to_owned()],
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
         })
@@ -1740,6 +1762,18 @@ impl LanguageServer for Server {
             },
         )
         .await
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        self.actions(params).await
+    }
+
+    async fn code_action_resolve(&self, action: CodeAction) -> Result<CodeAction> {
+        self.resolve_action(action).await
+    }
+
+    async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<LSPAny>> {
+        self.run_command(params).await
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {

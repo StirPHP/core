@@ -1,0 +1,14 @@
+=== action: Change to `Controller`
+=== fixes: class.notFound
+=== file: /src/C.php
+<?php
+namespace App;
+class Controller {}
+=== input
+<?php
+namespace App;
+new Contorl‸ler();
+=== output
+<?php
+namespace App;
+new Controller();

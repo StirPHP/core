@@ -1,0 +1,13 @@
+=== action: Remove unused import `App\B`
+=== input
+<?php
+namespace X;
+use App\A, App\B‸, App\C;
+
+new A(); new C();
+=== output
+<?php
+namespace X;
+use App\A, App\C;
+
+new A(); new C();

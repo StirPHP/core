@@ -1,0 +1,8 @@
+=== action: Remove unused import `App\Bar`
+=== no-offer
+=== input
+<?php
+namespace X;
+use App\Bar‸;
+
+new bar();

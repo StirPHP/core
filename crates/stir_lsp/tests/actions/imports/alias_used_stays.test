@@ -1,0 +1,8 @@
+=== action: Remove unused import `App\Bar as Baz`
+=== no-offer
+=== input
+<?php
+namespace X;
+use App\Bar as Baz‸;
+
+Baz::run();

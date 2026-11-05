@@ -4,6 +4,7 @@
 //! `nav`, `complete`, ...), testable without a client; [`server`] wires them
 //! to the Language Server Protocol.
 
+pub mod actions;
 pub mod complete;
 pub mod convert;
 pub mod hierarchy;
