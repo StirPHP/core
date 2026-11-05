@@ -492,6 +492,15 @@ Every edit is checked to leave each file it touches parsing, or it isn't made. E
 version of each open file when the editor can take that, and the file's line endings and indentation. Nothing is offered in
 a file that has syntax errors.
 
+Measured on Laravel's framework, Symfony and PHPStan's source, in memory, at diagnostics and a fixed sample of places and
+selections in 400 files of each (`crates/stir_lsp/tests/actions_corpus.rs`): about 5,000 actions applied, every result
+parsed, and about 25 left a new error in the file, which were all the checker seeing the moved code differently rather than
+the code doing something else: what a condition had narrowed being lost in an extracted method or variable, or a typo's
+correction being a method with another signature. Working out what's offered took 0.1 ms at the median and 15 ms at the
+95th percentile, extracting a method 3 to 6 ms (under 60 ms at the 95th), and a change of signature, which looks at the
+whole project, 40 to 400 ms once the project's been checked. Most of the changes of signature tried there were refused,
+because a call of a method of that name was on something whose class isn't known, or a callable named it.
+
 Not offered: adding `declare(strict_types=1)`, which isn't reported and changes what the code does; moving a class to the
 file PSR-4 says, which would mean creating and renaming files, so it's left out; adding to a baseline; extracting from a
 closure; and inlining methods.
