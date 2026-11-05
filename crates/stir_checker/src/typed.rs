@@ -43,8 +43,6 @@ pub enum MemberKind {
 pub struct TypedFile {
     /// Type of every checked expression, by its range.
     pub types: FxHashMap<TextRange, Ty>,
-    /// Function calls and the fully-qualified function they call.
-    pub function_calls: FxHashMap<TextRange, SmolStr>,
     /// Resolved names, by the range of the name.
     pub defs: FxHashMap<TextRange, Def>,
     /// Local bindings by declaring-name range: declared type and kind.
@@ -62,7 +60,6 @@ pub fn typed_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> Arc<TypedFile
     checker.check_root(&root);
     Arc::new(TypedFile {
         types: checker.types,
-        function_calls: checker.function_calls,
         defs: checker.defs,
         locals: checker.locals,
         diags: checker.diags,

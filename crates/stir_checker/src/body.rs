@@ -43,7 +43,6 @@ pub struct Local {
     /// The declared type (narrowing never goes beyond it).
     pub declared: Ty,
     pub kind: LocalKind,
-    #[allow(dead_code)]
     pub range: TextRange,
 }
 
@@ -81,8 +80,6 @@ pub struct Checker<'a, 'db> {
     in_ctor: bool,
     /// Expression types.
     pub types: FxHashMap<TextRange, Ty>,
-    /// Function-call nodes and the fully-qualified function they call.
-    pub function_calls: FxHashMap<TextRange, SmolStr>,
     /// What names resolve to, by the range of the name (for the language server).
     pub defs: FxHashMap<TextRange, Def>,
     /// Local bindings by declaring-name range: declared type and kind.
@@ -210,7 +207,6 @@ impl<'a, 'db> Checker<'a, 'db> {
             lower_cx: LowerCx::default(),
             in_ctor: false,
             types: FxHashMap::default(),
-            function_calls: FxHashMap::default(),
             defs: FxHashMap::default(),
             locals: FxHashMap::default(),
         }
@@ -2059,7 +2055,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             Ty::union([int, float])
         } else if is_int(l) && is_int(r) {
             match op {
-                // as in PHP, `/` gives a float unless it divides evenly (`Int.div()` truncates)
+                // `/` gives a float unless it divides evenly
                 SLASH => Ty::union([int, float]),
                 POW => Ty::union([int, float]),
                 _ => int,
@@ -2941,10 +2937,6 @@ impl<'a, 'db> Checker<'a, 'db> {
                 return Ty::error();
             };
             self.def(callee.text_range(), Def::Function(loc));
-            self.function_calls.insert(
-                node.text_range(),
-                SmolStr::new(self.ctx.function_def(loc).name.as_str()),
-            );
             // several declarations: overloaded stubs, or a PHP conditional declaration
             let overloads = self.ctx.function_overloads(fqn.as_str());
             if overloads.len() > 1 {
@@ -3894,7 +3886,6 @@ fn resolve_self(ret: &Ty, recv: &Ty) -> Ty {
     })
 }
 
-/// After assigning `value` to a variable declared `declared`, its current type.
 /// The value of a string literal without escapes or interpolation.
 fn unquoted_literal(node: &SyntaxNode) -> Option<String> {
     let text = text_of(node);
@@ -4013,6 +4004,7 @@ fn is_superglobal(name: &str) -> bool {
     )
 }
 
+/// After assigning `value` to a variable declared `declared`, its current type.
 fn narrow_assigned(declared: &Ty, value: &Ty) -> Ty {
     if value.is_error() || declared.is_error() {
         return declared.clone();

@@ -303,7 +303,7 @@ pub fn references(
     out
 }
 
-/// The innermost function-like node (not a lambda) around `node`.
+/// The innermost function-like node around `node`.
 pub fn enclosing_function(node: &SyntaxNode) -> Option<SyntaxNode> {
     node.ancestors().find(|n| {
         matches!(
