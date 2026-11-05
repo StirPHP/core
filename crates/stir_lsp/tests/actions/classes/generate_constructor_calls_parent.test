@@ -1,0 +1,19 @@
+=== action: Generate a constructor from the properties
+=== input
+<?php
+class P { public function __construct(int $z = 0) {} }
+class A‸ extends P {
+    private int $a;
+}
+=== output
+<?php
+class P { public function __construct(int $z = 0) {} }
+class A extends P {
+    private int $a;
+
+    public function __construct(int $a)
+    {
+        parent::__construct();
+        $this->a = $a;
+    }
+}

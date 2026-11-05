@@ -1,0 +1,8 @@
+=== action: Extract to a variable
+=== refused: around a loop
+=== input
+<?php
+function f(): void {
+    while (⟦g()⟧) { echo 1; }
+}
+function g(): bool { return false; }

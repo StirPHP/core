@@ -1,0 +1,10 @@
+=== action: Inline `$x`
+=== no-offer
+=== input
+<?php
+function f(): int {
+    $x‸ = g();
+    echo 'first';
+    return $x;
+}
+function g(): int { return 1; }

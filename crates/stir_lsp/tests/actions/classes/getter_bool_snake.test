@@ -1,0 +1,16 @@
+=== action: Generate getter `isDoneYet()`
+=== input
+<?php
+class A {
+    private bool $done_yet‸ = false;
+}
+=== output
+<?php
+class A {
+    private bool $done_yet = false;
+
+    public function isDoneYet(): bool
+    {
+        return $this->done_yet;
+    }
+}

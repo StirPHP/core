@@ -1,0 +1,23 @@
+=== action: Import `App\Thing`
+=== file: /src/T.php
+<?php
+namespace App;
+class Thing { public static function a(): int { return 1; } }
+=== input
+<?php
+namespace Other;
+
+function f(\App\Thing‸ $t): \App\Thing {
+    echo \App\Thing::a();
+    return $t;
+}
+=== output
+<?php
+namespace Other;
+
+use App\Thing;
+
+function f(Thing $t): Thing {
+    echo Thing::a();
+    return $t;
+}

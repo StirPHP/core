@@ -1,0 +1,18 @@
+=== action: Extract to a variable
+=== input
+<?php
+function f(): callable {
+    return function () {
+        return strlen(⟦g()⟧);
+    };
+}
+function g(): string { return 'a'; }
+=== output
+<?php
+function f(): callable {
+    return function () {
+        $g = g();
+        return strlen($g);
+    };
+}
+function g(): string { return 'a'; }

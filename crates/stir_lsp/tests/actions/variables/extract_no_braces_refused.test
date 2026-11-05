@@ -1,0 +1,8 @@
+=== action: Extract to a variable
+=== refused: can't be put
+=== input
+<?php
+function f(bool $a): void {
+    if ($a) echo ⟦g()⟧;
+}
+function g(): string { return 'a'; }

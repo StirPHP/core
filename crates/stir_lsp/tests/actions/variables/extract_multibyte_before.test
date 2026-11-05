@@ -1,0 +1,12 @@
+=== action: Extract to a variable
+=== input
+<?php
+function f(string $é): int {
+    return "日本語𝄞" . strlen(⟦$é . 'x'⟧);
+}
+=== output
+<?php
+function f(string $é): int {
+    $value = $é . 'x';
+    return "日本語𝄞" . strlen($value);
+}

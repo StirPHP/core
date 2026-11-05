@@ -1,0 +1,12 @@
+=== action: Inline `$x`
+=== input
+<?php
+function f(): int {
+    $x‸ = 'abc';
+    return strlen($x);
+}
+=== output
+<?php
+function f(): int {
+    return strlen('abc');
+}

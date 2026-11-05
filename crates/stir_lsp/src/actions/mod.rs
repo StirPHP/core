@@ -356,6 +356,7 @@ pub fn offers<'c>(cx: &'c Cx<'c>) -> Vec<Offer<'c>> {
         fix_types::offers(cx, &mut out);
         fix_members::offers(cx, &mut out);
         organize::remove_offers(cx, &mut out);
+        variables::remove_unused_offers(cx, &mut out);
         suppress::offers(cx, &mut out);
     }
     if cx.wants(Kind::OrganizeImports) {

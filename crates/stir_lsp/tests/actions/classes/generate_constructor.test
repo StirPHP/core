@@ -1,0 +1,27 @@
+=== action: Generate a constructor from the properties
+=== input
+<?php
+class A‸ {
+    private int $a;
+    private ?string $b;
+    private bool $c = true;
+    public static int $d;
+
+    public function run(): void {}
+}
+=== output
+<?php
+class A {
+    private int $a;
+    private ?string $b;
+    private bool $c = true;
+    public static int $d;
+
+    public function __construct(int $a, ?string $b)
+    {
+        $this->a = $a;
+        $this->b = $b;
+    }
+
+    public function run(): void {}
+}

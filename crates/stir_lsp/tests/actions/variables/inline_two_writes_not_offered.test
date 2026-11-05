@@ -1,0 +1,9 @@
+=== action: Inline `$x`
+=== no-offer
+=== input
+<?php
+function f(): int {
+    $x‸ = 1;
+    $x = 2;
+    return $x;
+}

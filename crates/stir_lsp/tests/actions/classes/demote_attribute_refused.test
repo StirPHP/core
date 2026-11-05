@@ -1,0 +1,7 @@
+=== action: Convert promoted parameters to properties
+=== no-offer
+=== input
+<?php
+class A {
+    public function __construct‸(#[Foo] private int $a) {}
+}

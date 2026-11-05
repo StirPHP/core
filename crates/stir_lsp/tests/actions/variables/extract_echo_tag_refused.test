@@ -1,0 +1,4 @@
+=== action: Extract to a variable
+=== refused: can't be put
+=== input
+<b><?= ⟦strlen('a')⟧ ?></b>

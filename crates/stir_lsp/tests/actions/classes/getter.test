@@ -1,0 +1,16 @@
+=== action: Generate getter `getName()`
+=== input
+<?php
+class A {
+    private string $na‸me = '';
+}
+=== output
+<?php
+class A {
+    private string $name = '';
+
+    public function getName(): string
+    {
+        return $this->name;
+    }
+}

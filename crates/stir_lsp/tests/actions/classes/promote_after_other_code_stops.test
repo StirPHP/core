@@ -1,0 +1,13 @@
+=== action: Promote the property to the constructor
+=== no-offer
+=== input
+<?php
+class A {
+    private int $a;
+
+    public function __construct‸(int $a)
+    {
+        echo 'first';
+        $this->a = $a;
+    }
+}

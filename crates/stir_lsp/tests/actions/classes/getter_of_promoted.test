@@ -1,0 +1,16 @@
+=== action: Generate getter `getA()`
+=== input
+<?php
+class A {
+    public function __construct(private int $a‸) {}
+}
+=== output
+<?php
+class A {
+    public function __construct(private int $a) {}
+
+    public function getA(): int
+    {
+        return $this->a;
+    }
+}

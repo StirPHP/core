@@ -1,0 +1,10 @@
+=== action: Convert to an early return
+=== no-offer
+=== input
+<?php
+function f(bool $a): void {
+    i‸f ($a) {
+        echo 1;
+    }
+    echo 2;
+}

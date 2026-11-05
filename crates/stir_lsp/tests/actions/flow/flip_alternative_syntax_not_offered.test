@@ -1,0 +1,7 @@
+=== action: Flip `if` and `else`
+=== no-offer
+=== input
+<?php
+function f(int $a): void {
+    i‸f ($a): echo 1; else: echo 3; endif;
+}

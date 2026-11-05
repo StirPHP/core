@@ -1,0 +1,13 @@
+=== action: Convert `switch` to `match`
+=== php: 8.0
+=== no-offer
+=== input
+<?php
+function f(int $a): void {
+    swi‸tch ($a) {
+        case 1:
+            echo 1;
+        default:
+            echo 2;
+    }
+}

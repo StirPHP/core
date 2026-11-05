@@ -1,0 +1,25 @@
+=== action: Generate getter and setter
+=== input
+<?php
+class A {
+    /** @var list<int> */
+    private array $it‸ems = [];
+}
+=== output
+<?php
+class A {
+    /** @var list<int> */
+    private array $items = [];
+
+    /** @return list<int> */
+    public function getItems(): array
+    {
+        return $this->items;
+    }
+
+    /** @param list<int> $items */
+    public function setItems(array $items): void
+    {
+        $this->items = $items;
+    }
+}

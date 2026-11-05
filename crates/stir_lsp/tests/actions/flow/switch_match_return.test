@@ -1,0 +1,24 @@
+=== action: Convert `switch` to `match`
+=== php: 8.0
+=== input
+<?php
+function f(int $a): string {
+    swi‸tch ($a) {
+        case 1:
+        case 2:
+            return 'low';
+        case 3:
+            throw new Exception('three');
+        default:
+            return 'high';
+    }
+}
+=== output
+<?php
+function f(int $a): string {
+    return match ($a) {
+        1, 2 => 'low',
+        3 => throw new Exception('three'),
+        default => 'high',
+    };
+}

@@ -1,0 +1,12 @@
+=== action: Extract to a variable
+=== input
+<?php
+function f(int $value): int {
+    return $value + ⟦(1 + 2)⟧;
+}
+=== output
+<?php
+function f(int $value): int {
+    $value2 = (1 + 2);
+    return $value + $value2;
+}

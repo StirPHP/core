@@ -1,0 +1,19 @@
+=== action: Flip `if` and `else`
+=== input
+<?php
+function f(int $a): void {
+    i‸f ($a === 1) {
+        echo 'one';
+    } else {
+        echo 'other';
+    }
+}
+=== output
+<?php
+function f(int $a): void {
+    if ($a !== 1) {
+        echo 'other';
+    } else {
+        echo 'one';
+    }
+}

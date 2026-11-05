@@ -1,0 +1,8 @@
+=== action: Extract to a variable
+=== refused: effects
+=== input
+<?php
+function f(): int {
+    return g() + ⟦g()⟧;
+}
+function g(): int { return 1; }

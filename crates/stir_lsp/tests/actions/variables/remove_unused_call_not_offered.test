@@ -1,0 +1,8 @@
+=== action: Remove unused variable `$x`
+=== no-offer
+=== input
+<?php
+function f(): void {
+    $x‸ = g();
+}
+function g(): int { return 1; }

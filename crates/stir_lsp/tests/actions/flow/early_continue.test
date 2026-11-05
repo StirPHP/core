@@ -1,0 +1,22 @@
+=== action: Convert to an early continue
+=== crlf
+=== input
+<?php
+function f(array $a): void {
+    foreach ($a as $x) {
+        i‸f ($x === 1) {
+            echo $x;
+        }
+    }
+}
+=== output
+<?php
+function f(array $a): void {
+    foreach ($a as $x) {
+        if ($x !== 1) {
+            continue;
+        }
+
+        echo $x;
+    }
+}

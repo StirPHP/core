@@ -1,0 +1,16 @@
+=== action: Generate setter `setCount()`
+=== input
+<?php
+class A {
+    private static int $cou‸nt = 0;
+}
+=== output
+<?php
+class A {
+    private static int $count = 0;
+
+    public static function setCount(int $count): void
+    {
+        self::$count = $count;
+    }
+}

@@ -1,0 +1,9 @@
+=== action: Inline `$x`
+=== no-offer
+=== input
+<?php
+function f(): array {
+    $x‸ = [1];
+    sort($x);
+    return [];
+}

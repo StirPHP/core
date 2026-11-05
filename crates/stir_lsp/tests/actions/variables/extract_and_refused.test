@@ -1,0 +1,8 @@
+=== action: Extract to a variable
+=== refused: some paths
+=== input
+<?php
+function f(bool $a): bool {
+    return $a && ⟦g()⟧;
+}
+function g(): bool { return true; }

@@ -1,0 +1,12 @@
+=== action: Remove unused variable `$x`
+=== input
+<?php
+function f(): void {
+    $x‸ = 1;
+    echo 2;
+}
+=== output
+<?php
+function f(): void {
+    echo 2;
+}

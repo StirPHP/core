@@ -1,0 +1,8 @@
+=== action: Extract to a variable
+=== refused: runs later
+=== input
+<?php
+function f(): callable {
+    return fn() => ⟦g()⟧;
+}
+function g(): int { return 1; }

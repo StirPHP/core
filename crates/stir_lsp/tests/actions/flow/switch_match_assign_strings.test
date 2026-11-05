@@ -1,0 +1,23 @@
+=== action: Convert `switch` to `match`
+=== php: 8.0
+=== input
+<?php
+function f(string $a): int {
+    swi‸tch ($a) {
+        case 'x':
+            $r = 1;
+            break;
+        default:
+            $r = 2;
+    }
+    return $r;
+}
+=== output
+<?php
+function f(string $a): int {
+    $r = match ($a) {
+        'x' => 1,
+        default => 2,
+    };
+    return $r;
+}

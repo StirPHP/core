@@ -1,0 +1,8 @@
+=== action: Generate setter `setA()`
+=== no-offer
+=== php: 8.1
+=== input
+<?php
+class A {
+    public function __construct(private readonly int $a‸) {}
+}

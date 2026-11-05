@@ -1,0 +1,8 @@
+=== action: Generate getter `getA()`
+=== no-offer
+=== input
+<?php
+class A {
+    private int $a‸ = 1;
+    public function getA(): int { return $this->a; }
+}

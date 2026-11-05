@@ -1,0 +1,8 @@
+=== action: Generate a constructor from the properties
+=== no-offer
+=== input
+<?php
+class P { public function __construct(int $z) {} }
+class A‸ extends P {
+    private int $a;
+}

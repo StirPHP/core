@@ -318,7 +318,7 @@ fn with_a_comma(
 }
 
 /// `range`, and its line if nothing else is on it.
-fn whole_lines(cx: &Cx<'_>, range: TextRange) -> TextRange {
+pub(super) fn whole_lines(cx: &Cx<'_>, range: TextRange) -> TextRange {
     let start = imports::line_start(cx.text, range.start());
     let before = &cx.text[usize::from(start)..usize::from(range.start())];
     let end_of_line = imports::line_end(cx.text, range.end());

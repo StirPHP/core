@@ -1,0 +1,17 @@
+=== action: Extract to a variable
+=== crlf
+=== input
+<?php
+function f(): int {
+    return strlen(⟦<<<EOT
+    text
+    EOT⟧);
+}
+=== output
+<?php
+function f(): int {
+    $value = <<<EOT
+    text
+    EOT;
+    return strlen($value);
+}

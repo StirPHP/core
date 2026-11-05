@@ -1,0 +1,18 @@
+=== action: Extract to a variable
+=== input
+<?php
+class A {
+    public function getName(): string { return ''; }
+    public function f(): void {
+        echo strlen(⟦$this->getName()⟧);
+    }
+}
+=== output
+<?php
+class A {
+    public function getName(): string { return ''; }
+    public function f(): void {
+        $name = $this->getName();
+        echo strlen($name);
+    }
+}

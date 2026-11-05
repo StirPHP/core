@@ -1,0 +1,10 @@
+=== action: Extract to a variable
+=== refused: this place
+=== input
+<?php
+class A {
+    public array $items = [];
+    public function f(): void {
+        sort(⟦$this->items⟧);
+    }
+}

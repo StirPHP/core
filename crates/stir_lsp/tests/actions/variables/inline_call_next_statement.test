@@ -1,0 +1,14 @@
+=== action: Inline `$x`
+=== input
+<?php
+function f(): int {
+    $x‸ = g() + 1;
+    return $x * 2;
+}
+function g(): int { return 1; }
+=== output
+<?php
+function f(): int {
+    return (g() + 1) * 2;
+}
+function g(): int { return 1; }

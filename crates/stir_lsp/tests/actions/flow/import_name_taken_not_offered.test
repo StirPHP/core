@@ -1,0 +1,13 @@
+=== action: Import `App\Thing`
+=== no-offer
+=== file: /src/T.php
+<?php
+namespace App;
+class Thing {}
+=== input
+<?php
+namespace Other;
+
+use Else\Thing;
+
+function f(\App\Thing‸ $t, Thing $u): void {}
