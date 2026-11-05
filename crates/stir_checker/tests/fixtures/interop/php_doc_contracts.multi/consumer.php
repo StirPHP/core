@@ -1,0 +1,35 @@
+<?php declare(strict_types=1);
+
+function php_asserted(Failure|string $v): string {
+    if (is_failure($v)) {
+        return $v->message();
+    }
+    return $v;
+}
+
+function php_asserted_false(Failure|string $v): string {
+    if (is_success($v)) {
+        return $v;
+    }
+    return $v->message();
+}
+
+function php_not_narrowed_without_the_call(Failure|string $v): string {
+    return $v; // error: SPHP0005
+}
+
+function php_conditional_return(string $a): int {
+    return positive($a);
+}
+
+function php_shapes(): void {
+    // KNOWN FALSE ALARM: array literals should be checked against the shape's keys.
+    register_thing(["apply" => "strlen", "name" => "a"]); // error: SPHP0005
+    register_thing(["name" => "a"]); // error: SPHP0005
+    register_thing(["name" => 1]); // error: SPHP0005
+    register_thing(["apply" => "strlen"]); // error: SPHP0005
+}
+
+function php_callable_strings(): void {
+    takes_callable("strlen");
+}
