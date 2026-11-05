@@ -247,6 +247,187 @@ fn project_with_errors() -> TempDir {
     tmp
 }
 
+const BASELINE: &str = "parameters:
+\tignoreErrors:
+\t\t-
+\t\t\tidentifier: function.notFound
+\t\t\tcount: 1
+\t\t\tpath: src/a.php
+\t\t-
+\t\t\tidentifier: function.notFound
+\t\t\tcount: 1
+\t\t\tpath: src/b.php
+\t\t-
+\t\t\tidentifier: return.type
+\t\t\tcount: 2
+\t\t\tpath: src/a.php
+";
+
+#[test]
+fn a_baseline_hides_what_was_there_and_only_that() {
+    let tmp = project_with_errors();
+    let root = tmp.path();
+    sphp()
+        .current_dir(root)
+        .arg("check")
+        .assert()
+        .code(1)
+        .stdout(contains("4 errors"));
+
+    sphp()
+        .current_dir(root)
+        .args(["check", "--generate-baseline"])
+        .assert()
+        .success()
+        .stdout(contains("Baseline generated with 4 errors"))
+        .stdout(contains("stirphp.neon"));
+    let baseline = root.join("stirphp-baseline.neon");
+    assert_eq!(fs::read_to_string(&baseline).unwrap(), BASELINE);
+    assert!(
+        fs::read_to_string(root.join("stirphp.neon"))
+            .unwrap()
+            .contains("baseline: stirphp-baseline.neon")
+    );
+
+    // nothing's reported, or said about the baseline
+    sphp()
+        .current_dir(root)
+        .arg("check")
+        .assert()
+        .success()
+        .stdout(contains("No problems found"))
+        .stderr(contains("baseline").not());
+
+    // generating again changes nothing, whatever the baseline already hides
+    let config = fs::read_to_string(root.join("stirphp.neon")).unwrap();
+    sphp()
+        .current_dir(root)
+        .args(["check", "--generate-baseline"])
+        .assert()
+        .success();
+    assert_eq!(fs::read_to_string(&baseline).unwrap(), BASELINE);
+    assert_eq!(
+        fs::read_to_string(root.join("stirphp.neon")).unwrap(),
+        config
+    );
+
+    // a new error of an identifier that's in there shows once the count is exceeded
+    write(
+        &root.join("src/a.php"),
+        "<?php\nfunction one(): int { return 'a'; }\nfunction two(): int { return 'b'; }\nfunction three(): int { return 'c'; }\necho missing_one();\n",
+    );
+    sphp()
+        .current_dir(root)
+        .arg("check")
+        .assert()
+        .code(1)
+        .stdout(contains("return.type"))
+        .stdout(contains("1 error, 0 warnings"));
+
+    // fewer errors than it says: a warning, not an error
+    write(
+        &root.join("src/a.php"),
+        "<?php\nfunction one(): int { return 'a'; }\necho missing_one();\n",
+    );
+    fs::remove_file(root.join("src/b.php")).unwrap();
+    sphp()
+        .current_dir(root)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(contains("warning: 2 entries of the baseline"))
+        .stderr(contains("return.type in src/a.php: expected 2, found 1"))
+        .stderr(contains(
+            "function.notFound in src/b.php: expected 1, found 0",
+        ));
+}
+
+#[test]
+fn a_baseline_at_a_path_of_its_own() {
+    let tmp = project_with_errors();
+    let root = tmp.path();
+    sphp()
+        .current_dir(root)
+        .args(["check", "--generate-baseline", "conf/base.neon"])
+        .assert()
+        .success();
+    let text = fs::read_to_string(root.join("conf/base.neon")).unwrap();
+    assert!(text.contains("path: ../src/a.php"), "{text}");
+    // the configuration's in the project folder, and so is this
+    sphp().current_dir(root).arg("check").assert().success();
+
+    // outside what the configuration's about, it's not touched
+    let elsewhere = TempDir::new().unwrap();
+    let tmp = project_with_errors();
+    let target = elsewhere.path().join("b.neon");
+    sphp()
+        .current_dir(tmp.path())
+        .args(["check", "--generate-baseline", target.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(contains("To use it"));
+    assert!(!tmp.path().join("stirphp.neon").exists());
+    assert!(target.is_file());
+}
+
+#[test]
+fn a_baseline_through_a_config_elsewhere() {
+    let tmp = project_with_errors();
+    let conf = TempDir::new().unwrap();
+    let config = conf.path().join("my.neon");
+    write(&config, "parameters:\n    level: 5\n");
+    let args = ["check", "-c", config.to_str().unwrap()];
+    sphp()
+        .current_dir(tmp.path())
+        .args(args)
+        .arg("--generate-baseline")
+        .assert()
+        .success();
+    assert!(conf.path().join("stirphp-baseline.neon").is_file());
+    assert!(!tmp.path().join("stirphp-baseline.neon").exists());
+    sphp().current_dir(tmp.path()).args(args).assert().success();
+}
+
+#[test]
+fn syntax_errors_stay_out_of_baselines() {
+    let tmp = project_with_errors();
+    let root = tmp.path();
+    write(&root.join("src/bad.php"), "<?php\n$x = ;\n");
+    sphp()
+        .current_dir(root)
+        .args(["check", "--generate-baseline"])
+        .assert()
+        .code(1)
+        .stdout(contains("phpstan.parse"))
+        .stdout(contains("1 error can't go in a baseline"));
+    let text = fs::read_to_string(root.join("stirphp-baseline.neon")).unwrap();
+    assert!(!text.contains("phpstan.parse"), "{text}");
+    sphp()
+        .current_dir(root)
+        .arg("check")
+        .assert()
+        .code(1)
+        .stdout(contains("1 error, 0 warnings"));
+
+    // and no comment or rule hides them either
+    write(
+        &root.join("src/bad.php"),
+        "<?php\n$x = ; // @phpstan-ignore-line\n",
+    );
+    fs::remove_file(root.join("stirphp.neon")).unwrap();
+    write(
+        &root.join("phpstan.neon"),
+        "parameters:\n    ignoreErrors:\n        -\n            path: src\n",
+    );
+    sphp()
+        .current_dir(root)
+        .arg("check")
+        .assert()
+        .code(1)
+        .stdout(contains("phpstan.parse"))
+        .stdout(contains("1 error, 0 warnings"));
+}
+
 #[test]
 fn phpstans_ignore_errors_by_identifier_path_and_count() {
     let tmp = project_with_errors();
@@ -305,27 +486,6 @@ fn a_php_baseline_is_part_of_the_notice() {
         .assert()
         .code(1)
         .stderr(contains("base.php"));
-}
-
-#[test]
-fn nothing_hides_a_syntax_error() {
-    let tmp = project_with_errors();
-    let root = tmp.path();
-    write(
-        &root.join("src/bad.php"),
-        "<?php\n$x = ; // @phpstan-ignore-line\n",
-    );
-    write(
-        &root.join("phpstan.neon"),
-        "parameters:\n    ignoreErrors:\n        -\n            path: src\n",
-    );
-    sphp()
-        .current_dir(root)
-        .arg("check")
-        .assert()
-        .code(1)
-        .stdout(contains("phpstan.parse"))
-        .stdout(contains("1 error, 0 warnings"));
 }
 
 #[test]

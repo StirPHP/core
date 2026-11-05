@@ -1,6 +1,7 @@
 //! StirPHP project tooling: `stirphp.neon` loading, source file discovery,
 //! Composer autoload rules.
 
+pub mod baseline;
 mod composer;
 mod config;
 mod discover;

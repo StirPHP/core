@@ -57,6 +57,33 @@ pub fn init(root: &Path, phpstan: bool) -> Result<Outcome> {
     })
 }
 
+/// Makes `config` (or a new `stirphp.neon` in `root`, without one) name `baseline`. Returns the
+/// file, if that changed it.
+pub fn reference_baseline(
+    root: &Path,
+    config: Option<&Path>,
+    baseline: &Path,
+) -> Result<Option<PathBuf>> {
+    let path = config.map_or_else(|| root.join(CONFIG_FILE), Path::to_path_buf);
+    let for_phpstan = path.file_name().is_none_or(|name| name != CONFIG_FILE);
+    let text = read_if_any(&path)?;
+    let dir = path.parent().unwrap_or(root);
+    let relative = crate::baseline::relative_to(baseline, dir);
+    let value = crate::baseline::neon_string(&relative);
+    let new = with_stirphp_setting(
+        &path,
+        text_or_new(&text, for_phpstan),
+        "baseline",
+        &value,
+        for_phpstan,
+    )?;
+    if text.as_deref() == Some(new.as_str()) {
+        return Ok(None);
+    }
+    write(&path, &new)?;
+    Ok(Some(path))
+}
+
 fn text_or_new(text: &Option<String>, for_phpstan: bool) -> &str {
     match text {
         Some(text) => text,

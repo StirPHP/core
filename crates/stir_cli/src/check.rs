@@ -1,6 +1,6 @@
 //! `sphp check`: type-check the project and render diagnostics.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -34,6 +34,10 @@ pub struct CheckArgs {
     /// The configuration, instead of `stirphp.neon` or PHPStan's in the project folder.
     #[arg(short = 'c', long, value_name = "FILE")]
     pub configuration: Option<PathBuf>,
+    /// Write what's reported now to a baseline, by default `stirphp-baseline.neon` next to the
+    /// configuration, and make `parameters.stirphp.baseline` name it.
+    #[arg(long, value_name = "PATH", num_args = 0..=1)]
+    pub generate_baseline: Option<Option<PathBuf>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -48,6 +52,9 @@ pub async fn run(args: CheckArgs) -> anyhow::Result<ExitCode> {
         Some(file) => Project::load_with_config(&cwd, file).await?,
         None => Project::load_or_default(&cwd).await?,
     };
+    if let Some(path) = &args.generate_baseline {
+        return generate_baseline(&args, &project, path.as_deref(), &cwd).await;
+    }
 
     let filters = canonical_filters(&cwd, &args.paths).await?;
     let loaded = load_workspace(
@@ -68,6 +75,9 @@ pub async fn run(args: CheckArgs) -> anyhow::Result<ExitCode> {
     );
     let (diagnostics, checked) = collect_diagnostics(&loaded, &filters).await?;
     print_notices(&loaded, &filters);
+    if !args.no_vendor {
+        print_unmatched_baseline(&loaded, &filters, &cwd);
+    }
     let texts = source_texts(&loaded);
     let shown = &diagnostics[..args.max_errors.unwrap_or(usize::MAX).min(diagnostics.len())];
 
@@ -113,6 +123,146 @@ fn print_notices(loaded: &Loaded, filters: &[PathBuf]) {
             eprintln!("notice: {notice}");
         }
     }
+}
+
+/// Says which entries of our baseline have less to hide than they say, so they can go: otherwise
+/// new errors of the kind would take their place unnoticed. Not an error by itself.
+fn print_unmatched_baseline(loaded: &Loaded, filters: &[PathBuf], cwd: &Path) {
+    let files: Vec<SourceFile> = loaded
+        .sources
+        .iter()
+        .copied()
+        .filter(|f| filters.is_empty() || filters.iter().any(|p| f.path(&loaded.db).starts_with(p)))
+        .collect();
+    let unmatched = stir_checker::unmatched_baseline(&loaded.db, loaded.workspace, &files);
+    let unmatched: Vec<_> = unmatched
+        .iter()
+        .filter(|u| {
+            filters.is_empty()
+                || u.rule
+                    .paths
+                    .iter()
+                    .any(|path| filters.iter().any(|f| path.starts_with(f)))
+        })
+        .collect();
+    if unmatched.is_empty() {
+        return;
+    }
+    eprintln!(
+        "warning: {} of the baseline can go, or could hide new errors:",
+        plural(unmatched.len(), "entry").replace("entrys", "entries")
+    );
+    for u in unmatched {
+        let identifiers = u.rule.identifiers.join(", ");
+        let paths: Vec<String> = u.rule.paths.iter().map(|p| display_path(p, cwd)).collect();
+        let found = match u.rule.count {
+            Some(count) => format!("expected {count}, found {}", u.hidden),
+            None => "found none".to_owned(),
+        };
+        eprintln!("  {identifiers} in {}: {found}", paths.join(", "));
+    }
+}
+
+/// `sphp check --generate-baseline`: PHPStan's `generateBaseline`, by identifier and path.
+async fn generate_baseline(
+    args: &CheckArgs,
+    project: &Project,
+    path: Option<&Path>,
+    cwd: &Path,
+) -> anyhow::Result<ExitCode> {
+    use stir_project::{baseline, init};
+
+    if !args.paths.is_empty() {
+        anyhow::bail!("a baseline is of the whole project, so it can't be limited to paths");
+    }
+    let config_dir = project
+        .config_file
+        .as_ref()
+        .and_then(|f| f.parent())
+        .unwrap_or(&project.root)
+        .to_path_buf();
+    let target = path.map_or_else(
+        || config_dir.join(baseline::DEFAULT_NAME),
+        |p| stir_composer::normalize(&cwd.join(p)),
+    );
+    if target.extension().is_none_or(|e| e != "neon") {
+        anyhow::bail!("`{}` should end in `.neon`", target.display());
+    }
+    let dir = target.parent().unwrap_or(&config_dir).to_path_buf();
+
+    let loaded = load_workspace(
+        project,
+        LoadOptions {
+            vendor: !args.no_vendor,
+            level: args.level,
+            baseline: false,
+        },
+    )
+    .await?;
+    let (diagnostics, _) = collect_diagnostics(&loaded, &[]).await?;
+    print_notices(&loaded, &[]);
+    let (ignorable, stuck): (Vec<_>, Vec<_>) = diagnostics
+        .into_iter()
+        .partition(|d| stir_checker::levels::is_ignorable(d.code));
+
+    let mut entries: BTreeMap<(String, String), u32> = BTreeMap::new();
+    for d in &ignorable {
+        let file = baseline::relative_to(&stir_composer::normalize(&d.file), &dir);
+        *entries.entry((d.code.to_owned(), file)).or_default() += 1;
+    }
+    tokio::fs::create_dir_all(&dir).await?;
+    tokio::fs::write(&target, baseline::render(&entries)).await?;
+
+    let mut stdout = std::io::stdout().lock();
+    writeln!(
+        stdout,
+        "Baseline generated with {} in `{}`.",
+        plural(ignorable.len(), "error"),
+        display_path(&target, cwd)
+    )?;
+
+    // PHPStan leaves pointing to the file to you. Here that's one thing fewer to do, unless the
+    // file is somewhere the configuration wouldn't say by itself.
+    match &project.config.baseline {
+        Some(named) if stir_composer::normalize(named) == target => {}
+        Some(named) => writeln!(
+            stdout,
+            "`parameters.stirphp.baseline` still names `{}`.",
+            display_path(named, cwd)
+        )?,
+        None if path.is_some() && !target.starts_with(&config_dir) => writeln!(
+            stdout,
+            "To use it, set `parameters.stirphp.baseline` to `{}`.",
+            target.display()
+        )?,
+        None => {
+            match init::reference_baseline(&project.root, project.config_file.as_deref(), &target) {
+                Ok(Some(file)) => writeln!(
+                    stdout,
+                    "`parameters.stirphp.baseline` in `{}` names it now.",
+                    display_path(&file, cwd)
+                )?,
+                Ok(None) => {}
+                Err(error) => writeln!(
+                    stdout,
+                    "To use it, set `parameters.stirphp.baseline`: {error}."
+                )?,
+            }
+        }
+    }
+
+    if stuck.is_empty() {
+        return Ok(ExitCode::SUCCESS);
+    }
+    // what can't be ignored is still wrong, as with PHPStan
+    let texts = source_texts(&loaded);
+    print_human(&mut stdout, &stuck, &texts, cwd, args.max_errors)?;
+    writeln!(
+        stdout,
+        "{} can't go in a baseline.",
+        plural(stuck.len(), "error")
+    )?;
+    Ok(ExitCode::FAILURE)
 }
 
 /// Type-checks the project's sources, except `.php` ones with a `// @sphp-nocheck`

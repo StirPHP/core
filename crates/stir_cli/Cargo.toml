@@ -13,6 +13,7 @@ futures = "0.3.34"
 salsa = "0.28.5"
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 stir_checker.workspace = true
+stir_composer.workspace = true
 stir_db.workspace = true
 stir_lsp = { workspace = true, features = ["server"] }
 stir_project.workspace = true
