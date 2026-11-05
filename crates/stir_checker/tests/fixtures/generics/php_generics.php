@@ -75,3 +75,55 @@ function uses_generics(): void {
         wants_string($k);
     }
 }
+
+// a call-site variance annotation
+class Animal {}
+class Dog extends Animal {}
+
+/** @template T */
+class Box1 {}
+
+/** @return Box1<Dog> */
+function dog_box(): Box1 { return new Box1(); }
+
+/** @param Box1<Animal> $b */
+function exact_box(Box1 $b): void {}
+
+/** @param Box1<covariant Animal> $b */
+function any_animal_box(Box1 $b): void {}
+
+/** @param Box1<*> $b */
+function any_box(Box1 $b): void {}
+
+function call_site_variance(): void {
+    exact_box(dog_box()); // error: SPHP0005
+    any_animal_box(dog_box());
+    any_box(dog_box());
+}
+
+// a template solved by a default value
+/** @template T of 'array'|'scalar' */
+class Tree1 {
+    /** @param T $type */
+    public function __construct(string $name, string $type = 'array') {}
+}
+
+/** @return Tree1<'array'> */
+function tree_default(): Tree1 {
+    return new Tree1('t');
+}
+
+/** @return Tree1<'array'> */
+function tree_other(): Tree1 {
+    return new Tree1('t', 'scalar'); // error: SPHP0005
+}
+
+// a generic class without arguments leaves nothing unresolved behind
+/** @return iterable<string, int> */
+function from_a_generator(): iterable {
+    return raw_generator(); // error: SPHP0005
+}
+function raw_generator(): Generator { yield "a" => 1; }
+
+// a dynamic static property isn't a property of that name
+class Dyn { public static array $a = []; public function get(string $n): mixed { return self::$$n; } }

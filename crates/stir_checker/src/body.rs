@@ -459,7 +459,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             if let Some(l) = self.lookup_mut(name) {
                 // a property found to be null may be filled in by the next call, and treating
                 // it as always null would make comparing it with anything look pointless
-                l.ty = if name.contains("->") && ty.is_null() {
+                l.ty = if (name.contains("->") || name.contains("::")) && ty.is_null() {
                     l.declared.clone()
                 } else {
                     ty.clone()
@@ -933,6 +933,7 @@ impl<'a, 'db> Checker<'a, 'db> {
     /// pre-pass gets just the one pass, which keeps this linear in the nesting depth.
     fn loop_stmt(&mut self, node: &SyntaxNode) {
         let mut subject = None;
+        let mut subject_ty = None;
         if node.kind() == FOR_STMT
             && let Some(p) = node.child(FOR_INIT)
         {
@@ -945,6 +946,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             if let Some(subj) = es.first() {
                 let st = self.expr(subj, None);
                 subject = Some(self.iter_types(subj.text_range(), &st));
+                subject_ty = Some(st);
             }
         }
         let es = exprs_of(node);
@@ -1034,7 +1036,18 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             // no rounds at all, or all of them
             _ => {
-                ends.push(entry);
+                let non_empty = subject_ty.as_ref().is_some_and(|t| {
+                    t.members().iter().all(|m| match m.kind() {
+                        TyKind::List { non_empty, .. } | TyKind::Array { non_empty, .. } => {
+                            *non_empty
+                        }
+                        TyKind::Shape(s) => s.fields.iter().any(|f| !f.optional),
+                        _ => false,
+                    })
+                });
+                if !non_empty {
+                    ends.push(entry);
+                }
                 exits.extend(self.merge_states(ends));
             }
         }
@@ -1556,7 +1569,11 @@ impl<'a, 'db> Checker<'a, 'db> {
                     };
                     self.class = Some(context.clone());
                     self.lower_cx = self.ctx.member_cx(&model, &context);
+                    let before = self.diags.len();
                     self.class_members(&body, &model, &context);
+                    for d in &mut self.diags[before..] {
+                        d.notes.push(format!("in class `{}`", context.name));
+                    }
                 }
                 // the same mistake in the context of each class is one mistake
                 let found = self.diags.split_off(start);
@@ -2927,6 +2944,12 @@ impl<'a, 'db> Checker<'a, 'db> {
             SPACESHIP => Ty::int(),
             EQ2 | EQ3 | NEQ | NEQ2 | L_ANGLE | R_ANGLE | LTEQ | GTEQ | AMP2 | PIPE2 | AND_KW
             | OR_KW | XOR_KW => Ty::bool(),
+            // `|`, `&` and `^` on strings work on their bytes
+            AMP | PIPE | CARET
+                if self.assignable(&l, &Ty::string()) && self.assignable(&r, &Ty::string()) =>
+            {
+                Ty::string()
+            }
             AMP | PIPE | CARET | SHL | SHR => Ty::int(),
             QUESTION2 => stir_types::join(self.ctx, &stir_types::without_null(&l), &r),
             PIPE_GT => match r.kind() {
@@ -3062,7 +3085,21 @@ impl<'a, 'db> Checker<'a, 'db> {
                 self.check_mutable_target(e);
                 widen_literals(&t)
             }
-            AMP => self.expr(e, expected),
+            // taking a reference makes the variable exist
+            AMP => {
+                if e.kind() == VARIABLE_EXPR {
+                    let n = text_of(e);
+                    let n = n.trim_start_matches('$');
+                    match self.lookup_mut(n) {
+                        Some(l) => l.maybe_undefined = false,
+                        None if n != "this" && !is_superglobal(n) => {
+                            self.declare(n, Ty::null(), LocalKind::Variable, e.text_range())
+                        }
+                        None => {}
+                    }
+                }
+                self.expr(e, expected)
+            }
             _ => self.expr(e, expected),
         }
     }
@@ -3104,6 +3141,20 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     fn assign_inner(&mut self, node: &SyntaxNode) -> Ty {
         let es = exprs_of(node);
+        // `$a = &$b` makes `$b` exist
+        if node.has_token(AMP)
+            && let Some(source) = es.get(1).filter(|e| e.kind() == VARIABLE_EXPR)
+        {
+            let n = text_of(source);
+            let n = n.trim_start_matches('$');
+            match self.lookup_mut(n) {
+                Some(l) => l.maybe_undefined = false,
+                None if n != "this" && !is_superglobal(n) => {
+                    self.declare(n, Ty::null(), LocalKind::Variable, source.text_range())
+                }
+                None => {}
+            }
+        }
         let op = node
             .children_with_tokens()
             .filter_map(|e| e.into_token())
@@ -4071,6 +4122,18 @@ impl<'a, 'db> Checker<'a, 'db> {
                 inf.unify(self.ctx, p, &t);
             }
             arg_tys[i] = Some(t);
+        }
+        // a parameter left out holds its default, which says what its template is
+        for (i, p) in sig.params.iter().enumerate() {
+            if let Some(default) = &p.default
+                && !provided.contains(&i)
+                && !has_spread
+            {
+                let pty = subst_cls(&p.ty);
+                if inf.has_unsolved(&pty) {
+                    inf.unify_expected(self.ctx, &pty, default);
+                }
+            }
         }
         // PHP code can't spell type arguments: nothing was said about this variable
         let ctx = self.ctx;
@@ -5132,6 +5195,15 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     fn static_property(&mut self, node: &SyntaxNode) -> Ty {
         let cls = self.static_base(node);
+        // `self::$$name`, `self::${$name}`: which one is decided when it runs
+        if node.children_with_tokens().any(|e| e.kind() == DOLLAR)
+            || node.children().any(|c| c.kind() == VARIABLE_VARIABLE)
+        {
+            for e in exprs_of(node).iter().skip(1) {
+                self.expr(e, None);
+            }
+            return Ty::untyped();
+        }
         let Some(var) = node
             .descendants_with_tokens()
             .filter_map(|e| e.into_token())

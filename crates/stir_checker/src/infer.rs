@@ -60,7 +60,10 @@ impl Inference {
             return;
         }
         // a literal argument gives its base type, but a declared literal union is kept
-        let ty = if self.exact || !matches!(ty.kind(), TyKind::Literal(_)) {
+        let ty = if self.exact
+            || !matches!(ty.kind(), TyKind::Literal(_))
+            || matches!(ty.kind(), TyKind::Literal(LitValue::Bool(_)))
+        {
             ty.clone()
         } else {
             widen_literals(ty)
@@ -92,6 +95,9 @@ impl Inference {
             return;
         }
         match (param.kind(), arg.kind()) {
+            (TyKind::CovariantArg(p) | TyKind::ContravariantArg(p), _) => {
+                self.unify_depth(env, p, arg, depth + 1)
+            }
             (TyKind::Param { id, .. }, _) if self.vars.contains(id) => self.bind(env, *id, arg),
             (TyKind::List { elem: p, .. }, TyKind::List { elem: a, .. }) => {
                 self.unify_depth(env, p, a, depth + 1)

@@ -62,7 +62,7 @@ function array_merge(array ...$arrays): array {}
  * @template K of array-key
  * @template V
  * @param array<K, V> ...$arrays
- * @return array<K|int, V>
+ * @return array<K, V>
  */
 function array_merge(array ...$arrays): array {}
 
@@ -94,7 +94,7 @@ function array_reverse(array $array, bool $preserve_keys = false): array {}
  * @template K of array-key
  * @template V
  * @param array<K, V> $array
- * @return array<K|int, V>
+ * @return array<K, V>
  */
 function array_reverse(array $array, bool $preserve_keys = false): array {}
 
@@ -109,7 +109,7 @@ function array_slice(array $array, int $offset, ?int $length = null, bool $prese
  * @template K of array-key
  * @template V
  * @param array<K, V> $array
- * @return array<K|int, V>
+ * @return array<K, V>
  */
 function array_slice(array $array, int $offset, ?int $length = null, bool $preserve_keys = false): array {}
 
@@ -386,3 +386,10 @@ function usort(array &$array, callable $callback): bool {}
  * @param-out list<V> $array
  */
 function shuffle(array &$array): bool {}
+
+/**
+ * @template T of object
+ * @param T $object
+ * @return class-string<T>
+ */
+function get_class(object $object = UNKNOWN): string {}

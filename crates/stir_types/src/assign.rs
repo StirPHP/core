@@ -877,7 +877,11 @@ impl<'a> Checker<'a> {
             if self.mixed_ok && matches!(y.kind(), K::Mixed | K::Untyped) {
                 continue;
             }
-            let v = self.env.variance(n2, i);
+            let (v, y) = match y.kind() {
+                K::CovariantArg(t) => (Variance::Out, t),
+                K::ContravariantArg(t) => (Variance::In, t),
+                _ => (self.env.variance(n2, i), y),
+            };
             self.arg(from, to, i, v, x, y)?;
         }
         Ok(())
@@ -1007,6 +1011,13 @@ impl<'a> Checker<'a> {
                     .zip(a2)
                     .enumerate()
                     .all(|(i, (x, y))| match self.env.variance(n2, i) {
+                        _ if matches!(y.kind(), K::CovariantArg(_) | K::ContravariantArg(_)) => {
+                            match y.kind() {
+                                K::CovariantArg(t) => self.maybe(x, t, d),
+                                K::ContravariantArg(t) => self.maybe(t, x, d),
+                                _ => false,
+                            }
+                        }
                         Variance::Out => self.maybe(x, y, d),
                         Variance::In => self.maybe(y, x, d),
                         Variance::Invariant => self.ok(x, y) && self.ok(y, x),

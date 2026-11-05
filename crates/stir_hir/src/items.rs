@@ -600,7 +600,10 @@ impl Lowerer {
                         def.doc_ty = def.doc_ty.take().map(|t| match t.kind {
                             TypeRefKind::PhpList { elem, .. } => *elem,
                             TypeRefKind::PhpArray { value, .. } => *value,
-                            kind => TypeRef { kind, range: t.range },
+                            kind => TypeRef {
+                                kind,
+                                range: t.range,
+                            },
                         });
                     }
                     if doc::optional_marker(doc, &def.name) {

@@ -312,3 +312,23 @@ function anonymous_uses_trait(): object {
 function string_or_int_offset(int|string $k): string {
     return $k[0]; // error: SPHP0015
 }
+
+// taking a reference defines a variable
+function reference_defines(array $a): void {
+    $a[0] = &$ref;
+    echo $ref;
+}
+
+// a non-empty array runs a loop at least once
+function non_empty_loop(): string {
+    foreach ([1, 2] as $v) {
+        $s = "x";
+    }
+    return $s;
+}
+
+// string bit operations give strings
+function bytes(string $p): string {
+    $p[4] = $p[4] | "\x80";
+    return $p ^ "a";
+}

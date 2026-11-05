@@ -177,10 +177,23 @@ impl DocCx<'_> {
     }
 
     fn arg(&self, a: &GenericArg) -> TypeRef {
-        if a.variance == DocVariance::Bivariant {
-            tr(TypeRefKind::Php(PhpBuiltin::Mixed), a.ty.range)
-        } else {
-            self.lower(&a.ty)
+        match a.variance {
+            DocVariance::Bivariant => tr(
+                TypeRefKind::CovariantArg(boxed(tr(
+                    TypeRefKind::Php(PhpBuiltin::Mixed),
+                    a.ty.range,
+                ))),
+                a.ty.range,
+            ),
+            DocVariance::Covariant => tr(
+                TypeRefKind::CovariantArg(boxed(self.lower(&a.ty))),
+                a.ty.range,
+            ),
+            DocVariance::Contravariant => tr(
+                TypeRefKind::ContravariantArg(boxed(self.lower(&a.ty))),
+                a.ty.range,
+            ),
+            _ => self.lower(&a.ty),
         }
     }
 

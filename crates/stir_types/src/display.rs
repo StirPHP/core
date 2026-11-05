@@ -132,6 +132,8 @@ fn print(w: &mut dyn Write, ty: &Ty, prec: Prec) -> fmt::Result {
             print_args(w, args)
         }
         K::Param { name, .. } => w.write_str(name),
+        K::CovariantArg(t) => write!(w, "covariant {t}"),
+        K::ContravariantArg(t) => write!(w, "contravariant {t}"),
         K::Conditional(c) => write!(
             w,
             "({} is {} ? {} : {})",

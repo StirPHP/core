@@ -509,11 +509,20 @@ impl<'db> Ctx<'db> {
         })
     }
 
+    /// What a class's type parameters stand for with these arguments. A type argument left
+    /// out is whatever the parameter's bound allows.
     pub fn subst_map(&self, c: &ClassModel<'_>, args: &[Ty]) -> FxHashMap<ParamId, Ty> {
         c.params
             .iter()
-            .zip(args.iter())
-            .map(|(p, a)| (p.id, a.clone()))
+            .enumerate()
+            .map(|(i, p)| {
+                let arg = args
+                    .get(i)
+                    .cloned()
+                    .or_else(|| self.param_bound(p.id))
+                    .unwrap_or_else(Ty::untyped);
+                (p.id, arg)
+            })
             .collect()
     }
 
@@ -627,6 +636,10 @@ impl<'db> Ctx<'db> {
                     }
                     Some(_) => apply(base.as_ref().unwrap()),
                 }
+            }
+            TypeRefKind::CovariantArg(t) => Ty::new(TyKind::CovariantArg(self.lower(t, cx, sink))),
+            TypeRefKind::ContravariantArg(t) => {
+                Ty::new(TyKind::ContravariantArg(self.lower(t, cx, sink)))
             }
             TypeRefKind::Nullable(inner) => self.lower(inner, cx, sink).nullable(),
             TypeRefKind::Union(members) => {

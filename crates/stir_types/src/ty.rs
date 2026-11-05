@@ -370,6 +370,10 @@ pub enum TyKind {
         args: Vec<Ty>,
     },
     Conditional(Box<ConditionalTy>),
+    /// A type argument written `covariant T`: subtypes fit where it's used.
+    CovariantArg(Ty),
+    /// A type argument written `contravariant T`: supertypes fit where it's used.
+    ContravariantArg(Ty),
     /// A generic type parameter.
     Param {
         id: ParamId,
@@ -792,7 +796,7 @@ impl Ty {
     pub fn for_each_child(&self, f: &mut dyn FnMut(&Ty)) {
         use TyKind as K;
         match self.kind() {
-            K::ClassString(Some(t)) => f(t),
+            K::ClassString(Some(t)) | K::CovariantArg(t) | K::ContravariantArg(t) => f(t),
             K::SelfType { class, .. } => f(class),
             K::Array { key, value, .. } | K::Iterable { key, value } => {
                 f(key);
@@ -828,6 +832,8 @@ impl Ty {
         use TyKind as K;
         let kind = match self.kind() {
             K::ClassString(Some(t)) => K::ClassString(Some(f(t))),
+            K::CovariantArg(t) => K::CovariantArg(f(t)),
+            K::ContravariantArg(t) => K::ContravariantArg(f(t)),
             K::Array {
                 key,
                 value,

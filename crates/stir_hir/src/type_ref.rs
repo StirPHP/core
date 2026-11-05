@@ -65,6 +65,10 @@ pub enum TypeRefKind {
     Php(PhpBuiltin),
     /// A type parameter in scope.
     Param(SmolStr),
+    /// A type argument written `covariant T`.
+    CovariantArg(Box<TypeRef>),
+    /// A type argument written `contravariant T`.
+    ContravariantArg(Box<TypeRef>),
     /// `(subject is target ? then : otherwise)`.
     Conditional {
         subject: ConditionalSubjectRef,
