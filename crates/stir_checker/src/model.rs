@@ -521,6 +521,11 @@ impl<'db> Ctx<'db> {
                     .cloned()
                     .or_else(|| self.param_bound(p.id))
                     .unwrap_or_else(Ty::untyped);
+                // what a call-site variance says is about comparing, not about the value
+                let arg = match arg.kind() {
+                    TyKind::CovariantArg(t) | TyKind::ContravariantArg(t) => t.clone(),
+                    _ => arg,
+                };
                 (p.id, arg)
             })
             .collect()

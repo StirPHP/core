@@ -94,3 +94,10 @@ trait Readonly1 {
     }
 }
 class UsesReadonly { use Readonly1; }
+
+class Restored {
+    public readonly int $value;
+    public function __construct() { $this->value = 1; }
+    public function __unserialize(array $data): void { $this->value = 2; }
+    public function reset(): void { $this->value = 3; } // error: SPHP0010
+}

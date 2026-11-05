@@ -1667,7 +1667,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                 .iter()
                 .map(|p| (p.name.clone(), p.ty.clone())),
         );
-        self.in_ctor = m.name.eq_ignore_ascii_case("__construct");
+        // where a readonly property may be given its value
+        self.in_ctor = ["__construct", "__unserialize", "__clone"]
+            .iter()
+            .any(|n| m.name.eq_ignore_ascii_case(n));
         let this = if m.mods.is_static {
             None
         } else {

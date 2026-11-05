@@ -156,3 +156,18 @@ function makes(): void {
     make_one(Dog::class);
     make_one("NoSuchClass"); // error: SPHP0005
 }
+
+// a call-site variance says nothing about the values that come out
+/** @template T */
+class Holder1 {
+    /** @return T */
+    public function get() { throw new \Exception(); }
+}
+/** @param Holder1<covariant Dog> $h */
+function covariant_value(Holder1 $h): Dog {
+    return $h->get();
+}
+/** @param Holder1<covariant Dog> $h */
+function covariant_wrong(Holder1 $h): int {
+    return $h->get(); // error: SPHP0005
+}
