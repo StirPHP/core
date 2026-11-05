@@ -210,6 +210,11 @@ fn try_at(
                 }
             }
         }
+        if !bad.is_empty() && std::env::var_os("ACTIONS_SHOW").is_some() {
+            for f in &files {
+                println!("--- {}\n{}", f.path(db).display(), f.text(db));
+            }
+        }
         if !bad.is_empty() {
             let tally = run.tally.get_mut(&t).unwrap();
             tally.new_errors += 1;
@@ -347,7 +352,12 @@ async fn run_project(dir: &Path, report_path: Option<&Path>) {
     let per_file = env_number("ACTIONS_PLACES", 6);
     let cap = env_number("ACTIONS_CAP", 400);
     let mut picked: Vec<SourceFile> = Vec::new();
-    let mut pool = sources.clone();
+    let only = std::env::var("ACTIONS_ONLY").unwrap_or_default();
+    let mut pool: Vec<SourceFile> = sources
+        .iter()
+        .copied()
+        .filter(|f| f.path(&db).to_string_lossy().contains(&only))
+        .collect();
     while picked.len() < files_wanted && !pool.is_empty() {
         let at = rng.below(pool.len());
         picked.push(pool.swap_remove(at));
@@ -363,6 +373,18 @@ async fn run_project(dir: &Path, report_path: Option<&Path>) {
     };
     let all_kinds = Some(vec!["quickfix".to_owned(), "refactor".to_owned(), "source".to_owned()]);
     let began = Instant::now();
+    if let Ok(at) = std::env::var("ACTIONS_RANGE") {
+        let (a, b) = at.split_once("..").expect("start..end");
+        let range = TextRange::new(
+            TextSize::from(a.parse::<u32>().unwrap()),
+            TextSize::from(b.parse::<u32>().unwrap()),
+        );
+        for &file in &picked {
+            try_at(&mut db, ws, file, range, all_kinds.clone(), &mut run);
+        }
+        print!("{}", run.report);
+        return;
+    }
     for (i, &file) in picked.iter().enumerate() {
         // at each diagnostic
         let diags: Vec<TextRange> = stir_checker::check_file(&db, ws, file)

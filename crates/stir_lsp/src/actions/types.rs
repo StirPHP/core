@@ -175,6 +175,10 @@ fn native_member(cx: &Cx<'_>, namer: &mut Namer<'_>, ty: &Ty, parts: &mut Vec<St
             lossy = sig.is_some();
         }
         TyKind::Class { name, args } => {
+            // an anonymous class has no name to write
+            if !is_class_name(name) {
+                return None;
+            }
             let text = namer.class(name);
             push(text);
             lossy = !args.is_empty();
@@ -188,6 +192,18 @@ fn native_member(cx: &Cx<'_>, namer: &mut Namer<'_>, ty: &Ty, parts: &mut Vec<St
         _ => return None,
     }
     Some(lossy)
+}
+
+/// Is `name` one a class can be written by?
+fn is_class_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .trim_start_matches('\\')
+            .split('\\')
+            .all(|part| {
+                part.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_' || !c.is_ascii())
+                    && part.chars().all(|c| c.is_alphanumeric() || c == '_' || !c.is_ascii())
+            })
 }
 
 /// `ty` as a native type on the file's versions, if there's one, for a value of that type.
@@ -354,6 +370,9 @@ pub fn doc_type(namer: &mut Namer<'_>, ty: &Ty) -> Option<String> {
             Some(format!("{word}({}): {ret}", params.join(", ")))
         }
         TyKind::Class { name, args } => {
+            if !is_class_name(name) {
+                return None;
+            }
             let text = namer.class(name);
             if args.is_empty() {
                 return Some(text);

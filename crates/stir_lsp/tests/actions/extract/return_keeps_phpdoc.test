@@ -1,0 +1,31 @@
+=== action: Extract method
+=== input
+<?php
+class A implements IteratorAggregate {
+    private array $items = [];
+    /**
+     * @return \ArrayIterator<int, string>
+     */
+    public function getIterator(): Traversable
+    {
+        ⟦return new ArrayIterator($this->items);⟧
+    }
+}
+=== output
+<?php
+class A implements IteratorAggregate {
+    private array $items = [];
+    /**
+     * @return \ArrayIterator<int, string>
+     */
+    public function getIterator(): Traversable
+    {
+        return $this->extracted();
+    }
+
+    /** @return \ArrayIterator<int, string> */
+    private function extracted(): Traversable
+    {
+        return new ArrayIterator($this->items);
+    }
+}

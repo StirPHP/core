@@ -321,6 +321,22 @@ pub fn extract_offers<'c>(cx: &'c Cx<'c>, out: &mut Vec<Offer<'c>>) {
     let name = name_for(cx, &expr);
     let expr_range = cx.range;
     let text = cx.slice(expr_range).to_owned();
+    // the same thing again later in the statement is the same value, if nothing can change it
+    let mut also = Vec::new();
+    if is_pure(&expr) && !assigns_anything(&statement) {
+        for other in statement.descendants() {
+            if other.text_range().start() > expr_range.end()
+                && other.kind() == expr.kind()
+                && cx.slice(trimmed_node(&other)) == text
+                && !other.ancestors().any(|a| matches!(a.kind(), CLOSURE_EXPR | ARROW_FN_EXPR | ANON_CLASS))
+                && !takes_reference(&other)
+                && !other.ancestors().any(|a| matches!(a.kind(), ISSET_EXPR | EMPTY_EXPR | INTERP_STRING | HEREDOC))
+                && !also.iter().any(|r: &TextRange| r.contains_range(other.text_range()))
+            {
+                also.push(trimmed_node(&other));
+            }
+        }
+    }
     // a doc comment about the statement stays with it, and an inline `@var` applies to the next one
     let doc = statement
         .doc_comment()
@@ -328,16 +344,26 @@ pub fn extract_offers<'c>(cx: &'c Cx<'c>, out: &mut Vec<Offer<'c>>) {
     let start = doc.unwrap_or_else(|| super::docs::first_token_start(&statement));
     let indent = indent_at(cx.text, start);
     let nl = cx.style.nl;
-    let edits = vec![
+    let mut edits = vec![
         cx.insert(start, format!("${name} = {text};{nl}{indent}")),
         cx.edit(expr_range, format!("${name}")),
     ];
+    edits.extend(also.into_iter().map(|r| cx.edit(r, format!("${name}"))));
     out.push(Offer::new(id, TITLE, Kind::RefactorExtract, move || {
         let mut change = Change::new(edits);
         // the variable, where it's being assigned
         change.rename_at = Some(start + TextSize::from(1));
         Ok(change)
     }));
+}
+
+/// Does `node` assign anything, or step it up or down?
+fn assigns_anything(node: &SyntaxNode) -> bool {
+    node.descendants().any(|n| {
+        n.kind() == ASSIGN_EXPR
+            || matches!(n.kind(), PREFIX_EXPR | POSTFIX_EXPR)
+                && n.children_with_tokens().any(|e| matches!(e.kind(), INC | DEC))
+    })
 }
 
 /// What's known of every occurrence of a variable in its function.

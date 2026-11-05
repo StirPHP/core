@@ -1,0 +1,24 @@
+=== action: Extract method
+=== input
+<?php
+class A {
+    private static ?string $prefix = null;
+    public function f(): string {
+        self::$prefix ??= 'x';
+        return ⟦self::$prefix . 'y'⟧;
+    }
+}
+=== output
+<?php
+class A {
+    private static ?string $prefix = null;
+    public function f(): string {
+        self::$prefix ??= 'x';
+        return self::extracted();
+    }
+
+    private static function extracted(): string
+    {
+        return self::$prefix . 'y';
+    }
+}

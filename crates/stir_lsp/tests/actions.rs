@@ -331,7 +331,10 @@ fn run(bench: &mut Bench, f: &Fixture) -> Result<(), String> {
 
 #[test]
 fn fixtures() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/actions");
+    let dir = std::env::var_os("ACTION_DIR").map_or_else(
+        || Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/actions"),
+        PathBuf::from,
+    );
     let mut files = Vec::new();
     collect_files(&dir, &mut files);
     files.sort();

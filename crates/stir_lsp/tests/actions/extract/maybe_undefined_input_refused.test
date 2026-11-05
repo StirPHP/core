@@ -1,0 +1,10 @@
+=== action: Extract function
+=== refused: might not be set
+=== input
+<?php
+function f(array $data): string {
+    foreach ($data as $key => $d) {
+        $output[$key] = $d;
+    }
+    return ⟦json_encode($output ?? [])⟧;
+}

@@ -1,0 +1,8 @@
+=== action: Change to `created`
+=== no-offer
+=== input
+<?php
+class A {
+    public function created(callable $c): void {}
+    public function run(): void { $this->creat‸(); }
+}

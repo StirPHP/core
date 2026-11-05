@@ -470,6 +470,18 @@ fn member_typo<'c>(cx: &'c Cx<'c>, d: &Found, method: bool, out: &mut Vec<Offer<
         return;
     };
     let own = enclosing_class_key(cx, cx.file, &fetch);
+    // a method that couldn't be called with what's passed isn't what was meant
+    let passed = fetch
+        .parent()
+        .and_then(|call| call.children().find(|c| c.kind() == ARG_LIST))
+        .map(|args| {
+            let all: Vec<SyntaxNode> = args
+                .children()
+                .filter(|c| matches!(c.kind(), ARG | NAMED_ARG))
+                .collect();
+            let spread = all.iter().any(|a| a.children_with_tokens().any(|e| e.kind() == ELLIPSIS));
+            (all.len(), spread)
+        });
     let mut found = Vec::new();
     for m in model_api::members(cx.ctx(), &ty) {
         let right_kind = match &m.ty {
@@ -489,6 +501,13 @@ fn member_typo<'c>(cx: &'c Cx<'c>, d: &Found, method: bool, out: &mut Vec<Offer<
         };
         if !reachable {
             continue;
+        }
+        if let (MemberTy::Method(sig), Some((count, false))) = (&m.ty, passed) {
+            let required = sig.params.iter().filter(|p| !p.optional && !p.variadic).count();
+            let variadic = sig.params.iter().any(|p| p.variadic);
+            if count < required || (!variadic && count > sig.params.len()) {
+                continue;
+            }
         }
         if let Some(distance) = typo_distance(bare, &m.name) {
             found.push((distance, m.name.clone()));

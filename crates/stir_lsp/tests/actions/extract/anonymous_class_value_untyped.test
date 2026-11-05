@@ -1,0 +1,36 @@
+=== action: Extract method
+=== input
+<?php
+class T {
+    public function test(): void {
+        $l = new class {
+            public function load(): bool
+            {
+                return false;
+            }
+        };
+
+        ⟦$this->assertTrue($l->load());⟧
+    }
+    public function assertTrue(bool $b): void {}
+}
+=== output
+<?php
+class T {
+    public function test(): void {
+        $l = new class {
+            public function load(): bool
+            {
+                return false;
+            }
+        };
+
+        $this->extracted($l);
+    }
+
+    private function extracted($l): void
+    {
+        $this->assertTrue($l->load());
+    }
+    public function assertTrue(bool $b): void {}
+}

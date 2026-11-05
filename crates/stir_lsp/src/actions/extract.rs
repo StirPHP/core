@@ -451,7 +451,10 @@ impl Walk<'_, '_> {
                 }
             }
             _ => {
-                if let Some(t) = node.token(VARIABLE) {
+                // `self::$x` is a property
+                if node.kind() != STATIC_PROPERTY_FETCH_EXPR
+                    && let Some(t) = node.token(VARIABLE)
+                {
                     self.event(&t, true, false, conditional);
                 }
                 self.children(node, conditional);
@@ -508,7 +511,8 @@ fn outside_occurrences(function: &SyntaxNode, range: TextRange) -> FxHashMap<Str
         for element in node.children_with_tokens() {
             match element {
                 stir_syntax::SyntaxElement::Token(t) => {
-                    if t.kind() == VARIABLE && !range.contains_range(t.text_range()) {
+                    let property = t.parent().is_some_and(|p| p.kind() == STATIC_PROPERTY_FETCH_EXPR);
+                    if t.kind() == VARIABLE && !property && !range.contains_range(t.text_range()) {
                         out.entry(t.text().to_owned()).or_default().push(t.text_range());
                     }
                 }
@@ -588,6 +592,75 @@ fn jumps_out(node: &SyntaxNode, depth: u64) -> bool {
         }
         _ => node.children().any(|c| jumps_out(&c, depth)),
     }
+}
+
+/// Is `name` certainly set when the selection starts: a parameter, a variable of a `foreach` or
+/// `catch` it's in, or assigned by a statement that always runs before it?
+fn defined_on_every_path(
+    scope: &SyntaxNode,
+    function: Option<&SyntaxNode>,
+    name: &str,
+    selection: &Selection,
+) -> bool {
+    let start = selection.range.start();
+    if let Some(f) = function {
+        let params = f.child(PARAM_LIST).map(|l| l.children_of(PARAM)).unwrap_or_default();
+        if params.iter().any(|p| p.token(VARIABLE).is_some_and(|t| t.text() == name)) {
+            return true;
+        }
+        if f.child(CLOSURE_USE).is_some_and(|u| {
+            u.children_of(CLOSURE_USE_VAR)
+                .iter()
+                .any(|v| v.token(VARIABLE).is_some_and(|t| t.text() == name))
+        }) {
+            return true;
+        }
+    }
+    let mut child = selection.anchor.clone();
+    for parent in selection.anchor.ancestors().skip(1) {
+        match parent.kind() {
+            // in the body of these, their variables are set
+            FOREACH_STMT if child.kind() == BLOCK || is_statement_node(child.kind()) => {
+                let declares = parent
+                    .children()
+                    .skip(1)
+                    .filter(|c| c.kind() != BLOCK && !is_statement_node(c.kind()))
+                    .any(|c| {
+                        c.descendants_with_tokens()
+                            .filter_map(|e| e.into_token())
+                            .any(|t| t.kind() == VARIABLE && t.text() == name)
+                    });
+                if declares {
+                    return true;
+                }
+            }
+            CATCH_CLAUSE => {
+                if parent.token(VARIABLE).is_some_and(|t| t.text() == name) {
+                    return true;
+                }
+            }
+            kind if is_statement_list(kind) => {
+                for earlier in parent.children().take_while(|c| c != &child) {
+                    if earlier.text_range().end() > start {
+                        break;
+                    }
+                    let sets = earlier.kind() == EXPR_STMT
+                        && earlier.children().next().is_some_and(|e| {
+                            writes_directly(&e, name) && e.kind() == ASSIGN_EXPR
+                        });
+                    if sets {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+        if &parent == scope {
+            break;
+        }
+        child = parent;
+    }
+    false
 }
 
 /// The type a variable certainly has when it gets to the selection, if that can be told.
@@ -813,6 +886,10 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
             return Err(format!("`{name}` is only set on some paths, and is used afterwards."));
         }
         if (needs && before) || (output && !is_definite && before) {
+            // passing what might not be set is a warning where reading it wasn't
+            if !defined_on_every_path(&scope, function.as_ref(), name, selection) {
+                return Err(format!("`{name}` might not be set by the time it gets here."));
+            }
             let ty = input_type(cx, &mut namer, function.as_ref(), name, selection);
             inputs.push(Input {
                 name: name.clone(),
@@ -863,9 +940,10 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
         .and_then(|f| f.child(RETURN_TYPE))
         .and_then(|r| written_type(&r))
         .map(|t| t.text().to_string().trim().to_owned());
+    let declared_doc = function.as_ref().and_then(return_tag);
     let (return_type, doc_return) = match returning {
         Returning::Value => match declared_return {
-            Some(t) => (Some(t), None),
+            Some(t) => (Some(t), declared_doc),
             None => {
                 let typed = cx.typed();
                 let mut types = Vec::new();
@@ -973,6 +1051,25 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
         name,
         function,
     })
+}
+
+/// What a function's doc comment says it returns, as the tag is written: `@return T`.
+fn return_tag(function: &SyntaxNode) -> Option<String> {
+    let doc = function.doc_comment()?;
+    let tags: Vec<String> = doc
+        .text()
+        .lines()
+        .map(|l| l.trim().trim_start_matches("/**").trim_start_matches('*').trim().trim_end_matches("*/").trim().to_owned())
+        .filter(|l| {
+            l.starts_with("@return ") || l.starts_with("@phpstan-return ") || l.starts_with("@psalm-return ")
+        })
+        .collect();
+    match tags.as_slice() {
+        [] => None,
+        // the more particular wins, as PHPStan has it
+        [one] => Some(one.clone()),
+        many => many.iter().find(|t| t.starts_with("@phpstan-")).or(many.first()).cloned(),
+    }
 }
 
 /// The type of `name` once the selection's done, if one unconditional assignment in it says.
@@ -1095,7 +1192,13 @@ fn build(cx: &Cx<'_>, selection: &Selection, plan: Plan) -> Result<Change, Refus
         .return_type
         .as_ref()
         .map_or_else(String::new, |t| format!(": {t}"));
-    let doc = plan.doc_return.as_ref().map(|d| format!("/** @return {d} */"));
+    let doc = plan.doc_return.as_ref().map(|d| {
+        if d.starts_with('@') {
+            format!("/** {d} */")
+        } else {
+            format!("/** @return {d} */")
+        }
+    });
     let (decl_indent, insert): (String, Box<dyn Fn(&str) -> FileEdit>) = if in_class {
         let body = anchor
             .ancestors()
