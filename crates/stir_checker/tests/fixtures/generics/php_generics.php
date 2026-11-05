@@ -57,11 +57,10 @@ function wants_int(int $v): void {}
 function wants_string(string $v): void {}
 
 function uses_generics(): void {
-    // KNOWN GAP: inline `@var` is ignored; `push("a")` should be SPHP0005.
     /** @var Stack<int> $s */
     $s = new Stack();
     $s->push(1);
-    $s->push("a");
+    $s->push("a"); // error: SPHP0005
 
     $n = head([1, 2]);
     if ($n !== null) {
@@ -70,8 +69,7 @@ function uses_generics(): void {
     }
 
     bounded(new ArrayObject());
-    // KNOWN GAP: a template bound isn't enforced on the call; this should be SPHP0005.
-    bounded(1);
+    bounded(1); // error: SPHP0005
 
     foreach (keys_of(["a" => 1]) as $k) {
         wants_string($k);

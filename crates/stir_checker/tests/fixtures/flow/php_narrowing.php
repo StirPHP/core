@@ -39,9 +39,31 @@ function by_negation(int|string $v): int {
 }
 
 function by_match(int|string $v): string {
-    // KNOWN FALSE ALARM: `match (true)` arms should narrow `$v` to string in `default`.
-    return match (true) { // error: SPHP0005
+    return match (true) {
         is_int($v) => "int",
+        default => $v,
+    };
+}
+
+function by_match_arm(int|string $v): int {
+    return match (true) { // error: SPHP0005
+        is_int($v) => $v,
+        is_string($v) => $v,
+    };
+}
+
+function by_match_object(Throwable|string $v): string {
+    return match (true) {
+        $v instanceof Exception => $v->getMessage(),
+        $v instanceof Error => $v->getMessage(),
+        is_string($v) => $v,
+        default => $v->getMessage(),
+    };
+}
+
+function by_match_value(int|string|null $v): int|string {
+    return match ($v) {
+        null => 0,
         default => $v,
     };
 }

@@ -211,6 +211,8 @@ pub struct ClassDef {
     /// `@phpstan-type` / `@psalm-type` aliases declared on the class (for
     /// `@phpstan-import-type` in other classes).
     pub type_aliases: Vec<(SmolStr, TypeRef)>,
+    /// Every alias in scope in the class's PHPDoc, imported ones too.
+    pub aliases: Aliases,
     pub doc: Option<DocText>,
     pub ptr: NodePtr,
     pub name_range: TextRange,
@@ -732,6 +734,7 @@ impl Lowerer {
             cases: Vec::new(),
             traits: Vec::new(),
             type_aliases,
+            aliases: self.aliases.clone(),
             doc: doc_of(node),
             ptr: NodePtr::new(node),
             name_range: name_node.text_range(),

@@ -524,6 +524,25 @@ impl<'db> Ctx<'db> {
                 let args: Vec<Ty> = args.iter().map(|a| self.lower(a, cx, sink)).collect();
                 self.lower_named(fqn.as_str(), args, tr.range, sink)
             }
+            TypeRefKind::SelfGeneric(builtin, args) => {
+                let base = match builtin {
+                    PhpBuiltin::Parent => cx.parent_ty.clone(),
+                    _ => cx.self_ty.clone(),
+                };
+                let args: Vec<Ty> = args.iter().map(|a| self.lower(a, cx, sink)).collect();
+                let apply = |t: &Ty| match t.kind() {
+                    TyKind::Class { name, .. } => Ty::class(name.clone(), args.clone()),
+                    _ => t.clone(),
+                };
+                match base.as_ref().map(Ty::kind) {
+                    None => Ty::error(),
+                    Some(TyKind::SelfType { class, .. }) => Ty::static_of(apply(class)),
+                    Some(_) if *builtin == PhpBuiltin::Static => {
+                        Ty::static_of(apply(base.as_ref().unwrap()))
+                    }
+                    Some(_) => apply(base.as_ref().unwrap()),
+                }
+            }
             TypeRefKind::Nullable(inner) => self.lower(inner, cx, sink).nullable(),
             TypeRefKind::Union(members) => {
                 Ty::union(members.iter().map(|m| self.lower(m, cx, sink)))

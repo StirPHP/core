@@ -65,6 +65,8 @@ pub enum TypeRefKind {
     Php(PhpBuiltin),
     /// A type parameter in scope.
     Param(SmolStr),
+    /// `self<A, B>`, `static<A, B>` or `parent<A, B>` in PHPDoc: the class with these arguments.
+    SelfGeneric(PhpBuiltin, Vec<TypeRef>),
     /// A class, interface or enum.
     Named(Fqn, Vec<TypeRef>),
     Nullable(Box<TypeRef>),

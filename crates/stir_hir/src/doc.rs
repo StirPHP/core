@@ -233,7 +233,14 @@ impl DocCx<'_> {
             }
             Some(Keyword::KeyOf) => TypeRefKind::DocKeyword(DocKeyword::ArrayKey),
             Some(Keyword::IntMask | Keyword::IntMaskOf) => TypeRefKind::Php(PhpBuiltin::Int),
-            Some(Keyword::Static | Keyword::SelfType | Keyword::Parent) => keyword(kw.unwrap()),
+            Some(k @ (Keyword::Static | Keyword::SelfType | Keyword::Parent)) => {
+                let b = match k {
+                    Keyword::Static => PhpBuiltin::Static,
+                    Keyword::SelfType => PhpBuiltin::SelfType,
+                    _ => PhpBuiltin::Parent,
+                };
+                TypeRefKind::SelfGeneric(b, lowered())
+            }
             // `value-of<…>`, `new<…>`, `template-type<…>` and other keyword generics
             Some(Keyword::Object) => TypeRefKind::Php(PhpBuiltin::Object),
             Some(_) => TypeRefKind::Php(PhpBuiltin::Mixed),

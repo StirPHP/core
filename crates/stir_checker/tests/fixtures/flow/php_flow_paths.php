@@ -239,3 +239,46 @@ abstract class Makes {
     public function other(): object { return new static::$builder(); }
     public function test(mixed $x): bool { return $x instanceof static::$builder || $x instanceof self::$builder; }
 }
+
+// inline `@var`
+function inline_var(mixed $m, array $rows): void {
+    /** @var Thing $t */
+    $t = $m;
+    $t->run();
+    $t->nope(); // error: SPHP0009
+
+    /** @var Thing $row */
+    foreach ($rows as $row) {
+        $row->nope(); // error: SPHP0009
+    }
+
+    /** @var Thing $existing */
+    $existing->run();
+}
+
+// a member found with `method_exists` or `property_exists`
+function guarded_member(Thing $t): void {
+    if (method_exists($t, 'extra')) {
+        $t->extra();
+    }
+    $t->extra(); // error: SPHP0009
+    if (property_exists($t, 'more')) {
+        echo $t->more;
+    }
+}
+
+/**
+ * @template T
+ */
+class Builder1 {
+    /** @return self<T|int> */
+    public function withInt(): self { return $this; }
+    /** @return T */
+    public function get() { throw new \Exception(); }
+}
+
+/** @param Builder1<string> $b */
+function self_generic(Builder1 $b): void {
+    want_string($b->withInt()->get()); // error: SPHP0005
+    want_string($b->get());
+}

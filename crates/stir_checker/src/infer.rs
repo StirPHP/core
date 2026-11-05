@@ -44,6 +44,15 @@ impl Inference {
         if ty.is_error() {
             return;
         }
+        // a value outside the bound doesn't solve the template: it stays at its bound,
+        // and the argument gets reported against that
+        if let Some(bound) = env.param_bound(id)
+            && stir_types::free_params(&bound).is_empty()
+            && !stir_types::is_assignable(env, ty, &bound)
+            && !ty.is_untyped()
+        {
+            return;
+        }
         // a literal argument fits a solution from the expected type as it is
         if let Some(old) = self.solved.get(&id)
             && stir_types::is_assignable(env, ty, old)

@@ -110,6 +110,8 @@ pub struct Checker<'a, 'db> {
     in_ctor: bool,
     /// Calls to something with `@phpstan-assert`s, by the range of the call.
     call_targets: FxHashMap<TextRange, CallAsserts>,
+    /// `@var` tags of a `foreach` about to bind its variables.
+    pending_var_tags: Vec<(Option<SmolStr>, Ty)>,
     /// How the last checked call solved its templates.
     last_solved: FxHashMap<stir_types::ParamId, Ty>,
     /// Expression types.
@@ -241,6 +243,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             lower_cx: LowerCx::default(),
             in_ctor: false,
             call_targets: FxHashMap::default(),
+            pending_var_tags: Vec::new(),
             last_solved: FxHashMap::default(),
             types: FxHashMap::default(),
             defs: FxHashMap::default(),
@@ -520,8 +523,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                         None => local.maybe_undefined = true,
                     }
                 }
+                // a class or member known to exist on one path isn't on the other
+                frame.retain(|name, _| !name.starts_with('?') || o.contains_key(name));
                 for (name, ol) in o {
-                    if !frame.contains_key(name) {
+                    if !frame.contains_key(name) && !name.starts_with('?') {
                         let mut l = ol.clone();
                         if name.contains("->") || name.contains('[') || name.contains("::") {
                             l.ty = l.declared.clone();
@@ -590,7 +595,102 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     // ------------------------------------------------------------ statements
 
+    /// The `@var` tags of a statement's doc comment.
+    fn var_tags(&mut self, node: &SyntaxNode) -> Vec<(Option<SmolStr>, Ty)> {
+        let Some(token) = node.doc_comment() else {
+            return Vec::new();
+        };
+        if !token.text().contains("@var") && !token.text().contains("-var") {
+            return Vec::new();
+        }
+        let doc = stir_hir::doc::parse(token.text(), token.text_range().start());
+        let names: Vec<SmolStr> = self
+            .lower_cx
+            .generics
+            .iter()
+            .map(|(n, _)| n.clone())
+            .collect();
+        let scope = self.scope(node);
+        let aliases = self
+            .class
+            .as_ref()
+            .map(|c| c.def.aliases.clone())
+            .unwrap_or_default();
+        let cx = stir_hir::doc::DocCx {
+            scope: &scope,
+            type_params: &names,
+            aliases: &aliases,
+        };
+        let vars: Vec<(Option<SmolStr>, stir_hir::type_ref::TypeRef)> = doc
+            .vars()
+            .iter()
+            .map(|v| (v.name.as_ref().map(|n| n.name.clone()), cx.lower(&v.ty)))
+            .collect();
+        let mut out = Vec::new();
+        for (name, tr) in vars {
+            let mut sink = Vec::new();
+            let ty = self.ctx.lower(&tr, &self.lower_cx, &mut sink);
+            for e in sink {
+                self.error(e.range, e.code, e.message);
+                self.tag_level(2);
+            }
+            out.push((name, ty));
+        }
+        out
+    }
+
+    /// `@var` before a statement: what a variable holds from here on, whatever it looks like
+    /// to the checker. PHPStan takes this on trust, too.
+    fn apply_var_tags(&mut self, tags: &[(Option<SmolStr>, Ty)], assigned: Option<&str>) {
+        for (name, ty) in tags {
+            let target = name.as_deref().or(assigned);
+            let Some(target) = target else {
+                continue;
+            };
+            if ty.is_error() {
+                continue;
+            }
+            if let Some(l) = self.lookup_mut(target) {
+                l.ty = ty.clone();
+                l.declared = ty.clone();
+                l.maybe_undefined = false;
+            } else {
+                self.declare(
+                    target,
+                    ty.clone(),
+                    LocalKind::Variable,
+                    TextRange::default(),
+                );
+            }
+        }
+    }
+
     pub fn stmt(&mut self, node: &SyntaxNode) {
+        let tags = self.var_tags(node);
+        if tags.is_empty() {
+            return self.stmt_inner(node);
+        }
+        if node.kind() == FOREACH_STMT {
+            // about what the loop binds: applied when that's bound
+            self.pending_var_tags = tags;
+            return self.stmt_inner(node);
+        }
+        let assigned = (node.kind() == EXPR_STMT)
+            .then(|| exprs_of(node).into_iter().next())
+            .flatten()
+            .filter(|e| e.kind() == ASSIGN_EXPR)
+            .and_then(|e| e.children().next())
+            .filter(|l| l.kind() == VARIABLE_EXPR)
+            .map(|l| text_of(&l).trim_start_matches('$').to_owned());
+        let (after, before): (Vec<_>, Vec<_>) = tags.into_iter().partition(|(name, _)| {
+            assigned.is_some() && (name.is_none() || name.as_deref() == assigned.as_deref())
+        });
+        self.apply_var_tags(&before, None);
+        self.stmt_inner(node);
+        self.apply_var_tags(&after, assigned.as_deref());
+    }
+
+    fn stmt_inner(&mut self, node: &SyntaxNode) {
         match node.kind() {
             EXPR_STMT => {
                 if let Some(e) = exprs_of(node).first() {
@@ -641,8 +741,26 @@ impl<'a, 'db> Checker<'a, 'db> {
                 }
             }
             UNSET_STMT => {
-                for e in exprs_of(node) {
-                    self.expr(&e, None);
+                self.probing += 1;
+                let targets = exprs_of(node);
+                for e in &targets {
+                    self.expr(e, None);
+                }
+                self.probing -= 1;
+                for e in &targets {
+                    let Some(key) = self.place_key(e) else {
+                        continue;
+                    };
+                    self.forget_properties_of(&key);
+                    if e.kind() == VARIABLE_EXPR {
+                        for frame in &mut self.frames {
+                            frame.remove(key.as_str());
+                        }
+                    } else if e.kind() == INDEX_EXPR
+                        && let Some(base) = exprs_of(e).first().and_then(|b| self.place_key(b))
+                    {
+                        self.forget_properties_of(&base);
+                    }
                 }
             }
             DECLARE_STMT => {
@@ -821,6 +939,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
         }
         let es = exprs_of(node);
+        let tags = std::mem::take(&mut self.pending_var_tags);
         let bindings = |this: &mut Self| {
             let Some((key_ty, val_ty)) = subject.clone() else {
                 return;
@@ -834,6 +953,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                 [v] => this.bind_target(v, val_ty),
                 _ => {}
             }
+            let value = targets.last().filter(|v| v.kind() == VARIABLE_EXPR);
+            let value = value.map(|v| text_of(v).trim_start_matches('$').to_owned());
+            this.apply_var_tags(&tags, value.as_deref());
         };
         let entry = self.snapshot();
         let entry_dead = self.dead;
@@ -1726,6 +1848,28 @@ impl<'a, 'db> Checker<'a, 'db> {
                             Facts::default(),
                         );
                     }
+                    // what follows may rely on the member, whatever the type says
+                    "method_exists" | "property_exists" => {
+                        let member = args
+                            .get(1)
+                            .and_then(|a| exprs_of(a).into_iter().next())
+                            .filter(|e| e.kind() == STRING_LITERAL)
+                            .map(|e| unquote(&text_of(&e)).to_ascii_lowercase());
+                        let Some((key, member)) =
+                            first.and_then(|a| self.place_key(&a)).zip(member)
+                        else {
+                            return Default::default();
+                        };
+                        return (
+                            Facts {
+                                narrow: vec![(
+                                    SmolStr::new(format!("?has::{key}::{member}")),
+                                    Ty::lit_bool(true),
+                                )],
+                            },
+                            Facts::default(),
+                        );
+                    }
                     // what follows may rely on the class, whether this project has it or not
                     "class_exists" | "interface_exists" | "trait_exists" | "enum_exists" => {
                         let Some(arg) = first else {
@@ -1924,7 +2068,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         let lit = |this: &Self, n: &SyntaxNode| {
             this.types
                 .get(&n.text_range())
-                .is_some_and(|t| matches!(t.kind(), TyKind::Literal(_)))
+                .is_some_and(|t| matches!(t.kind(), TyKind::Literal(_) | TyKind::Null))
         };
         let (var, other) = if lit(self, a) { (b, a) } else { (a, b) };
         let Some(lt) = self.types.get(&other.text_range()).cloned() else {
@@ -1933,7 +2077,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         let Some((name, local)) = self.local_of(var) else {
             return Default::default();
         };
-        if !matches!(lt.kind(), TyKind::Literal(_)) {
+        if !matches!(lt.kind(), TyKind::Literal(_) | TyKind::Null) {
             // two values: if they're identical each is what the other can be
             if strict
                 && !lt.is_error()
@@ -2750,6 +2894,13 @@ impl<'a, 'db> Checker<'a, 'db> {
             return Ty::array(Ty::array_key(), Ty::mixed());
         }
         let (int, float) = (Ty::int(), Ty::float());
+        // something added to what may be an array may be an array
+        if op == PLUS && ((unknown(l) && is_array(r)) || (is_array(l) && unknown(r))) {
+            return Ty::array(Ty::array_key(), Ty::mixed());
+        }
+        if op == PLUS && unknown(l) && unknown(r) {
+            return Ty::untyped();
+        }
         if unknown(l) || unknown(r) {
             Ty::union([int, float])
         } else if is_int(l) && is_int(r) {
@@ -3817,6 +3968,69 @@ impl<'a, 'db> Checker<'a, 'db> {
             );
             return t;
         }
+        match ct.kind() {
+            TyKind::Union(ms) => {
+                // callable if each member is; a level 7 problem if only some are
+                let start = self.diags.len();
+                let mut results = Vec::new();
+                let mut any_ok = false;
+                let mut all_ok = true;
+                for m in ms.iter() {
+                    let before = self.diags.len();
+                    results.push(self.call_value(node, m, expected));
+                    let bad = self.diags[before..]
+                        .iter()
+                        .any(|d| d.code == codes::NOT_CALLABLE);
+                    any_ok |= !bad;
+                    all_ok &= !bad;
+                }
+                self.diags.truncate(start);
+                if !all_ok {
+                    self.error(
+                        node.text_range(),
+                        codes::NOT_CALLABLE,
+                        format!("`{ct}` is not callable"),
+                    );
+                    if any_ok {
+                        self.tag_partial_union();
+                    }
+                }
+                return Ty::union(results);
+            }
+            TyKind::Intersection(ms) => {
+                for m in ms.iter() {
+                    let before = self.diags.len();
+                    let t = self.call_value(node, m, expected);
+                    if self.diags.len() == before {
+                        return t;
+                    }
+                    self.diags.truncate(before);
+                }
+            }
+            TyKind::SelfType { class, .. } => {
+                return self.call_value(node, &class.clone(), expected);
+            }
+            TyKind::Param { .. } => {
+                let b = self.bound_of(ct);
+                if !matches!(b.kind(), TyKind::Param { .. }) {
+                    return self.call_value(node, &b, expected);
+                }
+                self.check_args_untyped(node);
+                return Ty::untyped();
+            }
+            // it's callable if it has `__invoke`, which only the value knows
+            TyKind::Object => {
+                self.error(
+                    node.text_range(),
+                    codes::NOT_CALLABLE,
+                    format!("`{ct}` is not callable"),
+                );
+                self.tag_level(7);
+                self.check_args_untyped(node);
+                return Ty::untyped();
+            }
+            _ => {}
+        }
         let fn_ty = match ct.kind() {
             TyKind::Callable { sig: Some(s), .. } => Some(s.clone()),
             TyKind::Class { name, args } => {
@@ -3856,6 +4070,8 @@ impl<'a, 'db> Checker<'a, 'db> {
                     && !matches!(ct.kind(), TyKind::Mixed)
                     && !ct.is_untyped()
                     && !php_callable_value(ct)
+                    // `Closure` itself takes anything
+                    && !matches!(ct.kind(), TyKind::Class { name, .. } if name.eq_ignore_ascii_case("Closure"))
                 {
                     self.error(
                         node.text_range(),
@@ -3931,6 +4147,9 @@ impl<'a, 'db> Checker<'a, 'db> {
             return Ty::untyped();
         };
         let name = text_of(&name_node);
+        if self.member_is_guarded(node, &name) {
+            return Ty::untyped();
+        }
         let start = self.diags.len();
         let t = self.member_type(&recv, &name, name_node.text_range());
         self.tag_unless_on_this(node, start);
@@ -4129,6 +4348,10 @@ impl<'a, 'db> Checker<'a, 'db> {
             return Ty::untyped();
         };
         let name = text_of(&name_node);
+        if self.member_is_guarded(&fetch, &name) {
+            self.check_args_untyped(node);
+            return Ty::untyped();
+        }
         let start = self.diags.len();
         let t = self.call_member(node, &recv, &name, name_node.text_range(), expected);
         self.tag_unless_on_this(&fetch, start);
@@ -4139,6 +4362,15 @@ impl<'a, 'db> Checker<'a, 'db> {
             self.forget_properties_of(&key);
         }
         if nullable { t.nullable() } else { t }
+    }
+
+    /// Did `method_exists()` or `property_exists()` find this member on this object?
+    fn member_is_guarded(&self, fetch: &SyntaxNode, name: &str) -> bool {
+        let Some(key) = exprs_of(fetch).first().and_then(|b| self.place_key(b)) else {
+            return false;
+        };
+        self.lookup(&format!("?has::{key}::{}", name.to_ascii_lowercase()))
+            .is_some()
     }
 
     /// Below level 2 PHPStan only checks members on `$this` (`checkThisOnly`).
@@ -4285,6 +4517,13 @@ impl<'a, 'db> Checker<'a, 'db> {
     }
 
     fn responds_to(&self, ty: &Ty, name: &str) -> bool {
+        if let TyKind::Intersection(ms) = ty.kind() {
+            return ms.iter().any(|m| self.responds_to(m, name));
+        }
+        if matches!(ty.kind(), TyKind::Param { .. }) {
+            let b = self.bound_of(ty);
+            return matches!(b.kind(), TyKind::Param { .. }) || self.responds_to(&b, name);
+        }
         let cls = class_of(ty);
         matches!(cls.kind(), TyKind::Class { .. })
             && (self.ctx.find_method(&cls, name).is_some()
@@ -4705,9 +4944,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                     .filter(|t| {
                         // a template of the call itself that nothing has solved says nothing
                         stir_types::free_params(t).iter().all(|id| {
-                            self.lower_cx.generics.iter().any(|(_, g)| {
-                                matches!(g.kind(), TyKind::Param { id: g, .. } if g == id)
-                            })
+                            self.lower_cx.generics.iter().any(
+                                |(_, g)| matches!(g.kind(), TyKind::Param { id: g, .. } if g == id),
+                            )
                         })
                     });
                 // what the callback is called with, if that says more than its own type
@@ -4778,23 +5017,56 @@ impl<'a, 'db> Checker<'a, 'db> {
     // ------------------------------------------------------------ match
 
     fn match_expr(&mut self, node: &SyntaxNode, expected: Option<&Ty>) -> Ty {
-        if let Some(subject) = exprs_of(node).first() {
+        let subject = exprs_of(node).into_iter().next();
+        if let Some(subject) = &subject {
             self.expr(subject, None);
         }
+        let by_true = subject.as_ref().is_some_and(is_true_literal);
         let mut result: Option<Ty> = None;
+        let mut ends = Vec::new();
         for arm in node.children_of(MATCH_ARM) {
+            // the arms are tried in turn, so each knows the ones before didn't match
+            let before_arm = self.snapshot();
+            let mut when_true: Option<Facts> = None;
             if let Some(conds) = arm.child(MATCH_CONDITIONS) {
                 for c in exprs_of(&conds) {
                     self.expr(&c, None);
+                    let (t, f) = if by_true {
+                        self.facts(&c)
+                    } else {
+                        subject
+                            .as_ref()
+                            .map(|s| self.literal_facts(s, &c, true))
+                            .unwrap_or_default()
+                    };
+                    when_true = Some(match when_true {
+                        Some(prev) => self.either(prev, t),
+                        None => t,
+                    });
+                    self.apply_facts(&f);
                 }
             }
+            let after_conds = self.snapshot();
+            if let Some(t) = &when_true {
+                self.restore_narrowing(&before_arm);
+                self.apply_facts(t);
+            }
             if let Some(body) = exprs_of(&arm).last() {
+                let dead = self.dead;
                 let t = self.expr(body, expected);
+                if !t.is_never() {
+                    ends.push(self.snapshot());
+                }
+                self.dead = dead;
                 result = Some(match result {
                     None => t,
                     Some(r) => stir_types::join(self.ctx, &r, &t),
                 });
             }
+            self.restore(&after_conds);
+        }
+        if let Some(state) = self.merge_states(ends) {
+            self.frames = state;
         }
         result.unwrap_or_else(Ty::never)
     }
