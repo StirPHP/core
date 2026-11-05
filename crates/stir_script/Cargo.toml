@@ -1,0 +1,17 @@
+[package]
+name = "stir_script"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The sandbox project scripts run in: a locked down Rhai engine"
+
+[dependencies]
+rhai = { version = "1.27.0", default-features = false, features = ["std", "sync", "no_time", "no_module", "no_closure", "no_custom_syntax", "only_i64", "internals"] }
+tracing.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+stacker = "0.1.25"
+
+[lints]
+workspace = true
