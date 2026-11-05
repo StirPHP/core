@@ -25,7 +25,7 @@ struct Diagnostic {
     #[serde(flatten)]
     span: Span,
     severity: &'static str,
-    code: &'static str,
+    code: String,
     message: String,
 }
 
@@ -103,7 +103,7 @@ impl Playground {
                     Severity::Warning => "warning",
                     Severity::Hint => "hint",
                 },
-                code: d.code,
+                code: d.code.to_string(),
                 message: d.message.clone(),
             })
             .collect();

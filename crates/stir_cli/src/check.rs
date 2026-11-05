@@ -203,12 +203,12 @@ async fn generate_baseline(
     print_notices(&loaded, &[]);
     let (ignorable, stuck): (Vec<_>, Vec<_>) = diagnostics
         .into_iter()
-        .partition(|d| stir_checker::levels::is_ignorable(d.code));
+        .partition(|d| stir_checker::levels::is_ignorable(&d.code));
 
     let mut entries: BTreeMap<(String, String), u32> = BTreeMap::new();
     for d in &ignorable {
         let file = baseline::relative_to(&stir_composer::normalize(&d.file), &dir);
-        *entries.entry((d.code.to_owned(), file)).or_default() += 1;
+        *entries.entry((d.code.to_string(), file)).or_default() += 1;
     }
     tokio::fs::create_dir_all(&dir).await?;
     tokio::fs::write(&target, baseline::render(&entries)).await?;
@@ -284,12 +284,12 @@ async fn collect_diagnostics(
     let mut diagnostics = check_files(loaded, &targets).await?;
     tracing::debug!(files = targets.len(), elapsed = ?start.elapsed(), "checked");
     diagnostics.sort_by(|a, b| {
-        (&a.file, a.range.start(), a.range.end(), a.severity, a.code).cmp(&(
+        (&a.file, a.range.start(), a.range.end(), a.severity, &a.code).cmp(&(
             &b.file,
             b.range.start(),
             b.range.end(),
             b.severity,
-            b.code,
+            &b.code,
         ))
     });
     Ok((diagnostics, targets.len()))
@@ -577,7 +577,7 @@ fn render_json(
                     Severity::Warning => "warning",
                     Severity::Hint => "hint",
                 },
-                "code": d.code,
+                "code": d.code.as_str(),
                 "message": d.message,
                 "labels": labels,
                 "notes": d.notes,

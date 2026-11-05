@@ -118,7 +118,7 @@ fn check_one(db: &RootDatabase, ws: Workspace, file: SourceFile, text: &str) -> 
             (
                 line_of(u32::from(d.range.start())),
                 sev.to_owned(),
-                d.code.to_owned(),
+                d.code.to_string(),
             )
         })
         .collect();

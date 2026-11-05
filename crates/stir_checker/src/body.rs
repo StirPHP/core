@@ -1770,7 +1770,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                 self.diags.extend(found.into_iter().filter(|d| {
                     // with one using class it's `method.notFound`, with another maybe
                     // `method.nonObject`: the same problem
-                    seen.insert((d.range, d.code.split('.').next().unwrap_or(d.code)))
+                    seen.insert((
+                        d.range,
+                        SmolStr::new(d.code.split('.').next().unwrap_or(&d.code)),
+                    ))
                 }));
             }
         }
@@ -5175,7 +5178,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         for d in &mut self.diags[start..] {
             if min_level(d) < 2
                 && matches!(
-                    d.code,
+                    d.code.as_str(),
                     codes::METHOD_NOT_FOUND
                         | codes::METHOD_PRIVATE
                         | codes::METHOD_PROTECTED

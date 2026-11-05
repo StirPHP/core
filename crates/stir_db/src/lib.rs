@@ -7,15 +7,16 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use smol_str::SmolStr;
 use stir_syntax::{Parse, TextRange};
 
 mod version;
 
 pub use version::{Availability, PhpVersion, PhpVersions};
 
-/// Marker trait for databases that can run StirPHP queries.
-#[salsa::db]
-pub trait Db: salsa::Database {}
+/// What StirPHP queries run against. Plain salsa, so that what's attached to the thread during a
+/// query (see [`attached`]) can run queries too.
+pub use salsa::Database as Db;
 
 /// The concrete database used by the CLI (and tests).
 #[salsa::db]
@@ -26,9 +27,6 @@ pub struct RootDatabase {
 
 #[salsa::db]
 impl salsa::Database for RootDatabase {}
-
-#[salsa::db]
-impl Db for RootDatabase {}
 
 /// Where a file comes from; affects which diagnostics are reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -49,6 +47,13 @@ pub struct SourceFile {
     pub text: String,
     #[returns(copy)]
     pub origin: FileOrigin,
+}
+
+/// Runs `f` with the database of the query this thread is in, if it's in one. For code called from
+/// a query that can't be handed the database, a script's native functions: what `f` reads is tracked
+/// as what the query depends on.
+pub fn attached<R>(f: impl FnOnce(&dyn Db) -> R) -> Option<R> {
+    salsa::with_attached_database(f)
 }
 
 /// The set of files that make up a program (sources, vendor and stubs), plus the
@@ -227,7 +232,7 @@ pub struct Diagnostic {
     pub range: TextRange,
     pub severity: Severity,
     /// Stable code: PHPStan's identifier if it has one for this, else `SPHP00xx`.
-    pub code: &'static str,
+    pub code: SmolStr,
     pub message: String,
     /// Secondary labelled ranges in the same file.
     pub labels: Vec<(TextRange, String)>,
@@ -250,13 +255,27 @@ impl Diagnostic {
             file: file.into(),
             range,
             severity: Severity::Error,
-            code,
+            code: SmolStr::new_static(code),
             message: message.into(),
             labels: Vec::new(),
             notes: Vec::new(),
             php_level: None,
             symbol: None,
         }
+    }
+
+    /// A diagnostic whose code isn't one of ours: the identifier a project's rule chose.
+    pub fn custom(
+        file: impl Into<PathBuf>,
+        range: TextRange,
+        severity: Severity,
+        code: impl Into<SmolStr>,
+        message: impl Into<String>,
+    ) -> Self {
+        let mut d = Diagnostic::error(file, range, "", message);
+        d.code = code.into();
+        d.severity = severity;
+        d
     }
 
     /// Says which name this is an unknown-symbol error about.

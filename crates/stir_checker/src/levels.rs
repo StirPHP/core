@@ -65,7 +65,7 @@ pub fn level_of(code: &str) -> u8 {
 
 /// The minimum rule level at which `d` is reported in a `.php` file.
 pub fn min_level(d: &Diagnostic) -> u8 {
-    d.php_level.unwrap_or_else(|| level_of(d.code))
+    d.php_level.unwrap_or_else(|| level_of(&d.code))
 }
 
 /// A leading `// @stirphp-nocheck` comment opts a file out of checking: only the
@@ -162,12 +162,12 @@ pub fn apply_ignore_rules(
         return Vec::new();
     }
     diags.retain(|d| {
-        if !is_ignorable(d.code) {
+        if !is_ignorable(&d.code) {
             return true;
         }
         let rule = applying.iter_mut().find(|(_, r, hidden)| {
             r.count.is_none_or(|n| *hidden < n)
-                && (r.identifiers.is_empty() || r.identifiers.iter().any(|i| i == d.code))
+                && (r.identifiers.is_empty() || r.identifiers.iter().any(|i| *i == d.code))
         });
         match rule {
             Some((_, _, hidden)) => {
@@ -471,7 +471,7 @@ pub fn apply_phpstan_ignores(
             .chain(text.match_indices('\n').map(|(i, _)| i + 1))
             .collect();
         diags.retain(|d| {
-            if !is_ignorable(d.code) {
+            if !is_ignorable(&d.code) {
                 return true;
             }
             let start = usize::from(d.range.start()).min(text.len());
@@ -479,7 +479,7 @@ pub fn apply_phpstan_ignores(
             match ignores.lines.get_mut(&line) {
                 Some(LineIgnore::All) => false,
                 Some(LineIgnore::Identifiers(listed)) => {
-                    match listed.iter().position(|i| i == d.code) {
+                    match listed.iter().position(|i| *i == d.code) {
                         Some(at) => {
                             listed.remove(at);
                             false
@@ -621,10 +621,10 @@ mod tests {
         rules: Vec<IgnoreRule>,
         file: &str,
         codes: &[&'static str],
-    ) -> (Vec<&'static str>, Vec<(u32, u32)>) {
+    ) -> (Vec<String>, Vec<(u32, u32)>) {
         let mut diags: Vec<_> = codes.iter().map(|c| diag(c, "m", file)).collect();
         let hits = apply_ignore_rules(&mut diags, Path::new(file), &IgnoreRules::new(rules));
-        (diags.iter().map(|d| d.code).collect(), hits)
+        (diags.iter().map(|d| d.code.to_string()).collect(), hits)
     }
 
     fn rule(identifier: &str, path: &str, count: Option<u32>) -> IgnoreRule {
@@ -727,7 +727,7 @@ mod tests {
             .iter()
             .map(|d| {
                 let line = starts.partition_point(|&s| s <= usize::from(d.range.start())) - 1;
-                (line, d.code.to_owned())
+                (line, d.code.to_string())
             })
             .collect()
     }

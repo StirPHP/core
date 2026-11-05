@@ -190,7 +190,7 @@ fn lsp_diagnostic(
             Severity::Warning => DiagnosticSeverity::WARNING,
             Severity::Hint => DiagnosticSeverity::HINT,
         }),
-        code: Some(NumberOrString::String(d.code.to_owned())),
+        code: Some(NumberOrString::String(d.code.to_string())),
         source: Some("stirphp".into()),
         message,
         related_information: related,
