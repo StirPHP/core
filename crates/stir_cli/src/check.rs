@@ -38,6 +38,10 @@ pub struct CheckArgs {
     /// configuration, and make `parameters.stirphp.baseline` name it.
     #[arg(long, value_name = "PATH", num_args = 0..=1)]
     pub generate_baseline: Option<Option<PathBuf>>,
+    /// Run the project's PHPStan too, and show what it reports with ours, without the same error
+    /// twice. This runs the project's code: PHPStan, and what its configuration loads.
+    #[arg(long, conflicts_with = "generate_baseline")]
+    pub with_phpstan: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -75,12 +79,27 @@ pub async fn run(args: CheckArgs) -> anyhow::Result<ExitCode> {
         vendor = loaded.vendor_count,
         "loaded files"
     );
-    let (diagnostics, checked) = collect_diagnostics(&loaded, &filters).await?;
+    let (mut diagnostics, checked) = collect_diagnostics(&loaded, &filters).await?;
     print_notices(&loaded, &filters);
     if !args.no_vendor {
         print_unmatched_baseline(&loaded, &filters, &cwd);
     }
-    let texts = source_texts(&loaded);
+    let mut texts = source_texts(&loaded);
+    let phpstan = if args.with_phpstan {
+        add_phpstan(
+            &args,
+            &project,
+            &loaded,
+            &filters,
+            &mut diagnostics,
+            &texts,
+            &cwd,
+        )
+        .await
+    } else {
+        PhpstanOutcome::default()
+    };
+    texts.extend(phpstan.texts.iter().map(|(p, t)| (p.as_path(), t.as_str())));
     let shown = &diagnostics[..args.max_errors.unwrap_or(usize::MAX).min(diagnostics.len())];
 
     let summary = Summary::new(&diagnostics, checked);
@@ -99,11 +118,114 @@ pub async fn run(args: CheckArgs) -> anyhow::Result<ExitCode> {
     }
     stdout.flush()?;
 
-    Ok(if summary.errors > 0 {
+    Ok(if summary.errors > 0 || phpstan.failed {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
     })
+}
+
+/// What's left of a run of PHPStan, once its errors are with ours.
+#[derive(Default)]
+struct PhpstanOutcome {
+    /// It's asked for by name, so not getting an answer from it fails the check.
+    failed: bool,
+    /// The files it reports that we don't check.
+    texts: HashMap<PathBuf, String>,
+}
+
+/// `--with-phpstan`: runs the project's PHPStan and adds what it reports to `diagnostics`, unless
+/// we report it too. Nothing of ours applies to what it reports: it has its own baseline and ignore
+/// rules, and has applied them. What's said about the run goes to stderr, out of the JSON.
+async fn add_phpstan(
+    args: &CheckArgs,
+    project: &Project,
+    loaded: &Loaded,
+    filters: &[PathBuf],
+    diagnostics: &mut Vec<Diagnostic>,
+    texts: &HashMap<&Path, &str>,
+    cwd: &Path,
+) -> PhpstanOutcome {
+    use stir_phpstan::{Located, Wanted};
+
+    let failed = |why: String| {
+        eprintln!("error: PHPStan: {why}");
+        PhpstanOutcome {
+            failed: true,
+            texts: HashMap::new(),
+        }
+    };
+    let mut run = project.config.phpstan.clone();
+    if let Some(level) = args.level {
+        run.level = Some(level.to_string());
+    }
+    // our own file has `parameters.stirphp`, which PHPStan would refuse unless it's declared
+    if run.configuration.is_none()
+        && let Some(file) = args
+            .configuration
+            .as_ref()
+            .filter(|f| f.file_name().is_none_or(|n| n != stir_project::CONFIG_FILE))
+    {
+        run.configuration = Some(cwd.join(file));
+    }
+    let invocation =
+        match stir_phpstan::locate(&project.root, &loaded.vendor_dir, &run, Wanted::Required) {
+            Located::Off => return failed("it's off".to_owned()),
+            Located::Missing(why) => return failed(why),
+            Located::Found(invocation) => invocation,
+        };
+    tracing::debug!(command = invocation.shown(), "running PHPStan");
+    let result = tokio::select! {
+        result = stir_phpstan::run(&invocation, std::future::pending()) => result,
+        () = stir_phpstan::signalled() => {
+            stir_phpstan::kill_all();
+            std::process::exit(130);
+        }
+    };
+    let report = match result {
+        Ok(report) => report,
+        Err(failure) => {
+            if let Some(output) = failure.output() {
+                tracing::debug!(output, "PHPStan's output");
+            }
+            return failed(failure.describe(&invocation));
+        }
+    };
+
+    let mut outcome = PhpstanOutcome::default();
+    for error in &report.errors {
+        eprintln!("error: PHPStan: {}", error.trim());
+        outcome.failed = true;
+    }
+    let (mut reported, mut repeated) = (0, 0);
+    let mut added = Vec::new();
+    for (path, errors) in &report.files {
+        let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+        if !filters.is_empty() && !filters.iter().any(|f| path.starts_with(f)) {
+            continue;
+        }
+        let text = match texts.get(path.as_path()) {
+            Some(text) => (*text).to_owned(),
+            None => std::fs::read_to_string(&path).unwrap_or_default(),
+        };
+        let ours: Vec<Diagnostic> = diagnostics
+            .iter()
+            .filter(|d| d.file == path)
+            .cloned()
+            .collect();
+        let theirs = stir_phpstan::diagnostics(&path, &text, errors);
+        reported += theirs.len();
+        let theirs = stir_phpstan::merge(&ours, theirs, &text);
+        repeated += errors.len() - theirs.len();
+        added.extend(theirs);
+        if !texts.contains_key(path.as_path()) {
+            outcome.texts.insert(path, text);
+        }
+    }
+    diagnostics.extend(added);
+    sort_diagnostics(diagnostics);
+    eprintln!("PHPStan reported {reported}, of which {repeated} are shown as ours.");
+    outcome
 }
 
 /// What the user should know about the project, on stderr so that it stays out of the JSON.
@@ -291,6 +413,11 @@ async fn collect_diagnostics(
         &targets,
     ));
     tracing::debug!(files = targets.len(), elapsed = ?start.elapsed(), "checked");
+    sort_diagnostics(&mut diagnostics);
+    Ok((diagnostics, targets.len()))
+}
+
+fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {
     diagnostics.sort_by(|a, b| {
         (&a.file, a.range.start(), a.range.end(), a.severity, &a.code).cmp(&(
             &b.file,
@@ -300,7 +427,6 @@ async fn collect_diagnostics(
             &b.code,
         ))
     });
-    Ok((diagnostics, targets.len()))
 }
 
 /// Path → text of every project source and script, for rendering diagnostics.
@@ -489,7 +615,13 @@ fn render_human(
             Severity::Warning => ("warning", Color::Yellow, Color::Yellow),
             Severity::Hint => ("hint", Color::Fixed(147), Color::Fixed(147)),
         };
-        let kind_name = format!("{name}[{}]", d.code);
+        // what PHPStan reports may have no identifier
+        let code = if d.code.is_empty() {
+            "phpstan"
+        } else {
+            d.code.as_str()
+        };
+        let kind_name = format!("{name}[{code}]");
         let primary = span(d.range, text);
         let mut report = Report::build(
             ReportKind::Custom(&kind_name, kind_color),
@@ -512,6 +644,9 @@ fn render_human(
         }
         for note in &d.notes {
             report.add_note(note);
+        }
+        if d.from_phpstan {
+            report.add_note("reported by PHPStan");
         }
         if let Err(error) = report.finish().write(&mut cache, &mut out) {
             tracing::warn!(%error, "failed to render diagnostic");
@@ -579,7 +714,7 @@ fn render_json(
                     })
                 })
                 .collect();
-            serde_json::json!({
+            let mut item = serde_json::json!({
                 "file": display_path(&d.file, cwd),
                 "line": line,
                 "column": column,
@@ -594,7 +729,11 @@ fn render_json(
                 "message": d.message,
                 "labels": labels,
                 "notes": d.notes,
-            })
+            });
+            if d.from_phpstan {
+                item["source"] = "phpstan".into();
+            }
+            item
         })
         .collect();
     serde_json::Value::Array(items)

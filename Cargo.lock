@@ -1478,6 +1478,7 @@ dependencies = [
  "stir_fmt",
  "stir_lsp",
  "stir_neon",
+ "stir_phpstan",
  "stir_project",
  "stir_syntax",
  "tempfile",

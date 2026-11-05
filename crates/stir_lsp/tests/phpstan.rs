@@ -508,17 +508,12 @@ async fn results_wait_for_a_save_and_stale_lines_are_not_shown() {
     save(&mut c, &uri(&other)).await;
     wait_until("it runs", || p.runs() == 3).await;
     c.pump(Duration::from_millis(400)).await;
-    while let Some(i) = c.backlog.iter().position(|m| {
+    let shown = c.backlog.iter().find(|m| {
         m["method"] == "textDocument/publishDiagnostics"
             && m["params"]["uri"] == main.as_str()
-            && m["params"]["diagnostics"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|d| d["source"] == "phpstan")
-    }) {
-        panic!("shown for other text: {}", c.backlog[i]);
-    }
+            && !from_phpstan(m["params"]["diagnostics"].as_array().unwrap()).is_empty()
+    });
+    assert_eq!(shown, None, "shown for other text");
 
     // a file outside the project isn't a reason to run
     let outside = p.root.join("vendor/x.php");

@@ -26,9 +26,11 @@ pub async fn run_stdio() {
     let (service, socket) = LspService::new(server::Server::new);
     let serve = Server::new(tokio::io::stdin(), tokio::io::stdout(), socket).serve(service);
     tokio::select! {
-        () = serve => {}
-        () = stir_phpstan::signalled() => {}
+        () = serve => stir_phpstan::kill_all(),
+        () = stir_phpstan::signalled() => {
+            stir_phpstan::kill_all();
+            // not by returning: the runtime would wait for what's reading stdin, forever
+            std::process::exit(0);
+        }
     }
-    // however it ends, nothing of ours stays behind
-    stir_phpstan::kill_all();
 }
