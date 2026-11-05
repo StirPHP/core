@@ -31,17 +31,6 @@ pub struct TypeParamDef {
     pub range: TextRange,
 }
 
-/// How a parameter binding may be used.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Binding {
-    /// StirPHP `name: T` — immutable.
-    Val,
-    /// StirPHP `mut name: T`.
-    Mut,
-    /// PHP `$name` (always mutable).
-    Php,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Visibility {
     #[default]
@@ -59,14 +48,11 @@ pub struct MemberMods {
     pub is_abstract: bool,
     pub is_final: bool,
     pub is_readonly: bool,
-    pub is_override: bool,
-    pub is_open: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParamDef {
     pub name: SmolStr,
-    pub binding: Binding,
     /// The native type (for stubs, the `#[LanguageLevelTypeAware]` one).
     pub ty: Option<TypeRef>,
     /// The PHPDoc `@param` type; merged with `ty` by the checker.
@@ -76,7 +62,7 @@ pub struct ParamDef {
     pub default_is_null: bool,
     pub variadic: bool,
     pub by_ref: bool,
-    /// Constructor promotion: `private int $x` / StirPHP `val x: Int` in a primary constructor.
+    /// Constructor promotion: `private int $x`.
     pub promoted: Option<PromotedProperty>,
     pub range: TextRange,
     pub name_range: TextRange,
@@ -86,7 +72,7 @@ pub struct ParamDef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromotedProperty {
     pub mods: MemberMods,
-    /// `val` (immutable) vs `var $x` (mutable); PHP promotion is mutable unless readonly.
+    /// Promotion is mutable unless readonly.
     pub immutable: bool,
 }
 
@@ -124,7 +110,6 @@ pub struct FunctionDef {
     pub name: Fqn,
     pub scope: u32,
     pub sig: Signature,
-    pub expr_body: bool,
     pub doc: Option<DocText>,
     pub ptr: NodePtr,
     pub name_range: TextRange,
@@ -136,7 +121,6 @@ pub enum ClassKind {
     Interface,
     Trait,
     Enum,
-    Record,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -144,16 +128,6 @@ pub struct ClassMods {
     pub is_abstract: bool,
     pub is_final: bool,
     pub is_readonly: bool,
-    pub is_open: bool,
-    pub is_sealed: bool,
-    pub is_data: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SupertypeRef {
-    pub ty: TypeRef,
-    /// `Base(args)` in a StirPHP supertype list: the class being extended.
-    pub ctor_call: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,7 +140,7 @@ pub struct PropertyDef {
     /// Declared by a class-level `@property` tag.
     pub magic: bool,
     pub mods: MemberMods,
-    /// StirPHP `val` property.
+    /// Can't be written: a `@property-read` tag, or `val x`, which the parser still accepts.
     pub immutable: bool,
     pub has_default: bool,
     pub doc: Option<DocText>,
@@ -183,7 +157,6 @@ pub struct MethodDef {
     pub has_body: bool,
     /// Declared by a class-level `@method` tag (its `ptr` is the class node).
     pub magic: bool,
-    pub expr_body: bool,
     pub doc: Option<DocText>,
     pub ptr: NodePtr,
     pub name_range: TextRange,
@@ -208,14 +181,6 @@ pub struct EnumCaseDef {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecordFieldDef {
-    pub name: SmolStr,
-    pub ty: TypeRef,
-    pub has_default: bool,
-    pub range: TextRange,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassDef {
     pub kind: ClassKind,
     pub name: Fqn,
@@ -224,30 +189,17 @@ pub struct ClassDef {
     pub type_params: Vec<TypeParamDef>,
     pub extends: Vec<TypeRef>,
     pub implements: Vec<TypeRef>,
-    /// StirPHP `: Base(), Iface` list (resolved to extends/implements later).
-    pub supertypes: Vec<SupertypeRef>,
-    pub primary_ctor: Option<Vec<ParamDef>>,
     pub enum_backing: Option<TypeRef>,
     pub properties: Vec<PropertyDef>,
     pub methods: Vec<MethodDef>,
     pub consts: Vec<ClassConstDef>,
     pub cases: Vec<EnumCaseDef>,
-    pub fields: Vec<RecordFieldDef>,
     pub traits: Vec<TypeRef>,
     /// `@phpstan-type` / `@psalm-type` aliases declared on the class (for
     /// `@phpstan-import-type` in other classes).
     pub type_aliases: Vec<(SmolStr, TypeRef)>,
     pub doc: Option<DocText>,
     pub ptr: NodePtr,
-    pub name_range: TextRange,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeAliasDef {
-    pub name: Fqn,
-    pub scope: u32,
-    pub type_params: Vec<TypeParamDef>,
-    pub ty: TypeRef,
     pub name_range: TextRange,
 }
 
@@ -266,7 +218,6 @@ pub struct FileItems {
     pub scopes: Vec<(TextSize, Arc<Scope>)>,
     pub functions: Vec<FunctionDef>,
     pub classes: Vec<ClassDef>,
-    pub type_aliases: Vec<TypeAliasDef>,
     pub consts: Vec<ConstDef>,
     pub strict_types: bool,
 }
@@ -398,8 +349,7 @@ impl Lowerer {
                 }
             }
             FUNCTION_DECL => self.function(node),
-            CLASS_DECL | INTERFACE_DECL | TRAIT_DECL | ENUM_DECL | RECORD_DECL => self.class(node),
-            TYPEALIAS_DECL => self.type_alias(node),
+            CLASS_DECL | INTERFACE_DECL | TRAIT_DECL | ENUM_DECL => self.class(node),
             CONST_DECL => {
                 if self.attrs(node).unavailable {
                     return;
@@ -489,22 +439,7 @@ impl Lowerer {
         let Some(list) = node.child(TYPE_PARAM_LIST) else {
             return Vec::new();
         };
-        let mut out = self.type_params_from_list(&list, outer);
-        let names = names_of(&out, outer);
-        // `where T of Bound` clauses
-        if let Some(wc) = node.child(WHERE_CLAUSE) {
-            for pred in wc.children_of(WHERE_PREDICATE) {
-                let Some(name) = pred.name_text() else {
-                    continue;
-                };
-                if let Some(tp) = out.iter_mut().find(|t| t.name == name)
-                    && let Some(ty) = first_type(&pred)
-                {
-                    tp.bound = Some(self.ctx(&names).lower(&ty));
-                }
-            }
-        }
-        out
+        self.type_params_from_list(&list, outer)
     }
 
     fn signature(
@@ -519,19 +454,7 @@ impl Lowerer {
         for list in node.children_of(TYPE_PARAM_LIST) {
             type_params.extend(self.type_params_from_list(&list, outer));
         }
-        if let Some(wc) = node.child(WHERE_CLAUSE) {
-            let names = names_of(&type_params, outer);
-            for pred in wc.children_of(WHERE_PREDICATE) {
-                let Some(name) = pred.name_text() else {
-                    continue;
-                };
-                if let Some(tp) = type_params.iter_mut().find(|t| t.name == name)
-                    && let Some(ty) = first_type(&pred)
-                {
-                    tp.bound = Some(self.ctx(&names).lower(&ty));
-                }
-            }
-        }
+
         if let Some(doc) = doc {
             let extra = doc::templates(doc, &type_params, outer, self.cur_scope(), &self.aliases);
             type_params.extend(extra);
@@ -564,7 +487,6 @@ impl Lowerer {
         {
             params.push(ParamDef {
                 name: SmolStr::new("__args"),
-                binding: Binding::Php,
                 ty: None,
                 doc_ty: None,
                 has_default: true,
@@ -685,13 +607,6 @@ impl Lowerer {
         let has_mods = p.child(MODIFIERS).is_some();
         let is_val = p.has_ident("val");
         let is_var_kw = p.has_token(VAR_KW);
-        let binding = if p.has_ident("mut") || (p.has_token(AMP) && p.token(VARIABLE).is_none()) {
-            Binding::Mut
-        } else if var.is_some() {
-            Binding::Php
-        } else {
-            Binding::Val
-        };
         let promoted = if ctor && (has_mods || is_val || is_var_kw) {
             Some(PromotedProperty {
                 immutable: is_val || mods.is_readonly,
@@ -702,7 +617,6 @@ impl Lowerer {
         };
         ParamDef {
             name,
-            binding,
             ty: first_type(p).map(|t| self.ctx(names).lower(&t)),
             doc_ty: None,
             has_default: p.has_token(EQ),
@@ -744,28 +658,8 @@ impl Lowerer {
             name: Fqn::join(&self.scope.namespace, &name),
             scope: self.scope_id(),
             sig,
-            expr_body: node.child(FUNCTION_BODY).is_some(),
             doc: doc_of(node),
             ptr: NodePtr::new(node),
-            name_range: name_node.text_range(),
-        });
-    }
-
-    fn type_alias(&mut self, node: &SyntaxNode) {
-        let Some(name_node) = node.child(NAME) else {
-            return;
-        };
-        let type_params = self.type_params(node, &[]);
-        let names = names_of(&type_params, &[]);
-        let ty = match first_type(node) {
-            Some(t) => self.ctx(&names).lower(&t),
-            None => return,
-        };
-        self.out.type_aliases.push(TypeAliasDef {
-            name: Fqn::join(&self.scope.namespace, name_node.text().to_string().trim()),
-            scope: self.scope_id(),
-            type_params,
-            ty,
             name_range: name_node.text_range(),
         });
     }
@@ -804,8 +698,7 @@ impl Lowerer {
             CLASS_DECL => ClassKind::Class,
             INTERFACE_DECL => ClassKind::Interface,
             TRAIT_DECL => ClassKind::Trait,
-            ENUM_DECL => ClassKind::Enum,
-            _ => ClassKind::Record,
+            _ => ClassKind::Enum,
         };
         let mut mods = ClassMods::default();
         if let Some(m) = node.child(MODIFIERS) {
@@ -814,12 +707,6 @@ impl Lowerer {
                     ABSTRACT_KW => mods.is_abstract = true,
                     FINAL_KW => mods.is_final = true,
                     READONLY_KW => mods.is_readonly = true,
-                    IDENT => match t.text() {
-                        "open" => mods.is_open = true,
-                        "sealed" => mods.is_sealed = true,
-                        "data" => mods.is_data = true,
-                        _ => {}
-                    },
                     _ => {}
                 }
             }
@@ -853,24 +740,6 @@ impl Lowerer {
                 }
             }
         }
-        let supertypes = node
-            .child(SUPERTYPE_LIST)
-            .map(|l| {
-                l.children_of(SUPERTYPE)
-                    .iter()
-                    .filter_map(|s| {
-                        Some(SupertypeRef {
-                            ty: ctx.lower(&first_type(s)?),
-                            ctor_call: s.child(ARG_LIST).is_some(),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let primary_ctor = node
-            .child(PRIMARY_CTOR)
-            .and_then(|c| c.child(PARAM_LIST))
-            .map(|pl| self.params(&pl, &names, true, None));
         let enum_backing = if kind == ClassKind::Enum {
             node.children()
                 .find(|c| is_type_node(c.kind()))
@@ -886,33 +755,18 @@ impl Lowerer {
             type_params,
             extends,
             implements,
-            supertypes,
-            primary_ctor,
             enum_backing,
             properties: Vec::new(),
             methods: Vec::new(),
             consts: Vec::new(),
             cases: Vec::new(),
-            fields: Vec::new(),
             traits: Vec::new(),
             type_aliases,
             doc: doc_of(node),
             ptr: NodePtr::new(node),
             name_range: name_node.text_range(),
         };
-        if kind == ClassKind::Record {
-            for f in node.children_of(RECORD_FIELD) {
-                let (Some(name), Some(ty)) = (f.name_text(), first_type(&f)) else {
-                    continue;
-                };
-                class.fields.push(RecordFieldDef {
-                    name: SmolStr::new(name),
-                    ty: ctx.lower(&ty),
-                    has_default: f.has_token(EQ),
-                    range: f.text_range(),
-                });
-            }
-        }
+
         if let Some(body) = node.child(CLASS_BODY) {
             for member in body.children() {
                 self.member(&member, &mut class, &names);
@@ -978,7 +832,6 @@ impl Lowerer {
                         .iter()
                         .map(|mp| ParamDef {
                             name: mp.name.name.clone(),
-                            binding: Binding::Php,
                             ty: None,
                             doc_ty: mp.ty.as_ref().map(|t| dcx.lower(t)),
                             has_default: mp.default.is_some(),
@@ -1007,7 +860,6 @@ impl Lowerer {
                         },
                         has_body: true,
                         magic: true,
-                        expr_body: false,
                         doc: None,
                         ptr,
                         name_range: m.name.range,
@@ -1039,8 +891,7 @@ impl Lowerer {
                     mods,
                     sig,
                     magic: false,
-                    has_body: m.child(BLOCK).is_some() || m.child(FUNCTION_BODY).is_some(),
-                    expr_body: m.child(FUNCTION_BODY).is_some(),
+                    has_body: m.child(BLOCK).is_some(),
                     doc: doc_of(m),
                     ptr: NodePtr::new(m),
                     name_range: name_node.text_range(),
@@ -1059,7 +910,7 @@ impl Lowerer {
                         (None, Some(n)) => SmolStr::new(n),
                         _ => continue,
                     };
-                    // StirPHP puts the type inside the element (`val x: Int`).
+                    // `val x: int`, which the parser still accepts, has it inside the element.
                     let ty = ty
                         .clone()
                         .or_else(|| first_type(&elem).map(|t| self.ctx(names).lower(&t)));
@@ -1174,7 +1025,6 @@ pub fn is_type_node(kind: SyntaxKind) -> bool {
             | PAREN_TYPE
             | FUNCTION_TYPE
             | LITERAL_TYPE
-            | RECORD_TYPE
     )
 }
 
@@ -1228,8 +1078,6 @@ fn member_mods(m: &SyntaxNode) -> MemberMods {
             ABSTRACT_KW => mods.is_abstract = true,
             FINAL_KW => mods.is_final = true,
             READONLY_KW => mods.is_readonly = true,
-            IDENT if t.text() == "override" => mods.is_override = true,
-            IDENT if t.text() == "open" => mods.is_open = true,
             _ => {}
         }
         i += 1;

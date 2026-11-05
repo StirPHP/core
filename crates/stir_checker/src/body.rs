@@ -9,7 +9,7 @@ use stir_db::{Diagnostic, Severity, SourceFile};
 use stir_hir::ast::NodeExt;
 use stir_hir::name::Scope;
 use stir_hir::type_ref::{parse_int, unquote};
-use stir_hir::{Binding, ClassKind, FileItems, Visibility};
+use stir_hir::{ClassKind, FileItems, Visibility};
 use stir_syntax::{SyntaxKind, SyntaxKind::*, SyntaxNode, SyntaxToken, TextRange};
 use stir_types::{Family, LitValue, Ty, TyKind};
 
@@ -20,15 +20,11 @@ use crate::typed::{Def, MemberKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalKind {
-    /// `val x`
-    Val,
-    /// `var $x`
-    Var,
     /// A function parameter.
-    Param(Binding),
+    Param,
     /// `$this`
     This,
-    /// An implicitly declared PHP variable.
+    /// A variable, or a property path that narrowing tracks.
     Php,
     /// A `foreach` / `catch` binding.
     Loop,
@@ -36,13 +32,7 @@ pub enum LocalKind {
 
 impl LocalKind {
     fn mutable(self) -> bool {
-        matches!(
-            self,
-            LocalKind::Var
-                | LocalKind::Php
-                | LocalKind::Loop
-                | LocalKind::Param(Binding::Mut | Binding::Php)
-        )
+        self != LocalKind::This
     }
 }
 
@@ -1029,7 +1019,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             if p.variadic {
                 ty = Ty::php_list(ty);
             }
-            self.declare(&p.name, ty, LocalKind::Param(p.binding), p.range);
+            self.declare(&p.name, ty, LocalKind::Param, p.range);
         }
         self.fns.push(FnCx {
             ret: sig.ret.clone(),
@@ -1432,7 +1422,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         let local = Local {
             ty: ty.clone(),
             declared: ty,
-            kind: LocalKind::Var,
+            kind: LocalKind::Php,
             range: node.text_range(),
         };
         // the outermost frame, so it outlives the block it was narrowed in
@@ -2272,7 +2262,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                             Local {
                                 ty: assigned,
                                 declared: declared.clone(),
-                                kind: LocalKind::Var,
+                                kind: LocalKind::Php,
                                 range: lhs.text_range(),
                             },
                         );
@@ -2414,34 +2404,32 @@ impl<'a, 'db> Checker<'a, 'db> {
         self.lookup(&n).map(|l| l.declared.clone())
     }
 
-    /// Writes to `val`/readonly properties and read-only collections.
+    /// Writes to readonly properties.
     fn check_assign_target_writable(&mut self, lhs: &SyntaxNode) {
-        match lhs.kind() {
-            PROPERTY_FETCH_EXPR => {
-                let es = exprs_of(lhs);
-                let Some(base) = es.first() else { return };
-                let Some(bt) = self.types.get(&base.text_range()).cloned() else {
-                    return;
-                };
-                let Some(name) = lhs.child(SyntaxKind::NAME).map(|n| text_of(&n)) else {
-                    return;
-                };
-                let bt = strip_platform(&stir_types::without_null(&bt));
-                if let Some(p) = self.ctx.find_property(&class_of(&bt), &name)
-                    && p.immutable
-                {
-                    let in_own_ctor =
-                        self.in_ctor && self.class.as_ref().is_some_and(|c| c.key == p.class.key);
-                    if !in_own_ctor {
-                        self.error(
-                            lhs.text_range(),
-                            codes::REASSIGN_IMMUTABLE,
-                            format!("property `{name}` is immutable"),
-                        );
-                    }
-                }
+        if lhs.kind() != PROPERTY_FETCH_EXPR {
+            return;
+        }
+        let es = exprs_of(lhs);
+        let Some(base) = es.first() else { return };
+        let Some(bt) = self.types.get(&base.text_range()).cloned() else {
+            return;
+        };
+        let Some(name) = lhs.child(SyntaxKind::NAME).map(|n| text_of(&n)) else {
+            return;
+        };
+        let bt = strip_platform(&stir_types::without_null(&bt));
+        if let Some(p) = self.ctx.find_property(&class_of(&bt), &name)
+            && p.immutable
+        {
+            let in_own_ctor =
+                self.in_ctor && self.class.as_ref().is_some_and(|c| c.key == p.class.key);
+            if !in_own_ctor {
+                self.error(
+                    lhs.text_range(),
+                    codes::REASSIGN_IMMUTABLE,
+                    format!("property `{name}` is immutable"),
+                );
             }
-            _ => {}
         }
     }
 
@@ -2760,17 +2748,6 @@ impl<'a, 'db> Checker<'a, 'db> {
             TyKind::Union(ms) | TyKind::Intersection(ms) => {
                 for m in ms.iter() {
                     self.variance_walk(m, input, invariant, params, range, out);
-                }
-            }
-            TyKind::Record(r) => {
-                for f in &r.fields {
-                    // records are copied by value: fields are covariant
-                    self.variance_walk(&f.ty, input, invariant, params, range, out);
-                }
-            }
-            TyKind::RecordRef { args, .. } => {
-                for a in args {
-                    self.variance_walk(a, input, invariant, params, range, out);
                 }
             }
             _ => {}
@@ -3120,7 +3097,6 @@ impl<'a, 'db> Checker<'a, 'db> {
                             optional: p.kind == stir_types::ParamKind::Optional,
                             variadic: p.kind == stir_types::ParamKind::Variadic,
                             by_ref: false,
-                            binding: Binding::Val,
                             range: node.text_range(),
                         })
                         .collect(),
@@ -3218,38 +3194,13 @@ impl<'a, 'db> Checker<'a, 'db> {
     }
 
     fn member_type(&mut self, recv: &Ty, name: &str, range: TextRange) -> Ty {
-        let recv = &stir_types::unfold(self.ctx, &self.bound_of(recv));
+        let recv = &self.bound_of(recv);
         if recv.is_union() {
             return self.union_member_type(recv, name, range);
         }
         match recv.kind() {
             TyKind::Error => Ty::error(),
             TyKind::Nothing | TyKind::Never => Ty::nothing(),
-            TyKind::Record(r) => match r.field(name) {
-                Some(f) => {
-                    if let Some(rn) = &r.name {
-                        self.def(
-                            range,
-                            Def::Member {
-                                class: SmolStr::new(
-                                    rn.trim_start_matches('\\').to_ascii_lowercase(),
-                                ),
-                                kind: MemberKind::Field,
-                                name: SmolStr::new(name),
-                            },
-                        );
-                    }
-                    f.ty.clone()
-                }
-                None => {
-                    self.error(
-                        range,
-                        codes::UNDEFINED_MEMBER,
-                        format!("`{recv}` has no field `{name}`"),
-                    );
-                    Ty::error()
-                }
-            },
             TyKind::Class { .. } | TyKind::SelfType { .. } | TyKind::Intersection(_) => {
                 let cls = class_of(recv);
                 match self.ctx.find_property(&cls, name) {
@@ -3565,15 +3516,10 @@ impl<'a, 'db> Checker<'a, 'db> {
         match self.ctx.class(fqn.as_str()) {
             Some(c) => {
                 self.def(node.text_range(), Def::Class(c.key.clone()));
-                if c.kind() == ClassKind::Record {
-                    self.ctx
-                        .record_ty(&c, c.params.iter().map(|_| Ty::nothing()).collect())
-                } else {
-                    Ty::class(
-                        c.name.clone(),
-                        c.params.iter().map(|p| p.ty.clone()).collect(),
-                    )
-                }
+                Ty::class(
+                    c.name.clone(),
+                    c.params.iter().map(|p| p.ty.clone()).collect(),
+                )
             }
             None => {
                 self.error(
@@ -3769,13 +3715,6 @@ impl<'a, 'db> Checker<'a, 'db> {
             return Ty::any_platform();
         };
         let TyKind::Class { name, .. } = cls.kind() else {
-            if let TyKind::Record(_) = cls.kind() {
-                self.error(
-                    target.text_range(),
-                    codes::INSTANTIATION,
-                    "records are created with a literal: `Name { field = value }`",
-                );
-            }
             self.check_args_untyped(node);
             return Ty::error();
         };
@@ -3791,7 +3730,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     format!("`{}` can't be instantiated", model.name),
                 );
             }
-            _ if model.def.mods.is_abstract || model.def.mods.is_sealed => {
+            _ if model.def.mods.is_abstract => {
                 self.error(
                     target.text_range(),
                     codes::INSTANTIATION,
@@ -3800,7 +3739,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             _ => {}
         }
-        // constructor: primary constructor or `__construct` (possibly inherited)
+        // the constructor: `__construct` (possibly inherited)
         let vars: Vec<_> = model.params.iter().map(|p| p.id).collect();
         let exp_args = expected.and_then(|e| match strip_platform(e).kind() {
             TyKind::Class { name: en, args } if en.eq_ignore_ascii_case(&model.name) => {
@@ -3808,29 +3747,14 @@ impl<'a, 'db> Checker<'a, 'db> {
             }
             _ => None,
         });
-        let sig = if let Some(params) = &model.def.primary_ctor {
-            let cx = self.ctx.class_cx(&model);
-            let mut sink = Vec::new();
-            Some(FnSig {
-                name: SmolStr::new(format!("{}::__construct", model.name)),
-                type_params: Vec::new(),
-                params: params
-                    .iter()
-                    .map(|p| self.ctx.param_sig(p, &cx, &mut sink))
-                    .collect(),
-                ret: model.self_ty(),
-                ret_declared: true,
-                external: false,
-            })
-        } else {
-            self.ctx
-                .find_method(&model.self_ty(), "__construct")
-                .map(|(owner, m, _)| {
-                    let mut s = self.ctx.method_sig(&owner, m);
-                    s.ret = model.self_ty();
-                    s
-                })
-        };
+        let sig = self
+            .ctx
+            .find_method(&model.self_ty(), "__construct")
+            .map(|(owner, m, _)| {
+                let mut s = self.ctx.method_sig(&owner, m);
+                s.ret = model.self_ty();
+                s
+            });
 
         match sig {
             Some(mut sig) => {
@@ -3927,18 +3851,11 @@ impl<'a, 'db> Checker<'a, 'db> {
                         .and_then(|f| f.params.get(i).map(|p| p.ty.clone()))
                         .unwrap_or_else(Ty::mixed),
                 };
-                let (name, binding) = match p.token(VARIABLE) {
-                    Some(v) => (v.text()[1..].to_owned(), Binding::Php),
-                    None => (
-                        p.name_text().unwrap_or_default(),
-                        if p.has_ident("mut") {
-                            Binding::Mut
-                        } else {
-                            Binding::Val
-                        },
-                    ),
+                let name = match p.token(VARIABLE) {
+                    Some(v) => v.text()[1..].to_owned(),
+                    None => p.name_text().unwrap_or_default(),
                 };
-                self.declare(&name, ty.clone(), LocalKind::Param(binding), p.text_range());
+                self.declare(&name, ty.clone(), LocalKind::Param, p.text_range());
                 params.push(stir_types::FnParam::required(ty));
             }
         }

@@ -78,9 +78,7 @@ fn decl_defs(db: &dyn Db, file: SourceFile, root: &SyntaxNode) -> Vec<(TextRange
             Def::Const(loc(i)),
         ));
     }
-    for (i, a) in items.type_aliases.iter().enumerate() {
-        out.push((a.name_range, Def::TypeAlias(loc(i))));
-    }
+
     for c in &items.classes {
         out.push((c.name_range, Def::Class(c.name.key())));
         for m in c.methods.iter().filter(|m| !m.magic) {
@@ -89,14 +87,7 @@ fn decl_defs(db: &dyn Db, file: SourceFile, root: &SyntaxNode) -> Vec<(TextRange
                 out.push((p.name_range, member(c, MemberKind::Property, &p.name)));
             }
         }
-        for p in c
-            .primary_ctor
-            .iter()
-            .flatten()
-            .filter(|p| p.promoted.is_some())
-        {
-            out.push((p.name_range, member(c, MemberKind::Property, &p.name)));
-        }
+
         for p in c.properties.iter().filter(|p| !p.magic) {
             out.push((
                 name_range(root, p.range, &p.name),
@@ -113,12 +104,6 @@ fn decl_defs(db: &dyn Db, file: SourceFile, root: &SyntaxNode) -> Vec<(TextRange
             out.push((
                 name_range(root, k.range, &k.name),
                 member(c, MemberKind::Case, &k.name),
-            ));
-        }
-        for f in &c.fields {
-            out.push((
-                name_range(root, f.range, &f.name),
-                member(c, MemberKind::Field, &f.name),
             ));
         }
     }
@@ -145,9 +130,7 @@ pub fn resolve_type_name(
     if index.classes.contains_key(&key) {
         return Some(Def::Class(key));
     }
-    if let Some(loc) = index.type_aliases.get(&key).and_then(|v| v.first()) {
-        return Some(Def::TypeAlias(*loc));
-    }
+
     // a name resolves in `Stir\` as a last resort
     let stir = SmolStr::new(format!("stir\\{key}"));
     if index.classes.contains_key(&stir) {
@@ -248,10 +231,7 @@ pub fn target(db: &dyn Db, ws: Workspace, file: SourceFile, def: &Def) -> Option
                 name_range(&root, c.range, c.name.short()),
             )
         }
-        Def::TypeAlias(loc) => {
-            let a = &file_items(db, loc.file).type_aliases[loc.index as usize];
-            at(loc.file, a.name_range, a.name_range)
-        }
+
         Def::Class(key) => {
             let loc = class_loc(db, ws, key)?;
             let c = &file_items(db, loc.file).classes[loc.index as usize];
@@ -283,16 +263,14 @@ pub fn target(db: &dyn Db, ws: Workspace, file: SourceFile, def: &Def) -> Option
                         };
                     }
                     let p = c
-                        .primary_ctor
+                        .methods
                         .iter()
-                        .flatten()
-                        .chain(c.methods.iter().flat_map(|m| m.sig.params.iter()))
+                        .flat_map(|m| m.sig.params.iter())
                         .find(|p| p.promoted.is_some() && &p.name == name)?;
                     at(loc.file, p.range, p.name_range)
                 }
                 MemberKind::Const => named(c.consts.iter().find(|k| &k.name == name)?.range),
                 MemberKind::Case => named(c.cases.iter().find(|k| &k.name == name)?.range),
-                MemberKind::Field => named(c.fields.iter().find(|k| &k.name == name)?.range),
             }
         }
     }

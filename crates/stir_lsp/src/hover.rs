@@ -1,6 +1,6 @@
 //! Hover: declarations and expression types.
 
-use stir_checker::model_api::{self, MemberTy};
+use stir_checker::model_api;
 use stir_checker::{Ctx, Def, MemberKind, typed_file};
 use stir_db::{Db, SourceFile, Workspace};
 use stir_hir::{ClassKind, Visibility, file_items};
@@ -128,16 +128,7 @@ pub fn describe(
             };
             Some(with_doc(code, Some(c.name.namespace()), None))
         }
-        Def::TypeAlias(loc) => {
-            let a = &file_items(db, loc.file).type_aliases[loc.index as usize];
-            let root = stir_db::parse(db, loc.file).syntax();
-            let node = root
-                .covering_element(a.name_range)
-                .ancestors()
-                .find(|n| n.text_range() != a.name_range)?;
-            let code = node.text().to_string();
-            Some(render::code(code.trim()))
-        }
+
         Def::Class(key) => {
             let model = ctx.class(key)?;
             let view = model_api::class_view(&ctx, &model);
@@ -147,34 +138,20 @@ pub fn describe(
                 model.def.name.short()
             );
             code.push_str(&render::type_params(&view.type_params));
-            if model.kind() == ClassKind::Record {
-                let fields: Vec<String> = model_api::members(
-                    &ctx,
-                    &ctx.record_ty(&model, model.params.iter().map(|p| p.ty.clone()).collect()),
-                )
-                .into_iter()
-                .filter_map(|m| match m.ty {
-                    MemberTy::Field(t) => Some(format!("{}: {t}", m.name)),
-                    _ => None,
-                })
-                .collect();
-                code.push_str(&format!(" {{ {} }}", fields.join("; ")));
-            } else {
-                let short = |s: &str| s.rsplit('\\').next().unwrap_or(s).to_owned();
-                if let Some(parent) = &view.parent {
-                    code.push_str(" extends ");
-                    code.push_str(&short(parent));
-                }
-                if !view.interfaces.is_empty() {
-                    let keyword = if model.kind() == ClassKind::Interface {
-                        " extends "
-                    } else {
-                        " implements "
-                    };
-                    let list: Vec<String> = view.interfaces.iter().map(|i| short(i)).collect();
-                    code.push_str(keyword);
-                    code.push_str(&list.join(", "));
-                }
+            let short = |s: &str| s.rsplit('\\').next().unwrap_or(s).to_owned();
+            if let Some(parent) = &view.parent {
+                code.push_str(" extends ");
+                code.push_str(&short(parent));
+            }
+            if !view.interfaces.is_empty() {
+                let keyword = if model.kind() == ClassKind::Interface {
+                    " extends "
+                } else {
+                    " implements "
+                };
+                let list: Vec<String> = view.interfaces.iter().map(|i| short(i)).collect();
+                code.push_str(keyword);
+                code.push_str(&list.join(", "));
             }
             Some(with_doc(
                 code,
@@ -230,23 +207,6 @@ pub fn describe(
                     ))
                 }
                 MemberKind::Case => Some(with_doc(format!("case {name}"), Some(owner), None)),
-                MemberKind::Field => {
-                    let rec =
-                        ctx.record_ty(&model, model.params.iter().map(|p| p.ty.clone()).collect());
-                    let ty = model_api::members(&ctx, &rec)
-                        .into_iter()
-                        .find(|m| &m.name == name)
-                        .and_then(|m| match m.ty {
-                            MemberTy::Field(t) => Some(t),
-                            _ => None,
-                        })?;
-                    let ty = narrowed.filter(|t| !t.is_error()).unwrap_or(ty);
-                    Some(with_doc(
-                        format!("{} {name}", render::ty(&ty)),
-                        Some(owner),
-                        None,
-                    ))
-                }
             }
         }
     }
@@ -256,7 +216,7 @@ pub fn describe(
 pub fn is_project_def(db: &dyn Db, ws: Workspace, file: SourceFile, def: &Def) -> bool {
     let decl_file = match def {
         Def::Local { .. } => Some(file),
-        Def::Function(l) | Def::Const(l) | Def::TypeAlias(l) => Some(l.file),
+        Def::Function(l) | Def::Const(l) => Some(l.file),
         Def::Class(k) | Def::Member { class: k, .. } => class_loc(db, ws, k).map(|l| l.file),
     };
     decl_file.is_some_and(|f| f.origin(db) == stir_db::FileOrigin::Source)

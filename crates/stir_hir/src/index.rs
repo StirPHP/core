@@ -13,14 +13,12 @@ pub struct ItemLoc {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DefIndex {
-    /// lowercase FQN → classes/interfaces/traits/enums/records
+    /// lowercase FQN → classes/interfaces/traits/enums
     pub classes: FxHashMap<SmolStr, Vec<ItemLoc>>,
     /// lowercase FQN → functions
     pub functions: FxHashMap<SmolStr, Vec<ItemLoc>>,
     /// FQN (case-sensitive) → constants
     pub consts: FxHashMap<SmolStr, Vec<ItemLoc>>,
-    /// lowercase FQN → type aliases
-    pub type_aliases: FxHashMap<SmolStr, Vec<ItemLoc>>,
     /// Files by origin, for diagnostics filtering.
     pub origins: FxHashMap<SourceFile, FileOrigin>,
     /// Files by precedence when declarations collide (lower wins).
@@ -42,12 +40,7 @@ impl DefIndex {
     pub fn sort(&mut self) {
         let ranks = self.ranks.clone();
         let rank = |l: &ItemLoc| ranks.get(&l.file).copied().unwrap_or(u8::MAX);
-        for map in [
-            &mut self.classes,
-            &mut self.functions,
-            &mut self.consts,
-            &mut self.type_aliases,
-        ] {
+        for map in [&mut self.classes, &mut self.functions, &mut self.consts] {
             for locs in map.values_mut() {
                 locs.sort_by_key(rank);
             }

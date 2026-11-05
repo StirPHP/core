@@ -61,16 +61,6 @@ pub fn def_index(db: &dyn Db, ws: Workspace) -> Arc<DefIndex> {
                     index: i as u32,
                 });
         }
-        for (i, a) in items.type_aliases.iter().enumerate() {
-            index
-                .type_aliases
-                .entry(a.name.key())
-                .or_default()
-                .push(ItemLoc {
-                    file,
-                    index: i as u32,
-                });
-        }
     }
     index.sort();
     Arc::new(index)

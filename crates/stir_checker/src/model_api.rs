@@ -49,7 +49,6 @@ pub struct ParamInfo {
     pub optional: bool,
     pub variadic: bool,
     pub by_ref: bool,
-    pub binding: stir_hir::Binding,
 }
 
 /// A signature with parameter names, for display.
@@ -80,7 +79,6 @@ fn info(ctx: &Ctx<'_>, sig: &FnSig) -> SigInfo {
                 optional: p.optional,
                 variadic: p.variadic,
                 by_ref: p.by_ref,
-                binding: p.binding,
             })
             .collect(),
         ret: sig.ret.clone(),
@@ -104,34 +102,10 @@ pub fn method_info(ctx: &Ctx<'_>, class: &str, name: &str) -> Option<SigInfo> {
     Some(info(ctx, &ctx.method_sig(&c, m)))
 }
 
-/// The constructor of class `class`: its primary constructor or `__construct`
-/// (possibly inherited).
+/// The constructor of class `class`: `__construct` (possibly inherited).
 pub fn ctor_info(ctx: &Ctx<'_>, class: &str) -> Option<SigInfo> {
     let c = ctx.class(class)?;
-    if let Some(params) = &c.def.primary_ctor {
-        let cx = ctx.class_cx(&c);
-        let mut sink = Vec::new();
-        return Some(SigInfo {
-            name: c.def.name.short().into(),
-            type_params: Vec::new(),
-            params: params
-                .iter()
-                .map(|p| {
-                    let s = ctx.param_sig(p, &cx, &mut sink);
-                    ParamInfo {
-                        name: s.name,
-                        ty: s.ty,
-                        optional: s.optional,
-                        variadic: s.variadic,
-                        by_ref: s.by_ref,
-                        binding: s.binding,
-                    }
-                })
-                .collect(),
-            ret: c.self_ty(),
-            ret_declared: true,
-        });
-    }
+
     let (owner, m, _) = ctx.find_method(&c.self_ty(), "__construct")?;
     let mut sig = info(ctx, &ctx.method_sig(&owner, m));
     sig.name = c.def.name.short().into();
@@ -145,39 +119,27 @@ pub enum MemberTy {
     Method(SigInfo),
     Const(Ty),
     Case,
-    Field(Ty),
 }
 
 /// A member visible on a type, for completion.
 #[derive(Debug, Clone)]
 pub struct MemberInfo {
     pub name: SmolStr,
-    /// Lowercase FQN of the declaring class (empty for record fields).
+    /// Lowercase FQN of the declaring class.
     pub class: SmolStr,
     pub ty: MemberTy,
     pub is_static: bool,
     pub visibility: stir_hir::Visibility,
 }
 
-/// Every member of `ty` (a class or record type), nearest declaration first.
+/// Every member of `ty` (a class type), nearest declaration first.
 pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
     let ty = match ty.kind() {
         TyKind::SelfType { class, .. } => class,
         _ => ty,
     };
     let mut out: Vec<MemberInfo> = Vec::new();
-    if let TyKind::Record(r) = ty.kind() {
-        for f in &r.fields {
-            out.push(MemberInfo {
-                name: f.name.clone(),
-                class: SmolStr::default(),
-                ty: MemberTy::Field(f.ty.clone()),
-                is_static: false,
-                visibility: stir_hir::Visibility::Public,
-            });
-        }
-        return out;
-    }
+
     let mut seen = rustc_hash::FxHashSet::default();
     for anc in ctx.ancestors(ty) {
         let TyKind::Class { name, args } = anc.kind() else {
@@ -215,16 +177,10 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
             .map(|p| (p.name.clone(), p.mods.is_static, p.mods.visibility));
         let promoted = c
             .def
-            .primary_ctor
+            .methods
             .iter()
-            .flatten()
-            .chain(
-                c.def
-                    .methods
-                    .iter()
-                    .filter(|m| m.name.eq_ignore_ascii_case("__construct"))
-                    .flat_map(|m| m.sig.params.iter()),
-            )
+            .filter(|m| m.name.eq_ignore_ascii_case("__construct"))
+            .flat_map(|m| m.sig.params.iter())
             .filter_map(|p| {
                 p.promoted
                     .as_ref()

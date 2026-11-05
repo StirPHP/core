@@ -13,7 +13,7 @@ use stir_hir::type_ref::{
     DocKeyword, Literal as LitRef, PhpBuiltin, ShapeKeyRef, TypeRef, TypeRefKind,
 };
 use stir_hir::{
-    Binding, ClassDef, ClassKind, DefIndex, FileItems, FunctionDef, ItemLoc, MethodDef, ParamDef,
+    ClassDef, ClassKind, DefIndex, FileItems, FunctionDef, ItemLoc, MethodDef, ParamDef,
     PropertyDef, TypeParamDef, Variance as HirVariance, Visibility,
 };
 use stir_syntax::TextRange;
@@ -34,7 +34,7 @@ pub struct GenericParam {
     pub ty: Ty,
 }
 
-/// A class/interface/trait/enum/record as seen by the checker.
+/// A class/interface/trait/enum as seen by the checker.
 #[derive(Debug)]
 pub struct ClassModel<'db> {
     pub key: SmolStr,
@@ -62,7 +62,7 @@ impl ClassModel<'_> {
     pub fn is_final(&self) -> bool {
         match self.def.kind {
             ClassKind::Interface | ClassKind::Trait => false,
-            ClassKind::Enum | ClassKind::Record => true,
+            ClassKind::Enum => true,
             ClassKind::Class => self.def.mods.is_final,
         }
     }
@@ -86,7 +86,6 @@ pub struct ParamSig {
     pub optional: bool,
     pub variadic: bool,
     pub by_ref: bool,
-    pub binding: Binding,
     pub range: TextRange,
 }
 
@@ -149,9 +148,6 @@ pub struct Ctx<'db> {
     supers: RefCell<FxHashMap<SmolStr, Rc<Supers>>>,
     fn_sigs: RefCell<FxHashMap<(SourceFile, u32), Rc<FnSig>>>,
     in_progress: RefCell<FxHashSet<SmolStr>>,
-    /// Records whose fields are being lowered: references back to them are
-    /// [`TyKind::RecordRef`]s.
-    records_lowering: RefCell<Vec<SmolStr>>,
 }
 
 #[derive(Default)]
@@ -172,7 +168,6 @@ impl<'db> Ctx<'db> {
             supers: RefCell::default(),
             fn_sigs: RefCell::default(),
             in_progress: RefCell::default(),
-            records_lowering: RefCell::default(),
         }
     }
 
@@ -334,20 +329,7 @@ impl<'db> Ctx<'db> {
         for t in &def.implements {
             s.interfaces.push(self.lower(t, &cx, &mut sink));
         }
-        for st in &def.supertypes {
-            let ty = self.lower(&st.ty, &cx, &mut sink);
-            let is_interface = match ty.kind() {
-                TyKind::Class { name, .. } => self
-                    .class(name)
-                    .is_some_and(|m| m.kind() == ClassKind::Interface),
-                _ => false,
-            };
-            if !is_interface && s.parent.is_none() && def.kind == ClassKind::Class {
-                s.parent = Some(ty);
-            } else {
-                s.interfaces.push(ty);
-            }
-        }
+
         for t in &def.traits {
             s.traits.push(self.lower(t, &cx, &mut sink));
         }
@@ -685,43 +667,7 @@ impl<'db> Ctx<'db> {
                 });
                 return Ty::error();
             }
-            if c.kind() == ClassKind::Record {
-                if self.records_lowering.borrow().contains(&c.key) {
-                    return Ty::record_ref(c.name.clone(), args);
-                }
-                return self.record_ty(&c, args);
-            }
             return Ty::class(c.name.clone(), args);
-        }
-        if let Some(loc) = self
-            .index
-            .type_aliases
-            .get(&key)
-            .and_then(|v| v.first())
-            .copied()
-        {
-            let items = self.items(loc.file);
-            let alias = &items.type_aliases[loc.index as usize];
-            let guard = SmolStr::new(format!("alias:{key}"));
-            if !self.in_progress.borrow_mut().insert(guard.clone()) {
-                sink.push(LowerError {
-                    range,
-                    code: codes::UNKNOWN_TYPE,
-                    message: format!("type alias `{name}` refers to itself"),
-                });
-                return Ty::error();
-            }
-            let mut cx = LowerCx::default();
-            cx.generics = alias
-                .type_params
-                .iter()
-                .zip(args.iter().cloned().chain(std::iter::repeat(Ty::error())))
-                .map(|(p, a)| (p.name.clone(), a))
-                .collect();
-            let mut inner = Vec::new();
-            let ty = self.lower(&alias.ty, &cx, &mut inner);
-            self.in_progress.borrow_mut().remove(&guard);
-            return ty;
         }
         sink.push(LowerError {
             range,
@@ -729,27 +675,6 @@ impl<'db> Ctx<'db> {
             message: format!("unknown type `{name}`"),
         });
         Ty::error()
-    }
-
-    /// The structural type of a record declaration instantiated with `args`.
-    pub fn record_ty(&self, c: &ClassModel<'db>, args: Vec<Ty>) -> Ty {
-        let mut cx = self.class_cx(c);
-        cx.generics = c
-            .params
-            .iter()
-            .zip(args.iter())
-            .map(|(p, a)| (p.name.clone(), a.clone()))
-            .collect();
-        let mut sink = Vec::new();
-        self.records_lowering.borrow_mut().push(c.key.clone());
-        let fields: Vec<(SmolStr, Ty)> = c
-            .def
-            .fields
-            .iter()
-            .map(|f| (f.name.clone(), self.lower(&f.ty, &cx, &mut sink)))
-            .collect();
-        self.records_lowering.borrow_mut().pop();
-        Ty::named_record(c.name.clone(), args, fields)
     }
 
     // ---------------------------------------------------------------- signatures
@@ -821,7 +746,6 @@ impl<'db> Ctx<'db> {
             optional: p.has_default,
             variadic: p.variadic,
             by_ref: p.by_ref,
-            binding: p.binding,
             range: p.range,
         }
     }
@@ -879,16 +803,10 @@ impl<'db> Ctx<'db> {
             }
             let promoted = c
                 .def
-                .primary_ctor
+                .methods
                 .iter()
-                .flatten()
-                .chain(
-                    c.def
-                        .methods
-                        .iter()
-                        .filter(|m| m.name.eq_ignore_ascii_case("__construct"))
-                        .flat_map(|m| m.sig.params.iter()),
-                )
+                .filter(|m| m.name.eq_ignore_ascii_case("__construct"))
+                .flat_map(|m| m.sig.params.iter())
                 .find(|p| p.promoted.is_some() && p.name == name);
             if let Some(p) = promoted {
                 let promo = p.promoted.as_ref().unwrap();
@@ -901,7 +819,7 @@ impl<'db> Ctx<'db> {
                     ty: stir_types::subst(&ty, &map),
                     visibility: promo.mods.visibility,
                     is_static: false,
-                    immutable: promo.immutable || c.def.mods.is_readonly || c.def.mods.is_data,
+                    immutable: promo.immutable || c.def.mods.is_readonly,
                 });
             }
         }
@@ -1005,11 +923,6 @@ impl<'db> PropertyInfo<'db> {
 }
 
 impl TypeEnv for Ctx<'_> {
-    fn unfold_record(&self, name: &str, args: &[Ty]) -> Option<Ty> {
-        let c = self.class(name)?;
-        (c.kind() == ClassKind::Record).then(|| self.record_ty(&c, args.to_vec()))
-    }
-
     fn supertypes(&self, class: &str, args: &[Ty]) -> Vec<Ty> {
         let Some(c) = self.class(class) else {
             return Vec::new();
@@ -1040,53 +953,6 @@ impl TypeEnv for Ctx<'_> {
     fn is_interface(&self, class: &str) -> bool {
         self.class(class)
             .is_some_and(|c| c.kind() == ClassKind::Interface)
-    }
-
-    fn sealed_subclasses(&self, class: &str, args: &[Ty]) -> Option<Vec<Ty>> {
-        let c = self.class(class)?;
-        if !c.def.mods.is_sealed {
-            return None;
-        }
-        let items = self.items(c.file);
-        let mut out = Vec::new();
-        for sub in &items.classes {
-            if sub.name.key() == c.key {
-                continue;
-            }
-            let Some(sm) = self.class(sub.name.as_str()) else {
-                continue;
-            };
-            let s = self.supers(&sm);
-            for sup in s.parent.iter().chain(&s.interfaces) {
-                let TyKind::Class {
-                    name,
-                    args: sup_args,
-                } = sup.kind()
-                else {
-                    continue;
-                };
-                if name.to_ascii_lowercase() != c.key {
-                    continue;
-                }
-                // Map the subclass's params through the supertype's arguments.
-                let mut sub_args: Vec<Ty> = sm.params.iter().map(|_| Ty::nothing()).collect();
-                for (i, sa) in sup_args.iter().enumerate() {
-                    if let TyKind::Param { id, .. } = sa.kind()
-                        && let Some(pos) = sm.params.iter().position(|p| p.id == *id)
-                        && let Some(a) = args.get(i)
-                    {
-                        sub_args[pos] = a.clone();
-                    }
-                }
-                let ty = if sm.kind() == ClassKind::Record {
-                    self.record_ty(&sm, sub_args)
-                } else {
-                    Ty::class(sm.name.clone(), sub_args)
-                };
-                out.push(ty);
-            }
-        }
-        Some(out)
     }
 
     fn invoke_signature(&self, class: &str, args: &[Ty]) -> Option<FnTy> {

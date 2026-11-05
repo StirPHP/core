@@ -91,7 +91,6 @@ pub fn class_keyword(kind: ClassKind, mods: &stir_hir::ClassMods) -> String {
         ClassKind::Interface => "interface",
         ClassKind::Trait => "trait",
         ClassKind::Enum => "enum",
-        ClassKind::Record => "record",
     };
     let mut s = String::new();
     for (on, m) in [

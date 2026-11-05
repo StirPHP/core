@@ -186,15 +186,12 @@ fn kind(k: stir_lsp::complete::ItemKind) -> &'static str {
         K::Function => "function",
         K::Method => "method",
         K::Property => "property",
-        K::Field => "field",
         K::Const => "constant",
         K::EnumCase => "enumMember",
         K::Class => "class",
         K::Interface => "interface",
         K::Enum => "enum",
-        K::Struct => "struct",
         K::Keyword => "keyword",
-        K::Type => "class",
     }
 }
 

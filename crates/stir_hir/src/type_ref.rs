@@ -65,7 +65,7 @@ pub enum TypeRefKind {
     Php(PhpBuiltin),
     /// A type parameter in scope.
     Param(SmolStr),
-    /// A class, interface, enum, record or type alias.
+    /// A class, interface or enum.
     Named(Fqn, Vec<TypeRef>),
     Nullable(Box<TypeRef>),
     Union(Vec<TypeRef>),

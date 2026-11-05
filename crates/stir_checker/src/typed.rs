@@ -13,17 +13,15 @@ use crate::{Checker, Ctx};
 /// What a name in the source resolves to.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Def {
-    /// A local binding (variable, parameter, loop or pattern binding) of the same
+    /// A local binding (variable, parameter or loop binding) of the same
     /// file, identified by the range of its declaring name.
     Local { decl: TextRange },
-    /// A function (including extension functions).
+    /// A function.
     Function(stir_hir::ItemLoc),
-    /// A class, interface, trait, enum or record, by lowercase FQN.
+    /// A class, interface, trait or enum, by lowercase FQN.
     Class(SmolStr),
     /// A global constant.
     Const(stir_hir::ItemLoc),
-    /// A `typealias`.
-    TypeAlias(stir_hir::ItemLoc),
     /// A member of the class with lowercase FQN `class` (the declaring class).
     Member {
         class: SmolStr,
@@ -38,8 +36,6 @@ pub enum MemberKind {
     Method,
     Const,
     Case,
-    /// A record field.
-    Field,
 }
 
 /// What the checker learned about a file's expressions.

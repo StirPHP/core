@@ -36,7 +36,7 @@ pub fn inlay_hints(
         let wanted = match kind {
             LocalKind::Php | LocalKind::Loop => true,
             // a parameter's type is only news if it isn't written next to it
-            LocalKind::Param(_) => token
+            LocalKind::Param => token
                 .parent()
                 .and_then(|n| n.ancestors().find(|a| a.kind() == PARAM))
                 .is_some_and(|p| stir_hir::first_type(&p).is_none()),

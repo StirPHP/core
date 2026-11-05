@@ -20,15 +20,12 @@ pub enum ItemKind {
     Function,
     Method,
     Property,
-    Field,
     Const,
     EnumCase,
     Class,
     Interface,
     Enum,
-    Struct,
     Keyword,
-    Type,
 }
 
 #[derive(Debug, Clone)]
@@ -173,7 +170,7 @@ pub fn complete(db: &dyn Db, ws: Workspace, file: SourceFile, offset: TextSize) 
         }
         return out;
     }
-    local_items(db, ws, file, offset, dollar, &mut out.items);
+    local_items(db, ws, file, offset, &mut out.items);
     if dollar {
         return out;
     }
@@ -260,11 +257,6 @@ fn member_items(
                 };
                 (ItemKind::Property, label, insert)
             }
-            MemberTy::Field(t) => (
-                ItemKind::Field,
-                format!("{} {}", render::ty(t), m.name),
-                m.name.to_string(),
-            ),
             MemberTy::Const(t) => (
                 ItemKind::Const,
                 format!("const {} {}", render::ty(t), m.name),
@@ -301,7 +293,6 @@ fn local_items(
     ws: Workspace,
     file: SourceFile,
     offset: TextSize,
-    dollar: bool,
     out: &mut Vec<Item>,
 ) {
     let root = stir_db::parse(db, file).syntax();
@@ -339,25 +330,11 @@ fn local_items(
         if !seen.insert(name.clone()) {
             continue;
         }
-        let has_dollar = matches!(
-            kind,
-            LocalKind::Var
-                | LocalKind::Php
-                | LocalKind::Loop
-                | LocalKind::Param(stir_hir::Binding::Php)
-        );
-        if dollar && !has_dollar {
-            continue;
-        }
-        let label = if has_dollar {
-            format!("${name}")
-        } else {
-            name.clone()
-        };
+        let label = format!("${name}");
         out.push(Item {
             insert: label.clone(),
             label,
-            kind: if matches!(kind, LocalKind::Param(_)) {
+            kind: if *kind == LocalKind::Param {
                 ItemKind::Param
             } else {
                 ItemKind::Local
@@ -429,7 +406,6 @@ fn global_items(
             kind: match c.kind {
                 ClassKind::Interface => ItemKind::Interface,
                 ClassKind::Enum => ItemKind::Enum,
-                ClassKind::Record => ItemKind::Struct,
                 ClassKind::Class | ClassKind::Trait => ItemKind::Class,
             },
             detail: Some(c.name.as_str().to_owned()),

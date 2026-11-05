@@ -432,13 +432,10 @@ fn symbol_kind(kind: symbols::SymbolKind) -> SymbolKind {
         K::Class => SymbolKind::CLASS,
         K::Interface => SymbolKind::INTERFACE,
         K::Enum => SymbolKind::ENUM,
-        K::Struct => SymbolKind::STRUCT,
         K::Method => SymbolKind::METHOD,
         K::Property => SymbolKind::PROPERTY,
-        K::Field => SymbolKind::FIELD,
         K::Constant => SymbolKind::CONSTANT,
         K::EnumMember => SymbolKind::ENUM_MEMBER,
-        K::TypeAlias => SymbolKind::TYPE_PARAMETER,
     }
 }
 
@@ -469,15 +466,12 @@ fn completion_kind(kind: complete::ItemKind) -> CompletionItemKind {
         K::Function => CompletionItemKind::FUNCTION,
         K::Method => CompletionItemKind::METHOD,
         K::Property => CompletionItemKind::PROPERTY,
-        K::Field => CompletionItemKind::FIELD,
         K::Const => CompletionItemKind::CONSTANT,
         K::EnumCase => CompletionItemKind::ENUM_MEMBER,
         K::Class => CompletionItemKind::CLASS,
         K::Interface => CompletionItemKind::INTERFACE,
         K::Enum => CompletionItemKind::ENUM,
-        K::Struct => CompletionItemKind::STRUCT,
         K::Keyword => CompletionItemKind::KEYWORD,
-        K::Type => CompletionItemKind::CLASS,
     }
 }
 
@@ -803,7 +797,6 @@ impl LanguageServer for Server {
                 let ty = stir_checker::strip_platform(&stir_types::without_null(&ty));
                 let key = match ty.kind() {
                     stir_types::TyKind::Class { name, .. } => name.to_ascii_lowercase(),
-                    stir_types::TyKind::Record(r) => r.name.as_ref()?.to_ascii_lowercase(),
                     _ => return None,
                 };
                 let def = stir_checker::Def::Class(key.trim_start_matches('\\').into());

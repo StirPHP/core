@@ -17,7 +17,6 @@ pub enum TokenType {
     Class,
     Enum,
     Interface,
-    Struct,
     TypeParameter,
     Parameter,
     Variable,
@@ -38,7 +37,6 @@ pub const TOKEN_TYPES: &[&str] = &[
     "class",
     "enum",
     "interface",
-    "struct",
     "typeParameter",
     "parameter",
     "variable",
@@ -107,7 +105,6 @@ fn class_type(db: &dyn Db, ws: Workspace, key: &str) -> (TokenType, u32) {
         ClassKind::Class | ClassKind::Trait => TokenType::Class,
         ClassKind::Interface => TokenType::Interface,
         ClassKind::Enum => TokenType::Enum,
-        ClassKind::Record => TokenType::Struct,
     };
     let lib = if loc.file.origin(db) == FileOrigin::Source {
         0
@@ -130,14 +127,13 @@ fn resolved(db: &dyn Db, ws: Workspace, file: SourceFile, def: &Def) -> Option<(
             let (_, kind) = typed_file(db, ws, file).locals.get(decl)?.clone();
             // every variable is mutable, so marking it says nothing
             let ty = match kind {
-                LocalKind::Param(_) => TokenType::Parameter,
+                LocalKind::Param => TokenType::Parameter,
                 _ => TokenType::Variable,
             };
             (ty, 0)
         }
         Def::Function(loc) => (TokenType::Function, lib(loc.file)),
         Def::Const(loc) => (TokenType::Variable, modifier::READONLY | lib(loc.file)),
-        Def::TypeAlias(loc) => (TokenType::Type, lib(loc.file)),
         Def::Class(key) => class_type(db, ws, key),
         Def::Member { class, kind, name } => {
             let lib = nav::class_loc(db, ws, class).map_or(0, |l| lib(l.file));
@@ -146,17 +142,15 @@ fn resolved(db: &dyn Db, ws: Workspace, file: SourceFile, def: &Def) -> Option<(
                 MemberKind::Property => {
                     let immutable = nav::class_loc(db, ws, class).is_some_and(|loc| {
                         let c = &file_items(db, loc.file).classes[loc.index as usize];
-                        c.mods.is_data
-                            || c.mods.is_readonly
+                        c.mods.is_readonly
                             || c.properties
                                 .iter()
                                 .find(|p| &p.name == name)
                                 .map(|p| p.immutable || p.mods.is_readonly)
                                 .or_else(|| {
-                                    c.primary_ctor
+                                    c.methods
                                         .iter()
-                                        .flatten()
-                                        .chain(c.methods.iter().flat_map(|m| m.sig.params.iter()))
+                                        .flat_map(|m| m.sig.params.iter())
                                         .find(|p| &p.name == name)
                                         .and_then(|p| p.promoted.as_ref())
                                         .map(|p| p.immutable || p.mods.is_readonly)
@@ -170,7 +164,6 @@ fn resolved(db: &dyn Db, ws: Workspace, file: SourceFile, def: &Def) -> Option<(
                     };
                     (TokenType::Property, m | lib)
                 }
-                MemberKind::Field => (TokenType::Property, modifier::MUTABLE),
                 MemberKind::Const => (
                     TokenType::Property,
                     modifier::READONLY | modifier::STATIC | lib,

@@ -10,13 +10,10 @@ pub enum SymbolKind {
     Class,
     Interface,
     Enum,
-    Struct,
     Method,
     Property,
-    Field,
     Constant,
     EnumMember,
-    TypeAlias,
 }
 
 #[derive(Debug, Clone)]
@@ -45,7 +42,6 @@ fn class_kind(kind: ClassKind) -> SymbolKind {
         ClassKind::Class | ClassKind::Trait => SymbolKind::Class,
         ClassKind::Interface => SymbolKind::Interface,
         ClassKind::Enum => SymbolKind::Enum,
-        ClassKind::Record => SymbolKind::Struct,
     }
 }
 
@@ -75,14 +71,7 @@ pub fn document_symbols(db: &dyn Db, file: SourceFile) -> Vec<Symbol> {
             name_in(c.range, c.name.short()),
         ));
     }
-    for a in &items.type_aliases {
-        out.push(leaf(
-            a.name.short(),
-            SymbolKind::TypeAlias,
-            a.name_range,
-            a.name_range,
-        ));
-    }
+
     for c in &items.classes {
         let mut s = leaf(
             c.name.short(),
@@ -90,15 +79,7 @@ pub fn document_symbols(db: &dyn Db, file: SourceFile) -> Vec<Symbol> {
             c.ptr.text_range(),
             c.name_range,
         );
-        for p in c
-            .primary_ctor
-            .iter()
-            .flatten()
-            .filter(|p| p.promoted.is_some())
-        {
-            s.children
-                .push(leaf(&p.name, SymbolKind::Property, p.range, p.name_range));
-        }
+
         for p in c.properties.iter().filter(|p| !p.magic) {
             s.children.push(leaf(
                 &p.name,
@@ -107,14 +88,7 @@ pub fn document_symbols(db: &dyn Db, file: SourceFile) -> Vec<Symbol> {
                 name_in(p.range, &p.name),
             ));
         }
-        for f in &c.fields {
-            s.children.push(leaf(
-                &f.name,
-                SymbolKind::Field,
-                f.range,
-                name_in(f.range, &f.name),
-            ));
-        }
+
         for k in &c.consts {
             s.children.push(leaf(
                 &k.name,
@@ -187,9 +161,7 @@ pub fn workspace_symbols(db: &dyn Db, ws: Workspace, query: &str) -> Vec<Workspa
         for c in &items.classes {
             push(&c.name, class_kind(c.kind), c.name_range);
         }
-        for a in &items.type_aliases {
-            push(&a.name, SymbolKind::TypeAlias, a.name_range);
-        }
+
         for c in &items.consts {
             push(&c.name, SymbolKind::Constant, c.range);
         }
@@ -217,16 +189,7 @@ pub fn folding_ranges(db: &dyn Db, file: SourceFile) -> Vec<(TextRange, FoldKind
     for node in root.descendants() {
         let foldable = matches!(
             node.kind(),
-            BLOCK
-                | CLASS_BODY
-                | ARRAY_EXPR
-                | ARG_LIST
-                | PARAM_LIST
-                | MATCH_EXPR
-                | WHEN_EXPR
-                | LAMBDA_EXPR
-                | RECORD_LITERAL
-                | HEREDOC
+            BLOCK | CLASS_BODY | ARRAY_EXPR | ARG_LIST | PARAM_LIST | MATCH_EXPR | HEREDOC
         );
         if foldable && multiline(node.text_range()) {
             out.push((node.text_range(), FoldKind::Region));
