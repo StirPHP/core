@@ -334,4 +334,24 @@ mod tests {
         p.clear_rules();
         assert_eq!(check(&mut p).as_array().unwrap().len(), 0);
     }
+
+    #[test]
+    fn frameworks_are_there_to_use() {
+        let mut p = Playground::new();
+        let source = "<?php\nnamespace Illuminate\\Database\\Eloquent { abstract class Model { public function __get(string $k): mixed { return null; } } }\nnamespace App { class Post extends \\Illuminate\\Database\\Eloquent\\Model { protected $casts = ['views' => 'integer']; }\nfunction views(Post $p): string { return $p->views; } }\n";
+        let codes = |p: &mut Playground| -> Vec<String> {
+            let diags: serde_json::Value = serde_json::from_str(&p.check(source)).unwrap();
+            diags
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|d| d["code"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(codes(&mut p), ["property.notFound"]);
+        assert!(!p.use_framework("drupal"));
+        assert!(p.use_framework("laravel"));
+        // an int, from the cast
+        assert_eq!(codes(&mut p), ["return.type"]);
+    }
 }
