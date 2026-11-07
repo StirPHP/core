@@ -1,0 +1,13 @@
+[package]
+name = "stir_vfs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Where a project's files are read from: the disk, or files held in memory (in the browser)"
+
+[dependencies]
+ignore = "0.4.34"
+
+[lints]
+workspace = true

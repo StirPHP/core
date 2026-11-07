@@ -3,23 +3,20 @@
 //!
 //! Shared by `stirphp check` and the language server.
 
-use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Instant;
-
+#[cfg(feature = "tokio")]
+use crate::config::disk;
 use crate::{Autoload, Composer, Project};
 use aho_corasick::AhoCorasick;
 use anyhow::Context as _;
-use futures::{StreamExt as _, TryStreamExt as _};
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use stir_composer::{Exclusions, InstallState};
 use stir_db::{
     FileOrigin, IgnoreRule, IgnoreRules, PhpVersion, PhpVersions, RootDatabase, ScriptFile,
     Settings, SourceFile, Workspace,
 };
-
-/// Maximum number of files read concurrently.
-const READ_CONCURRENCY: usize = 64;
+use stir_vfs::{Fs, Kind};
 
 /// Options for [`load_workspace`].
 #[derive(Debug, Clone, Copy)]
@@ -67,11 +64,32 @@ pub struct Loaded {
 
 /// Builds the database for `project`: discovered sources, all builtin stubs and
 /// (unless disabled) vendor files from the root `composer.json` autoload rules.
+#[cfg(feature = "tokio")]
 pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::Result<Loaded> {
-    let start = Instant::now();
+    let start = std::time::Instant::now();
+    let project = project.clone();
+    let loaded =
+        tokio::task::spawn_blocking(move || load_workspace_from(&disk(), &project, options))
+            .await??;
+    tracing::debug!(
+        sources = loaded.sources.len(),
+        stubs = loaded.stub_count,
+        vendor = loaded.vendor_count,
+        elapsed = ?start.elapsed(),
+        "workspace loaded"
+    );
+    Ok(loaded)
+}
+
+/// [`load_workspace`], reading from `fs`.
+pub fn load_workspace_from(
+    fs: &Arc<dyn Fs>,
+    project: &Project,
+    options: LoadOptions,
+) -> anyhow::Result<Loaded> {
     let mut notices = Vec::new();
     // a `composer.json` that's being edited shouldn't take the rest of the project down
-    let composer = match crate::load_composer(project).await {
+    let composer = match crate::composer::load_composer_in(fs.as_ref(), project) {
         Ok(composer) => composer,
         Err(error) => {
             notices.push(error.to_string());
@@ -83,22 +101,22 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         .map_or_else(|| project.root.join("vendor"), |c| c.vendor_dir.clone());
     notices.extend(composer.as_ref().and_then(Composer::install_notice));
 
-    let discovered = crate::discover(&with_vendor_excluded(project, &vendor_dir)).await?;
+    let discovered =
+        crate::discover::discover_in(fs.as_ref(), &with_vendor_excluded(project, &vendor_dir))?;
     let mut source_paths: Vec<PathBuf> = discovered.into_iter().map(|f| f.path).collect();
     if let Some(composer) = &composer {
-        source_paths.extend(sources_elsewhere(project, composer).await?);
+        source_paths.extend(sources_elsewhere(fs.as_ref(), project, composer));
     }
 
-    let source_texts: Vec<(PathBuf, Arc<str>)> =
-        futures::stream::iter(source_paths.into_iter().map(|path| async move {
-            let text = read_lossy(&path)
-                .await
-                .with_context(|| format!("failed to read `{}`", path.display()))?;
-            anyhow::Ok((path, Arc::from(text)))
-        }))
-        .buffered(READ_CONCURRENCY)
-        .try_collect()
-        .await?;
+    let read = fs.read_all(&source_paths);
+    let source_texts: Vec<(PathBuf, Arc<str>)> = source_paths
+        .into_iter()
+        .zip(read)
+        .map(|(path, text)| {
+            let text = text.with_context(|| format!("failed to read `{}`", path.display()))?;
+            anyhow::Ok((path, Arc::from(stir_vfs::lossy(text))))
+        })
+        .collect::<anyhow::Result<_>>()?;
 
     let vendor_texts = if options.vendor {
         let mut autoload = composer
@@ -106,17 +124,18 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
             .map(Composer::autoload)
             .unwrap_or_default();
         // a `vendor/` nothing describes: all of it
-        if vendor_dir.is_dir() && !vendor_dir.join("composer/installed.json").is_file() {
+        if fs.is_dir(&vendor_dir) && !fs.is_file(&vendor_dir.join("composer/installed.json")) {
             autoload.classmap_paths.push(vendor_dir.clone());
         }
-        let paths = vendor_paths(autoload, source_texts.clone()).await?;
-        read_vendor(paths).await
+        let paths = vendor_paths(fs.as_ref(), autoload, &source_texts);
+        read_vendor(fs.as_ref(), paths)
     } else {
         Vec::new()
     };
 
-    let rules = read_rules(project).await;
-    let frameworks = crate::frameworks::frameworks_of(project, composer.as_ref(), &source_texts);
+    let rules = read_rules_from(fs.as_ref(), project);
+    let frameworks =
+        crate::frameworks::frameworks_of(fs.as_ref(), project, composer.as_ref(), &source_texts);
 
     let db = RootDatabase::default();
     let mut files = Vec::new();
@@ -136,7 +155,7 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
     let (bundled, framework_stubs) = crate::frameworks::bundled_inputs(&db, &frameworks);
     files.extend(framework_stubs);
 
-    if vendor_dir.join("phpstan/phpstan").is_dir() {
+    if fs.is_dir(&vendor_dir.join("phpstan/phpstan")) {
         files.push(SourceFile::new(
             &db,
             PathBuf::from("stubs://phpstan/helpers.php"),
@@ -150,10 +169,10 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         files.push(SourceFile::new(&db, path, text, FileOrigin::Vendor));
     }
 
-    let config = load_neon_config(project, composer.as_ref()).await?;
+    let config = load_neon_config(fs, project, composer.as_ref())?;
     if let Some(config) = &config {
         // laid over the stubs of our own, and so after them
-        for (path, text) in read_vendor(config.stub_files.clone()).await {
+        for (path, text) in read_vendor(fs.as_ref(), config.stub_files.clone()) {
             files.push(SourceFile::new(
                 &db,
                 stir_db::overlay_path(&path),
@@ -163,9 +182,9 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         }
         let own: BTreeSet<PathBuf> = sources
             .iter()
-            .filter_map(|f| f.path(&db).canonicalize().ok())
+            .filter_map(|f| fs.canonicalize(f.path(&db)).ok())
             .collect();
-        for (path, text) in read_vendor(scanned_paths(config, &own).await?).await {
+        for (path, text) in read_vendor(fs.as_ref(), scanned_paths(fs.as_ref(), config, &own)) {
             files.push(SourceFile::new(&db, path, text, FileOrigin::Vendor));
         }
     }
@@ -173,7 +192,7 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
     if options.vendor && frameworks.iter().any(|f| f.name == "wordpress") {
         let stubs = vendor_dir.join("php-stubs/wordpress-stubs/wordpress-stubs.php");
         let known = files.iter().any(|f| f.path(&db) == &stubs);
-        if !known && let Ok(text) = tokio::fs::read_to_string(&stubs).await {
+        if !known && let Ok(text) = fs.read_to_string(&stubs) {
             files.push(SourceFile::new(&db, stubs, text, FileOrigin::Vendor));
         }
     }
@@ -188,20 +207,14 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
                 let base = project.config_file.as_ref().and_then(|f| f.parent());
                 base.unwrap_or(&project.root).join(p)
             });
-        let root = project.root.clone();
-        let found = tokio::task::spawn_blocking(move || {
-            crate::frameworks::container_xml(&root, configured)
-        })
-        .await
-        .ok()
-        .flatten();
+        let found = crate::frameworks::container_xml(fs.as_ref(), &project.root, configured);
         if let Some((path, text)) = found {
             tracing::info!(path = %path.display(), "reading Symfony's container");
             data_files.push(stir_db::DataFile::new(&db, path, text));
         }
     }
     let (mut settings, ignore_notice) =
-        settings_from(project, config, composer.as_ref(), options.baseline).await;
+        settings_from(fs, project, config, composer.as_ref(), options.baseline);
     notices.extend(ignore_notice);
     if let Some(level) = options.level {
         settings.php_level = level;
@@ -227,13 +240,6 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         .bundled_scripts(bundled)
         .data_files(data_files)
         .new(&db);
-    tracing::debug!(
-        sources = sources.len(),
-        stubs = stub_count,
-        vendor = vendor_count,
-        elapsed = ?start.elapsed(),
-        "workspace loaded"
-    );
     Ok(Loaded {
         db,
         workspace,
@@ -250,14 +256,23 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
 
 /// The scripts of `parameters.stirphp.rules` and their texts, in order. Those that can't be read
 /// are kept, for what uses them to say so at the script.
+#[cfg(feature = "tokio")]
 pub async fn read_rules(project: &Project) -> Vec<(PathBuf, Result<String, String>)> {
+    let project = project.clone();
+    tokio::task::spawn_blocking(move || read_rules_from(&stir_vfs::Disk, &project))
+        .await
+        .unwrap_or_default()
+}
+
+/// [`read_rules`], from `fs`.
+pub fn read_rules_from(fs: &dyn Fs, project: &Project) -> Vec<(PathBuf, Result<String, String>)> {
     let mut seen = BTreeSet::new();
     let mut scripts = Vec::new();
     for path in &project.config.rules {
         let path = stir_composer::normalize(&project.root.join(path));
         if seen.insert(path.clone()) {
-            let text = tokio::fs::read_to_string(&path)
-                .await
+            let text = fs
+                .read_to_string(&path)
                 .map_err(|e| format!("it can't be read: {e}"));
             scripts.push((path, text));
         }
@@ -280,54 +295,52 @@ fn with_vendor_excluded(project: &Project, vendor_dir: &Path) -> Project {
 /// What the root package's autoload rules name that walking the project folder doesn't find:
 /// directories outside it, and files listed by name whatever their extension. With a source
 /// directory set in the config, that's what the sources are.
-async fn sources_elsewhere(project: &Project, composer: &Composer) -> anyhow::Result<Vec<PathBuf>> {
+fn sources_elsewhere(fs: &dyn Fs, project: &Project, composer: &Composer) -> Vec<PathBuf> {
     if project.config.src_dir != Path::new(".") {
-        return Ok(Vec::new());
+        return Vec::new();
     }
-    let root = project.root.clone();
-    let autoload = composer.root_autoload.clone();
-    let vendor_dir = composer.vendor_dir.clone();
-    tokio::task::spawn_blocking(move || {
-        let is_outside = |p: &Path| !p.starts_with(&root);
-        let mut found = BTreeSet::new();
-        let mut seen = BTreeSet::new();
-        for (_, dir) in autoload.psr4.iter().chain(&autoload.psr0) {
-            if is_outside(dir) {
-                walk(
-                    dir,
-                    Extensions::Psr,
-                    None,
-                    &mut seen,
-                    &mut found,
-                    &mut Vec::new(),
-                );
-            }
+    let root = &project.root;
+    let autoload = &composer.root_autoload;
+    let vendor_dir = &composer.vendor_dir;
+    let is_outside = |p: &Path| !p.starts_with(root);
+    let mut found = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    for (_, dir) in autoload.psr4.iter().chain(&autoload.psr0) {
+        if is_outside(dir) {
+            walk(
+                fs,
+                dir,
+                Extensions::Psr,
+                None,
+                &mut seen,
+                &mut found,
+                &mut Vec::new(),
+            );
         }
-        for path in &autoload.classmap_paths {
-            if is_outside(path) {
-                walk(
-                    path,
-                    Extensions::Classmap,
-                    None,
-                    &mut seen,
-                    &mut found,
-                    &mut Vec::new(),
-                );
-            }
+    }
+    for path in &autoload.classmap_paths {
+        if is_outside(path) {
+            walk(
+                fs,
+                path,
+                Extensions::Classmap,
+                None,
+                &mut seen,
+                &mut found,
+                &mut Vec::new(),
+            );
         }
-        for file in &autoload.files {
-            let php = file.extension().is_some_and(|e| e == "php");
-            if (is_outside(file) || !php) && file.is_file() {
-                found.insert(file.clone());
-            }
+    }
+    for file in &autoload.files {
+        let php = file.extension().is_some_and(|e| e == "php");
+        if (is_outside(file) || !php) && fs.is_file(file) {
+            found.insert(file.clone());
         }
-        found
-            .into_iter()
-            .filter(|p| !p.starts_with(&vendor_dir))
-            .collect()
-    })
-    .await
-    .context("failed to list the Composer source roots")
+    }
+    found
+        .into_iter()
+        .filter(|p| !p.starts_with(vendor_dir))
+        .collect()
 }
 
 /// The builtin PHP stubs (`stubs://...`).
@@ -345,34 +358,41 @@ pub fn builtin_files(db: &RootDatabase) -> Vec<SourceFile> {
 }
 
 /// Check settings: the rule level and `ignoreErrors` of the configuration, if there is one.
+#[cfg(feature = "tokio")]
 pub async fn load_settings(project: &Project) -> anyhow::Result<Settings> {
-    let composer = crate::load_composer(project).await.ok().flatten();
-    let config = load_neon_config(project, composer.as_ref()).await?;
-    Ok(settings_from(project, config, composer.as_ref(), true)
-        .await
-        .0)
+    let project = project.clone();
+    tokio::task::spawn_blocking(move || {
+        let fs = disk();
+        let composer = crate::composer::load_composer_in(fs.as_ref(), &project)
+            .ok()
+            .flatten();
+        let config = load_neon_config(&fs, &project, composer.as_ref())?;
+        Ok(settings_from(&fs, &project, config, composer.as_ref(), true).0)
+    })
+    .await?
 }
 
-async fn load_neon_config(
+fn load_neon_config(
+    fs: &Arc<dyn Fs>,
     project: &Project,
     composer: Option<&Composer>,
 ) -> anyhow::Result<Option<stir_neon::phpstan::PhpstanConfig>> {
     let Some(path) = project.config_file.clone() else {
         return Ok(None);
     };
-    let root = project.root.clone();
+    let root = &project.root;
     let extensions = composer.map(Composer::phpstan_includes).unwrap_or_default();
-    let config = tokio::task::spawn_blocking(move || {
+    let config = {
         let opts = stir_neon::phpstan::LoadOptions::new()
-            .param("currentWorkingDirectory", root.to_string_lossy());
+            .param("currentWorkingDirectory", root.to_string_lossy())
+            .fs(fs.clone());
         let with_extensions = opts.clone().extensions(extensions);
         // an extension's config that can't be read isn't the project's problem
         stir_neon::phpstan::PhpstanConfig::load_with(&path, &with_extensions).or_else(|error| {
             tracing::warn!(%error, "ignoring the configs of PHPStan extensions");
             stir_neon::phpstan::PhpstanConfig::load_with(&path, &opts)
         })
-    })
-    .await?
+    }
     .context("failed to load the configuration")?;
     for skipped in config.skipped_includes.iter().filter(|p| !is_php(p)) {
         tracing::warn!("skipping include {}: not installed", skipped.display());
@@ -411,12 +431,17 @@ pub fn ignore_rules(entries: &[stir_neon::phpstan::IgnoreError]) -> (Vec<IgnoreR
 }
 
 /// The rules of the baseline at `path`, and what's wrong with it if it can't be applied.
-fn baseline_rules(path: PathBuf, root: &Path) -> (Vec<IgnoreRule>, usize, Vec<String>) {
+fn baseline_rules(
+    fs: &Arc<dyn Fs>,
+    path: PathBuf,
+    root: &Path,
+) -> (Vec<IgnoreRule>, usize, Vec<String>) {
     if path.extension().is_some_and(|e| e == "php") {
         return (Vec::new(), 0, vec![display(&path, root)]);
     }
     let opts = stir_neon::phpstan::LoadOptions::new()
-        .param("currentWorkingDirectory", root.to_string_lossy());
+        .param("currentWorkingDirectory", root.to_string_lossy())
+        .fs(fs.clone());
     match stir_neon::phpstan::PhpstanConfig::load_with(&path, &opts) {
         Ok(config) => {
             let (rules, skipped) = ignore_rules(&config.ignore_errors);
@@ -468,40 +493,26 @@ fn ignore_notice(skipped: usize, php: &[String]) -> Option<String> {
 
 /// The files PHPStan reads for their symbols (`bootstrapFiles`, `scanFiles` and
 /// `scanDirectories`), other than the project's own.
-async fn scanned_paths(
+fn scanned_paths(
+    fs: &dyn Fs,
     config: &stir_neon::phpstan::PhpstanConfig,
     own: &BTreeSet<PathBuf>,
-) -> anyhow::Result<Vec<PathBuf>> {
-    let files: Vec<PathBuf> = config
-        .bootstrap_files
-        .iter()
-        .chain(&config.scan_files)
-        .cloned()
-        .collect();
-    let dirs = config.scan_directories.clone();
-    let own = own.clone();
-    tokio::task::spawn_blocking(move || {
-        let mut out = BTreeSet::new();
-        for file in files.into_iter().filter(|f| f.is_file()) {
-            out.insert(file);
-        }
-        for dir in dirs {
-            for entry in ignore::WalkBuilder::new(dir)
-                .standard_filters(false)
-                .build()
-                .flatten()
-            {
-                if entry.path().extension().is_some_and(|e| e == "php") {
-                    out.insert(entry.into_path());
-                }
+) -> Vec<PathBuf> {
+    let files = config.bootstrap_files.iter().chain(&config.scan_files);
+    let mut out = BTreeSet::new();
+    for file in files.filter(|f| fs.is_file(f)) {
+        out.insert(file.clone());
+    }
+    for dir in &config.scan_directories {
+        for path in fs.all_below(dir) {
+            if path.extension().is_some_and(|e| e == "php") {
+                out.insert(path);
             }
         }
-        out.into_iter()
-            .filter(|p| p.canonicalize().map_or(true, |c| !own.contains(&c)))
-            .collect()
-    })
-    .await
-    .context("failed to list the PHPStan scan paths")
+    }
+    out.into_iter()
+        .filter(|p| fs.canonicalize(p).map_or(true, |c| !own.contains(&c)))
+        .collect()
 }
 
 /// PHPStan's `phpVersion`, then what Composer's files say, then the latest.
@@ -521,7 +532,8 @@ fn php_versions(
         .unwrap_or_default()
 }
 
-async fn settings_from(
+fn settings_from(
+    fs: &Arc<dyn Fs>,
     project: &Project,
     config: Option<stir_neon::phpstan::PhpstanConfig>,
     composer: Option<&Composer>,
@@ -540,13 +552,10 @@ async fn settings_from(
     let mut skipped = 0;
     let mut php = Vec::new();
     if let Some(baseline) = project.config.baseline.clone().filter(|_| with_baseline) {
-        let root = project.root.clone();
-        let read = tokio::task::spawn_blocking(move || baseline_rules(baseline, &root)).await;
-        if let Ok((rules, count, files)) = read {
-            settings.baseline = IgnoreRules::new(rules);
-            skipped += count;
-            php.extend(files);
-        }
+        let (rules, count, files) = baseline_rules(fs, baseline, &project.root);
+        settings.baseline = IgnoreRules::new(rules);
+        skipped += count;
+        php.extend(files);
     }
     settings.deprecations = project.config.deprecations;
     let Some(config) = config else {
@@ -584,68 +593,63 @@ async fn settings_from(
 /// Collects every file reachable from the autoload rules, canonicalised and deduplicated,
 /// excluding the project's own sources (`own`, with their text). What `exclude-from-classmap`
 /// leaves out is skipped, unless autoloading would find it as a class the project names.
-async fn vendor_paths(
-    autoload: Autoload,
-    own: Vec<(PathBuf, Arc<str>)>,
-) -> anyhow::Result<Vec<PathBuf>> {
-    tokio::task::spawn_blocking(move || {
-        let exclusions = autoload.exclusions();
-        let mut found = BTreeSet::new();
-        let mut excluded = Vec::new();
-        // the two look at different files, so each has to see a directory they share
-        let mut seen_dirs = BTreeSet::new();
-        for (_, dir) in autoload.psr4.iter().chain(&autoload.psr0) {
-            walk(
-                dir,
-                Extensions::Psr,
-                exclusions.as_ref(),
-                &mut seen_dirs,
-                &mut found,
-                &mut excluded,
-            );
+fn vendor_paths(fs: &dyn Fs, autoload: Autoload, own: &[(PathBuf, Arc<str>)]) -> Vec<PathBuf> {
+    let exclusions = autoload.exclusions();
+    let mut found = BTreeSet::new();
+    let mut excluded = Vec::new();
+    // the two look at different files, so each has to see a directory they share
+    let mut seen_dirs = BTreeSet::new();
+    for (_, dir) in autoload.psr4.iter().chain(&autoload.psr0) {
+        walk(
+            fs,
+            dir,
+            Extensions::Psr,
+            exclusions.as_ref(),
+            &mut seen_dirs,
+            &mut found,
+            &mut excluded,
+        );
+    }
+    let mut seen_dirs = BTreeSet::new();
+    for path in &autoload.classmap_paths {
+        walk(
+            fs,
+            path,
+            Extensions::Classmap,
+            exclusions.as_ref(),
+            &mut seen_dirs,
+            &mut found,
+            &mut excluded,
+        );
+    }
+    // listed by name: whatever the extension, and PHP includes it however it's excluded
+    for file in &autoload.files {
+        if let Ok(path) = fs.canonicalize(file)
+            && fs.is_file(&path)
+        {
+            found.insert(path);
         }
-        let mut seen_dirs = BTreeSet::new();
-        for path in &autoload.classmap_paths {
-            walk(
-                path,
-                Extensions::Classmap,
-                exclusions.as_ref(),
-                &mut seen_dirs,
-                &mut found,
-                &mut excluded,
-            );
-        }
-        // listed by name: whatever the extension, and PHP includes it however it's excluded
-        for file in &autoload.files {
-            if let Ok(path) = std::fs::canonicalize(file)
-                && path.is_file()
-            {
+    }
+
+    let own_paths: BTreeSet<&Path> = own.iter().map(|(p, _)| p.as_path()).collect();
+    excluded.retain(|p| !own_paths.contains(p.as_path()));
+    if !excluded.is_empty() {
+        let classes: Vec<(String, &PathBuf)> = excluded
+            .iter()
+            .filter_map(|p| Some((autoload.class_of_file(p)?, p)))
+            .collect();
+        for path in named_in(&classes, own) {
+            if let Ok(path) = fs.canonicalize(path) {
                 found.insert(path);
             }
         }
+    }
 
-        let own_paths: BTreeSet<&Path> = own.iter().map(|(p, _)| p.as_path()).collect();
-        excluded.retain(|p| !own_paths.contains(p.as_path()));
-        if !excluded.is_empty() {
-            let classes: Vec<(String, &PathBuf)> = excluded
-                .iter()
-                .filter_map(|p| Some((autoload.class_of_file(p)?, p)))
-                .collect();
-            for path in named_in(&classes, &own) {
-                if let Ok(path) = std::fs::canonicalize(path) {
-                    found.insert(path);
-                }
-            }
-        }
-
-        let own: BTreeSet<PathBuf> = own
-            .iter()
-            .map(|(p, _)| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
-            .collect();
-        found.into_iter().filter(|p| !own.contains(p)).collect()
-    })
-    .await
-    .map_err(Into::into)
+    let own: BTreeSet<PathBuf> = own
+        .iter()
+        .map(|(p, _)| fs.canonicalize(p).unwrap_or_else(|_| p.clone()))
+        .collect();
+    found.into_iter().filter(|p| !own.contains(p)).collect()
 }
 
 /// Those of `classes` whose names are in the text of one of the files `own`. All searched at once:
@@ -700,6 +704,7 @@ impl Extensions {
 /// are visited once (by canonical path). Files matched by `exclusions` go into `excluded`, under
 /// their path as the rules spell it.
 fn walk(
+    fs: &dyn Fs,
     root: &Path,
     extensions: Extensions,
     exclusions: Option<&Exclusions>,
@@ -707,24 +712,24 @@ fn walk(
     found: &mut BTreeSet<PathBuf>,
     excluded: &mut Vec<PathBuf>,
 ) {
-    if root.is_file() {
+    if fs.is_file(root) {
         if exclusions.is_some_and(|e| e.contains(root)) {
             excluded.push(root.to_path_buf());
-        } else if let Ok(path) = std::fs::canonicalize(root) {
+        } else if let Ok(path) = fs.canonicalize(root) {
             found.insert(path);
         }
         return;
     }
     let mut stack = vec![root.to_path_buf()];
     while let Some(path) = stack.pop() {
-        let Ok(canonical) = std::fs::canonicalize(&path) else {
+        let Ok(canonical) = fs.canonicalize(&path) else {
             continue;
         };
-        let Ok(meta) = std::fs::metadata(&canonical) else {
+        let Some(kind) = fs.kind(&canonical) else {
             continue;
         };
         let is_excluded = exclusions.is_some_and(|e| e.contains(&path));
-        if meta.is_file() {
+        if let Kind::File { .. } = kind {
             if extensions.matches(&path) {
                 if is_excluded {
                     excluded.push(path);
@@ -734,11 +739,16 @@ fn walk(
             }
             continue;
         }
-        if !meta.is_dir() || !seen_dirs.insert(canonical.clone()) {
+        if !seen_dirs.insert(canonical.clone()) {
             continue;
         }
-        match std::fs::read_dir(&canonical) {
-            Ok(entries) => stack.extend(entries.flatten().map(|e| path.join(e.file_name()))),
+        match fs.read_dir(&canonical) {
+            Ok(entries) => stack.extend(
+                entries
+                    .iter()
+                    .filter_map(|e| e.file_name())
+                    .map(|name| path.join(name)),
+            ),
             Err(error) => {
                 tracing::warn!(path = %canonical.display(), %error, "cannot read directory");
             }
@@ -746,31 +756,22 @@ fn walk(
     }
 }
 
-/// Reads a PHP file. PHP source isn't always UTF-8, so invalid bytes are replaced
-/// rather than failing the whole project.
-async fn read_lossy(path: &Path) -> std::io::Result<String> {
-    let bytes = tokio::fs::read(path).await?;
-    Ok(String::from_utf8(bytes)
-        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
-}
-
-/// Reads vendor files concurrently, keeping their order: which of two declarations of a
-/// name wins depends on it, so results must not vary between runs. Unreadable files are
-/// skipped with a warning.
-async fn read_vendor(paths: Vec<PathBuf>) -> Vec<(PathBuf, String)> {
-    futures::stream::iter(paths.into_iter().map(|path| async move {
-        match read_lossy(&path).await {
-            Ok(text) => Some((path, text)),
+/// Reads vendor files, keeping their order: which of two declarations of a name wins depends
+/// on it, so results must not vary between runs. PHP source isn't always UTF-8, so invalid bytes
+/// are replaced. Unreadable files are skipped with a warning.
+fn read_vendor(fs: &dyn Fs, paths: Vec<PathBuf>) -> Vec<(PathBuf, String)> {
+    let read = fs.read_all(&paths);
+    paths
+        .into_iter()
+        .zip(read)
+        .filter_map(|(path, text)| match text {
+            Ok(text) => Some((path, stir_vfs::lossy(text))),
             Err(error) => {
                 tracing::warn!(path = %path.display(), %error, "cannot read vendor file");
                 None
             }
-        }
-    }))
-    .buffered(READ_CONCURRENCY)
-    .filter_map(std::future::ready)
-    .collect()
-    .await
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -588,3 +588,135 @@ async fn symfonys_compiled_container_is_read() {
         [root.join("var/cache/dev/App_KernelDevDebugContainer.xml")]
     );
 }
+
+// ---------- files in memory ----------
+
+/// Everything below `root`, as files in memory at the same paths.
+fn in_memory(root: &Path) -> stir_project::Memory {
+    let mut memory = stir_project::Memory::new();
+    let mut dirs = vec![root.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                memory.insert(&path, fs::read_to_string(&path).unwrap());
+            }
+        }
+    }
+    memory
+}
+
+/// What a loaded workspace is made of, to compare two.
+fn summary(loaded: &stir_project::workspace::Loaded) -> String {
+    let db = &loaded.db;
+    let ws = loaded.workspace;
+    let files: Vec<String> = ws
+        .files(db)
+        .iter()
+        .map(|f| {
+            format!(
+                "{:?} {} {}",
+                f.origin(db),
+                f.path(db).display(),
+                f.text(db).len()
+            )
+        })
+        .collect();
+    let scripts: Vec<String> = ws
+        .bundled_scripts(db)
+        .iter()
+        .chain(&loaded.rules)
+        .map(|s| {
+            format!(
+                "{} {:?}",
+                s.path(db).display(),
+                s.text(db).as_ref().map(String::len)
+            )
+        })
+        .collect();
+    let data: Vec<String> = ws
+        .data_files(db)
+        .iter()
+        .map(|f| f.path(db).display().to_string())
+        .collect();
+    format!(
+        "{files:#?}\n{scripts:#?}\n{data:?}\n{:#?}\n{:?}\n{:?}\n{}",
+        ws.settings(db),
+        loaded.frameworks,
+        loaded.notices,
+        loaded.vendor_dir.display()
+    )
+}
+
+#[tokio::test]
+async fn a_project_in_memory_loads_as_it_does_from_disk() {
+    use std::sync::Arc;
+    use stir_project::workspace::{LoadOptions, load_workspace, load_workspace_from};
+    let tmp = TempDir::new().unwrap();
+    let root = canon(&tmp);
+    write(
+        root.join("composer.json"),
+        r#"{"require": {"php": "^8.2", "laravel/framework": "^13", "ext-mbstring": "*"},
+            "autoload": {"psr-4": {"App\\": "app/"}, "files": ["helpers.php"]},
+            "autoload-dev": {"classmap": ["database/"]}}"#,
+    );
+    write(
+        root.join("vendor/composer/installed.json"),
+        r#"{"packages": [{"name": "acme/lib", "version": "1.0.0", "install-path": "../acme/lib",
+            "autoload": {"psr-4": {"Acme\\": "src/"}}}]}"#,
+    );
+    write(
+        root.join("vendor/acme/lib/src/Thing.php"),
+        "<?php\nnamespace Acme;\nclass Thing {}\n",
+    );
+    write(root.join("vendor/acme/lib/src/notes.txt"), "not PHP");
+    write(
+        root.join("app/User.php"),
+        "<?php\nnamespace App;\nclass User {}\n",
+    );
+    write(
+        root.join("app/Http/Kernel.php"),
+        "<?php\nnamespace App\\Http;\nclass Kernel {}\n",
+    );
+    write(
+        root.join("helpers.php"),
+        "<?php\nfunction helper(): int { return 1; }\n",
+    );
+    write(root.join("database/Seeder.php"), "<?php\nclass Seeder {}\n");
+    write(root.join("build/generated.php"), "<?php\n");
+    write(root.join(".gitignore"), "/build/\n");
+    write(root.join(".hidden/secret.php"), "<?php\n");
+    write(
+        root.join("stubs/extra.stub"),
+        "<?php\nfunction from_stub(): string {}\n",
+    );
+    write(
+        root.join("rules/no_var_dump.rhai"),
+        "fn visit_func_call(node, ctx) {}\n",
+    );
+    write(
+        root.join("phpstan.neon"),
+        "parameters:\n    level: 6\n    stubFiles: [stubs/extra.stub]\n    ignoreErrors:\n        - identifier: missingType.iterableValue\n",
+    );
+    write(
+        root.join("stirphp.neon"),
+        "includes:\n    - phpstan.neon\nparameters:\n    stirphp:\n        rules: [rules/no_var_dump.rhai]\n",
+    );
+
+    let options = LoadOptions::default();
+    let project = Project::load_or_default(&root).await.unwrap();
+    let disk = load_workspace(&project, options).await.unwrap();
+
+    let memory: Arc<dyn stir_project::Fs> = Arc::new(in_memory(&root));
+    let project = Project::find(&memory, &root).unwrap();
+    let loaded = load_workspace_from(&memory, &project, options).unwrap();
+    assert_eq!(summary(&loaded), summary(&disk));
+    let text = summary(&loaded);
+    assert!(text.contains("acme/lib/src/Thing.php"), "{text}");
+    assert!(
+        !text.contains("generated.php") && !text.contains("secret.php"),
+        "{text}"
+    );
+}

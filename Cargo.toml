@@ -26,11 +26,12 @@ stir_lsp = { path = "crates/stir_lsp", default-features = false }
 stir_phpstan = { path = "crates/stir_phpstan" }
 stir_neon = { path = "crates/stir_neon" }
 stir_phpdoc = { path = "crates/stir_phpdoc" }
-stir_project = { path = "crates/stir_project" }
+stir_project = { path = "crates/stir_project", default-features = false }
 stir_script = { path = "crates/stir_script" }
 stir_stubs = { path = "crates/stir_stubs" }
 stir_syntax = { path = "crates/stir_syntax" }
 stir_types = { path = "crates/stir_types" }
+stir_vfs = { path = "crates/stir_vfs" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

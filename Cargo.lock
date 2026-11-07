@@ -1559,6 +1559,7 @@ version = "0.1.21"
 dependencies = [
  "indexmap",
  "insta",
+ "stir_vfs",
  "tempfile",
  "thiserror",
 ]
@@ -1594,7 +1595,6 @@ version = "0.1.21"
 dependencies = [
  "aho-corasick",
  "anyhow",
- "futures",
  "globset",
  "ignore",
  "pathdiff",
@@ -1605,6 +1605,7 @@ dependencies = [
  "stir_neon",
  "stir_stubs",
  "stir_syntax",
+ "stir_vfs",
  "tempfile",
  "thiserror",
  "tokio",
@@ -1646,6 +1647,13 @@ dependencies = [
  "pretty_assertions",
  "rustc-hash 2.1.3",
  "smol_str",
+]
+
+[[package]]
+name = "stir_vfs"
+version = "0.1.21"
+dependencies = [
+ "ignore",
 ]
 
 [[package]]

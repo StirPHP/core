@@ -19,7 +19,7 @@ stir_fmt.workspace = true
 stir_neon.workspace = true
 stir_lsp = { workspace = true, features = ["server"] }
 stir_phpstan.workspace = true
-stir_project.workspace = true
+stir_project = { workspace = true, features = ["tokio"] }
 stir_syntax.workspace = true
 tokio.workspace = true
 tracing.workspace = true

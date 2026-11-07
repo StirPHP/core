@@ -13,8 +13,10 @@
 //!   `currentWorkingDirectory`, `rootDir`) and from scalar `parameters`; `%%` is a literal `%`.
 
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use indexmap::IndexMap;
+use stir_vfs::{Disk, Fs};
 
 use crate::{Key, Value};
 
@@ -161,7 +163,7 @@ pub enum FormatIndent {
 }
 
 /// Options for [`PhpstanConfig::load_with`].
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct LoadOptions {
     /// Known `%name%` parameters (e.g. `currentWorkingDirectory`, `rootDir`).
     /// `currentWorkingDirectory` defaults to the process working directory.
@@ -169,6 +171,17 @@ pub struct LoadOptions {
     /// Configs merged in before the root file's includes, so that everything overrides them:
     /// the ones PHPStan's extension installer would add.
     pub extensions: Vec<PathBuf>,
+    /// Where the files are read from: the disk, unless it's set.
+    pub fs: Option<Arc<dyn Fs>>,
+}
+
+impl std::fmt::Debug for LoadOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoadOptions")
+            .field("params", &self.params)
+            .field("extensions", &self.extensions)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LoadOptions {
@@ -184,6 +197,15 @@ impl LoadOptions {
     pub fn extensions(mut self, paths: Vec<PathBuf>) -> Self {
         self.extensions = paths;
         self
+    }
+
+    pub fn fs(mut self, fs: Arc<dyn Fs>) -> Self {
+        self.fs = Some(fs);
+        self
+    }
+
+    fn files(&self) -> &dyn Fs {
+        self.fs.as_deref().unwrap_or(&Disk)
     }
 }
 
@@ -680,13 +702,15 @@ impl Loader<'_> {
             path: path.to_path_buf(),
             source,
         };
-        let canon = std::fs::canonicalize(path).map_err(io)?;
+        let opts = self.opts;
+        let fs = opts.files();
+        let canon = fs.canonicalize(path).map_err(io)?;
         if let Some(i) = self.stack.iter().position(|p| *p == canon) {
             let mut chain = self.stack[i..].to_vec();
             chain.push(canon);
             return Err(ConfigError::IncludeCycle { chain });
         }
-        let src = std::fs::read_to_string(path).map_err(io)?;
+        let src = fs.read_to_string(path).map_err(io)?;
         let value = crate::parse(&src).map_err(|source| ConfigError::Parse {
             path: path.to_path_buf(),
             source,
@@ -709,7 +733,7 @@ impl Loader<'_> {
         let mut res = Value::Mapping(IndexMap::new());
         if is_root {
             let extensions = self.opts.extensions.clone();
-            for path in extensions.iter().filter(|p| p.is_file()) {
+            for path in extensions.iter().filter(|p| fs.is_file(p)) {
                 self.included.push(path.clone());
                 let sub = self.load_file(path)?;
                 res = merge(sub, res);
@@ -727,7 +751,7 @@ impl Loader<'_> {
                     .ok_or_else(|| invalid("includes", "expected a list of files"))?;
                 let inc_path = resolve_path(&expand_known(inc, &self.opts.params), &dir);
                 let is_php = inc_path.extension().is_some_and(|e| e == "php");
-                if is_php || (!inc_path.exists() && is_in_vendor(&inc_path)) {
+                if is_php || (!fs.exists(&inc_path) && is_in_vendor(&inc_path)) {
                     self.skipped.push(inc_path);
                     continue;
                 }

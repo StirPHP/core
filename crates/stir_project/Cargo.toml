@@ -8,7 +8,6 @@ rust-version.workspace = true
 [dependencies]
 aho-corasick = "1.1.4"
 anyhow.workspace = true
-futures = "0.3.34"
 globset = "0.4.21"
 ignore = "0.4.34"
 pathdiff = "0.2.3"
@@ -19,9 +18,16 @@ stir_db.workspace = true
 stir_neon.workspace = true
 stir_stubs.workspace = true
 stir_syntax.workspace = true
+stir_vfs.workspace = true
 thiserror = "2.0.21"
-tokio = { workspace = true, features = ["fs", "rt", "macros"] }
+tokio = { workspace = true, optional = true, features = ["rt"] }
 tracing.workspace = true
+
+[features]
+default = ["tokio"]
+# The async functions, which read from disk on tokio's blocking threads. Without it (e.g. for
+# WebAssembly), a project is loaded from an `Fs` with the plain functions.
+tokio = ["dep:tokio"]
 
 [lints]
 workspace = true

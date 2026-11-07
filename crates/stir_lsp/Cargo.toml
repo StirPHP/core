@@ -31,7 +31,7 @@ tracing = { workspace = true, optional = true }
 default = ["server"]
 # The LSP server over stdio (tokio). Without it, only the editor features
 # (hover, completion, ...) are built, e.g. for WebAssembly.
-server = ["dep:serde_json", "dep:sha2", "dep:stir_neon", "dep:stir_phpstan", "dep:stir_project", "dep:tokio", "dep:tower-lsp-server", "dep:tracing"]
+server = ["dep:serde_json", "dep:sha2", "dep:stir_neon", "dep:stir_phpstan", "dep:stir_project", "stir_project/tokio", "dep:tokio", "dep:tower-lsp-server", "dep:tracing"]
 
 [lints]
 workspace = true

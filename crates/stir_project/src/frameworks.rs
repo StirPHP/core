@@ -7,12 +7,14 @@ use std::path::{Path, PathBuf};
 use stir_composer::Framework as Found;
 use stir_db::{BUNDLED_PREFIX, FileOrigin, RootDatabase, ScriptFile, SourceFile};
 use stir_stubs::frameworks::{FRAMEWORKS, Framework};
+use stir_vfs::{Fs, Kind};
 
 use crate::{Composer, Project};
 
 /// The frameworks to support in `project`, in the order of [`FRAMEWORKS`]. `sources` are the
 /// project's own files and their text.
 pub fn frameworks_of(
+    fs: &dyn Fs,
     project: &Project,
     composer: Option<&Composer>,
     sources: &[(PathBuf, std::sync::Arc<str>)],
@@ -28,7 +30,7 @@ pub fn frameworks_of(
                     && !has(Found::Drupal)
                     && !has(Found::Laravel)
         }
-        "wordpress" => has(Found::WordPress) || is_wordpress(&project.root, sources),
+        "wordpress" => has(Found::WordPress) || is_wordpress(fs, &project.root, sources),
         _ => false,
     };
     FRAMEWORKS
@@ -46,10 +48,10 @@ pub fn frameworks_of(
 }
 
 /// WordPress itself, a site built on it, or a plugin or theme of one.
-fn is_wordpress(root: &Path, sources: &[(PathBuf, std::sync::Arc<str>)]) -> bool {
-    if root.join("wp-config.php").is_file()
-        || root.join("wp-content").is_dir()
-        || root.join("wp-includes/version.php").is_file()
+fn is_wordpress(fs: &dyn Fs, root: &Path, sources: &[(PathBuf, std::sync::Arc<str>)]) -> bool {
+    if fs.is_file(&root.join("wp-config.php"))
+        || fs.is_dir(&root.join("wp-content"))
+        || fs.is_file(&root.join("wp-includes/version.php"))
     {
         return true;
     }
@@ -59,7 +61,7 @@ fn is_wordpress(root: &Path, sources: &[(PathBuf, std::sync::Arc<str>)]) -> bool
             let head = text.get(..text.len().min(8 * 1024)).unwrap_or(text);
             head.contains("Plugin Name:")
         }
-    }) || std::fs::read_to_string(root.join("style.css")).is_ok_and(|css| {
+    }) || fs.read_to_string(&root.join("style.css")).is_ok_and(|css| {
         css.get(..css.len().min(8 * 1024))
             .unwrap_or(&css)
             .contains("Theme Name:")
@@ -92,17 +94,21 @@ pub fn bundled_inputs(
 /// The compiled container of a Symfony project, as phpstan-symfony reads it: the file
 /// `parameters.symfony.containerXmlPath` names, or else what `var/cache/` has, the `dev`
 /// environment's first. Read only; nothing is warmed up or built.
-pub fn container_xml(root: &Path, configured: Option<PathBuf>) -> Option<(PathBuf, String)> {
+pub fn container_xml(
+    fs: &dyn Fs,
+    root: &Path,
+    configured: Option<PathBuf>,
+) -> Option<(PathBuf, String)> {
     /// The most of a container that's read.
     const MAX: u64 = 64 * 1024 * 1024;
-    let path = configured.filter(|p| p.is_file()).or_else(|| {
+    let path = configured.filter(|p| fs.is_file(p)).or_else(|| {
         let cache = root.join("var/cache");
-        let mut found: Vec<PathBuf> = std::fs::read_dir(&cache)
+        let mut found: Vec<PathBuf> = fs
+            .read_dir(&cache)
             .ok()?
-            .flatten()
-            .filter(|e| e.path().is_dir())
-            .flat_map(|e| std::fs::read_dir(e.path()).into_iter().flatten().flatten())
-            .map(|e| e.path())
+            .into_iter()
+            .filter(|p| fs.is_dir(p))
+            .flat_map(|p| fs.read_dir(&p).into_iter().flatten())
             .filter(|p| {
                 p.extension().is_some_and(|e| e == "xml")
                     && p.file_stem()
@@ -113,10 +119,13 @@ pub fn container_xml(root: &Path, configured: Option<PathBuf>) -> Option<(PathBu
         found.sort_by_key(|p| (!p.components().any(|c| c.as_os_str() == "dev"), p.clone()));
         found.into_iter().next()
     })?;
-    if std::fs::metadata(&path).ok()?.len() > MAX {
+    let Kind::File { len } = fs.kind(&path)? else {
+        return None;
+    };
+    if len > MAX {
         tracing::warn!(path = %path.display(), "the container is too large to read");
         return None;
     }
-    let text = std::fs::read_to_string(&path).ok()?;
+    let text = fs.read_to_string(&path).ok()?;
     Some((path, text))
 }

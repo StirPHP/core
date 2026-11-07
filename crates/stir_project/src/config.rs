@@ -1,4 +1,7 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use stir_vfs::{Disk, Fs};
 
 use stir_neon::phpstan::{FormatIndent, LoadOptions, PhpstanConfig, PhpstanRun};
 
@@ -60,7 +63,14 @@ impl Config {
     /// Reads `parameters.stirphp` out of the NEON file at `path` and what it includes. `root` is
     /// what `%currentWorkingDirectory%` stands for.
     pub fn load(path: &Path, root: &Path) -> Result<Self> {
-        let opts = LoadOptions::new().param("currentWorkingDirectory", root.to_string_lossy());
+        Self::load_from(&disk(), path, root)
+    }
+
+    /// [`Config::load`], reading from `fs`.
+    pub fn load_from(fs: &Arc<dyn Fs>, path: &Path, root: &Path) -> Result<Self> {
+        let opts = LoadOptions::new()
+            .param("currentWorkingDirectory", root.to_string_lossy())
+            .fs(fs.clone());
         let config = PhpstanConfig::load_with(path, &opts)?;
         let phpstan_tmp_dir = config
             .param("tmpDir")
@@ -96,41 +106,67 @@ pub struct Project {
 
 /// The configuration in `dir`: `stirphp.neon` wins over PHPStan's, and can include that.
 pub fn config_in(dir: &Path) -> Option<PathBuf> {
+    config_in_fs(&Disk, dir)
+}
+
+/// [`config_in`], in `fs`.
+pub fn config_in_fs(fs: &dyn Fs, dir: &Path) -> Option<PathBuf> {
     std::iter::once(CONFIG_FILE)
         .chain(PHPSTAN_CONFIG_FILES)
         .map(|name| dir.join(name))
-        .find(|path| path.is_file())
+        .find(|path| fs.is_file(path))
+}
+
+pub(crate) fn disk() -> Arc<dyn Fs> {
+    Arc::new(Disk)
 }
 
 impl Project {
     /// The nearest project at or above `start`: a directory with a configuration, or else
     /// `composer.json`. A project doesn't need either: then it's `start` itself.
+    #[cfg(feature = "tokio")]
     pub async fn load_or_default(start_dir: impl AsRef<Path>) -> Result<Self> {
-        let start = canonical(start_dir.as_ref()).await?;
+        let start = start_dir.as_ref().to_path_buf();
+        tokio::task::spawn_blocking(move || Self::find(&disk(), &start)).await?
+    }
+
+    /// [`Project::load_or_default`], in `fs`.
+    pub fn find(fs: &Arc<dyn Fs>, start_dir: &Path) -> Result<Self> {
+        let start = canonical(fs.as_ref(), start_dir)?;
         for dir in start.ancestors() {
-            if let Some(file) = config_in(dir) {
-                return Self::read(dir.to_path_buf(), Some(file)).await;
+            if let Some(file) = config_in_fs(fs.as_ref(), dir) {
+                return Self::read(fs, dir.to_path_buf(), Some(file));
             }
-            if dir.join("composer.json").is_file() {
-                return Self::read(dir.to_path_buf(), None).await;
+            if fs.is_file(&dir.join("composer.json")) {
+                return Self::read(fs, dir.to_path_buf(), None);
             }
         }
-        Self::read(start, None).await
+        Self::read(fs, start, None)
     }
 
     /// Like [`Project::load_or_default`], with `file` as the configuration wherever it is.
+    #[cfg(feature = "tokio")]
     pub async fn load_with_config(start_dir: impl AsRef<Path>, file: &Path) -> Result<Self> {
-        let start = canonical(start_dir.as_ref()).await?;
-        let root = start
-            .ancestors()
-            .find(|dir| config_in(dir).is_some() || dir.join("composer.json").is_file())
-            .unwrap_or(&start)
-            .to_path_buf();
-        let file = canonical(&start.join(file)).await?;
-        Self::read(root, Some(file)).await
+        let start = start_dir.as_ref().to_path_buf();
+        let file = file.to_path_buf();
+        tokio::task::spawn_blocking(move || Self::find_with_config(&disk(), &start, &file)).await?
     }
 
-    async fn read(root: PathBuf, config_file: Option<PathBuf>) -> Result<Self> {
+    /// [`Project::load_with_config`], in `fs`.
+    pub fn find_with_config(fs: &Arc<dyn Fs>, start_dir: &Path, file: &Path) -> Result<Self> {
+        let start = canonical(fs.as_ref(), start_dir)?;
+        let root = start
+            .ancestors()
+            .find(|dir| {
+                config_in_fs(fs.as_ref(), dir).is_some() || fs.is_file(&dir.join("composer.json"))
+            })
+            .unwrap_or(&start)
+            .to_path_buf();
+        let file = canonical(fs.as_ref(), &start.join(file))?;
+        Self::read(fs, root, Some(file))
+    }
+
+    fn read(fs: &Arc<dyn Fs>, root: PathBuf, config_file: Option<PathBuf>) -> Result<Self> {
         let Some(file) = config_file else {
             return Ok(Self {
                 root,
@@ -138,10 +174,7 @@ impl Project {
                 config_file: None,
             });
         };
-        let (config, root, file) = tokio::task::spawn_blocking(move || {
-            Config::load(&file, &root).map(|config| (config, root, file))
-        })
-        .await??;
+        let config = Config::load_from(fs, &file, &root)?;
         Ok(Self {
             root,
             config,
@@ -156,22 +189,23 @@ impl Project {
 
     /// Absolute path of `composer.json`: the configured one, or `composer.json`
     /// in the project root if it exists.
+    #[cfg(feature = "tokio")]
     pub async fn composer_path(&self) -> Option<PathBuf> {
+        self.composer_path_in(&Disk)
+    }
+
+    /// [`Project::composer_path`], in `fs`.
+    pub fn composer_path_in(&self, fs: &dyn Fs) -> Option<PathBuf> {
         match &self.config.composer {
             Some(p) => Some(self.root.join(p)),
             None => {
                 let p = self.root.join("composer.json");
-                tokio::fs::try_exists(&p)
-                    .await
-                    .unwrap_or(false)
-                    .then_some(p)
+                fs.exists(&p).then_some(p)
             }
         }
     }
 }
 
-async fn canonical(path: &Path) -> Result<PathBuf> {
-    tokio::fs::canonicalize(path)
-        .await
-        .map_err(|e| Error::io(path, e))
+fn canonical(fs: &dyn Fs, path: &Path) -> Result<PathBuf> {
+    fs.canonicalize(path).map_err(|e| Error::io(path, e))
 }

@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 indexmap = "2.14.2"
+stir_vfs.workspace = true
 thiserror = "2.0.21"
 
 [lints]

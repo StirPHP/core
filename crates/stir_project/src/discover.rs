@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+use stir_vfs::{Fs, Prune};
 
 use crate::config::Project;
 use crate::error::{Error, Result};
@@ -14,20 +16,19 @@ pub struct SourceFile {
 
 /// Finds all project source files under `srcDir`, honouring `.gitignore` and
 /// `include`/`exclude`. The result is sorted by path.
+#[cfg(feature = "tokio")]
 pub async fn discover(project: &Project) -> Result<Vec<SourceFile>> {
     let project = project.clone();
-    tokio::task::spawn_blocking(move || discover_blocking(&project)).await?
+    tokio::task::spawn_blocking(move || discover_in(&stir_vfs::Disk, &project)).await?
 }
 
 /// The PHP files under `dir`, honouring `.gitignore`, without a `vendor/` folder's. Sorted.
 pub fn php_files_under(dir: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = ignore::WalkBuilder::new(dir)
-        .require_git(false)
-        .filter_entry(|e| !(e.depth() > 0 && e.file_name() == "vendor"))
-        .build()
+    let vendor: Prune = Arc::new(|p: &Path| p.file_name().is_some_and(|n| n == "vendor"));
+    let mut files: Vec<PathBuf> = stir_vfs::Disk
+        .project_files(dir, vendor)
+        .into_iter()
         .flatten()
-        .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
-        .map(ignore::DirEntry::into_path)
         .filter(|p| stir_syntax::is_php_path(p))
         .collect();
     files.sort();
@@ -52,7 +53,8 @@ fn build_set<'a>(patterns: impl IntoIterator<Item = &'a str>) -> Result<GlobSet>
     })
 }
 
-fn discover_blocking(project: &Project) -> Result<Vec<SourceFile>> {
+/// [`discover`], in `fs`.
+pub fn discover_in(fs: &dyn Fs, project: &Project) -> Result<Vec<SourceFile>> {
     let config = &project.config;
     let root = project.root.clone();
     let src_dir = project.src_dir();
@@ -68,7 +70,7 @@ fn discover_blocking(project: &Project) -> Result<Vec<SourceFile>> {
             .filter(|p| !p.is_empty()),
     )?;
 
-    if !src_dir.is_dir() {
+    if !fs.is_dir(&src_dir) {
         return Ok(Vec::new());
     }
 
@@ -82,32 +84,21 @@ fn discover_blocking(project: &Project) -> Result<Vec<SourceFile>> {
     let filter_exclude_dirs = exclude_dirs.clone();
     let filter_src = src_dir.clone();
     let filter_project_root = root.clone();
-    let walker = ignore::WalkBuilder::new(&src_dir)
-        .require_git(false)
-        .sort_by_file_name(|a, b| a.cmp(b))
-        .filter_entry(move |entry| {
-            let path = entry.path();
-            if !entry.file_type().is_some_and(|t| t.is_dir()) || path == filter_src {
-                return true;
-            }
-            let matches = |set: &GlobSet| {
-                path.strip_prefix(&filter_src)
+    let prune: Prune = Arc::new(move |path: &Path| {
+        let matches = |set: &GlobSet| {
+            path.strip_prefix(&filter_src)
+                .is_ok_and(|rel| set.is_match(rel))
+                || path
+                    .strip_prefix(&filter_project_root)
                     .is_ok_and(|rel| set.is_match(rel))
-                    || path
-                        .strip_prefix(&filter_project_root)
-                        .is_ok_and(|rel| set.is_match(rel))
-            };
-            !(matches(&filter_exclude_dirs) || matches(&filter_exclude))
-        })
-        .build();
+        };
+        matches(&filter_exclude_dirs) || matches(&filter_exclude)
+    });
 
     let mut files = Vec::new();
-    for entry in walker {
-        let entry = entry?;
-        if !entry.file_type().is_some_and(|t| t.is_file()) {
-            continue;
-        }
-        let path = entry.path();
+    for path in fs.project_files(&src_dir, prune) {
+        let path = path?;
+        let path = path.as_path();
         if path.extension().is_none_or(|e| e != "php") {
             continue;
         }

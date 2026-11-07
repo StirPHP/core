@@ -33,6 +33,7 @@ pub enum Error {
     #[error("can't add to `{}` without changing the rest of it: {reason}", .path.display())]
     CantEditConfig { path: PathBuf, reason: String },
 
+    #[cfg(feature = "tokio")]
     #[error("background task failed: {0}")]
     Join(#[from] tokio::task::JoinError),
 }
