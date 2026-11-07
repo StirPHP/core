@@ -82,7 +82,7 @@ pub fn bundled_inputs(
         .iter()
         .flat_map(|f| f.stubs.iter())
         .map(|(path, text)| {
-            let path = PathBuf::from(format!("stubs://override/frameworks/{path}"));
+            let path = PathBuf::from(format!("stubs://{path}"));
             SourceFile::new(db, path, (*text).to_owned(), FileOrigin::Stub)
         })
         .collect();

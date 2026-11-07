@@ -81,7 +81,9 @@ impl<'db> Ctx<'db> {
             };
             let Some(c) = self.class(name) else { continue };
             if let Some(to) = &self.script_magic(&c).forward_calls {
-                return super::hooks::parse_type(self, to, Some(ty)).ok();
+                // `static` is the class itself, whatever the forwarded call returns
+                let to = super::hooks::parse_type(self, to, Some(ty)).ok()?;
+                return Some(crate::body::resolve_self(&to, ty));
             }
         }
         None
@@ -145,7 +147,8 @@ impl Checker<'_, '_> {
                 return Some(crate::body::resolve_self(&ret, recv));
             }
             Some(Answer::Forward { to, fluent }) => {
-                let to = super::hooks::parse_type(self.ctx, &to, Some(recv)).ok()?;
+                let to = super::hooks::parse_type(self.ctx, &to, Some(cls)).ok()?;
+                let to = crate::body::resolve_self(&to, cls);
                 return self.forward_call(node, recv, &to, fluent, name, range, expected);
             }
             None => {}
@@ -228,6 +231,7 @@ impl Checker<'_, '_> {
             }
             Answer::Forward { to, .. } => {
                 let to = super::hooks::parse_type(self.ctx, &to, Some(cls)).ok()?;
+                let to = crate::body::resolve_self(&to, cls);
                 let before = self.diags.len();
                 self.forwards += 1;
                 let t = self.member_type(&to, name, range);

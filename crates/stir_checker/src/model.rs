@@ -25,6 +25,9 @@ use stir_types::{
 use crate::codes;
 use crate::script::magic::ScriptMagic;
 
+/// Laravel's collection of models: one type argument is the models', not the keys'.
+const ELOQUENT_COLLECTION: &str = "illuminate\\database\\eloquent\\collection";
+
 /// A generic parameter with its id and bound.
 #[derive(Debug, Clone)]
 pub struct GenericParam {
@@ -873,8 +876,12 @@ impl<'db> Ctx<'db> {
             }
         }
         if let Some(c) = self.class(name) {
-            // PHPDoc may leave out trailing type arguments: `Generator<K, V>`
             let mut args = args;
+            // as larastan has it, `Collection<User>` of Eloquent is `Collection<int, User>`
+            if args.len() == 1 && c.params.len() == 2 && key == ELOQUENT_COLLECTION {
+                args.insert(0, Ty::int());
+            }
+            // PHPDoc may leave out trailing type arguments: `Generator<K, V>`
             if !args.is_empty() && args.len() < c.params.len() {
                 args.resize(c.params.len(), Ty::untyped());
             }

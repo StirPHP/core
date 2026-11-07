@@ -137,6 +137,24 @@ impl TypeFacade {
         .unwrap_or_default()
     }
 
+    /// What calling the method `name` on a value of this type returns, as its signature says.
+    fn method_type(&self, name: &str) -> Dynamic {
+        let base = stir_types::without_null(&self.ty);
+        let ws = self.ws;
+        self.with_model(|ctx| {
+            let TyKind::Class { .. } = base.kind() else {
+                return Dynamic::UNIT;
+            };
+            let Some((owner, m, map)) = ctx.find_method(&base, name) else {
+                return Dynamic::UNIT;
+            };
+            let ret = stir_types::subst(&ctx.method_sig(&owner, m).ret, &map);
+            let ret = crate::body::resolve_self(&ret, &base);
+            Dynamic::from(TypeFacade::new(ret, ws))
+        })
+        .unwrap_or(Dynamic::UNIT)
+    }
+
     fn has_member(&self, name: &str, method: bool) -> bool {
         let base = stir_types::without_null(&self.ty);
         self.with_model(|ctx| {
@@ -383,7 +401,17 @@ pub(super) fn register(engine: &mut Engine) {
         })
         .register_get("literal", |t: &mut TypeFacade| t.literal())
         .register_get("type_args", |t: &mut TypeFacade| t.type_args())
+        .register_fn("types", |t: &mut TypeFacade| {
+            let ws = t.ws;
+            t.ty.members()
+                .iter()
+                .map(|m| Dynamic::from(TypeFacade::new(m.clone(), ws)))
+                .collect::<Array>()
+        })
         .register_fn("members", |t: &mut TypeFacade| t.members())
+        .register_fn("method_type", |t: &mut TypeFacade, name: &str| {
+            t.method_type(name)
+        })
         .register_fn("has_method", |t: &mut TypeFacade, name: &str| {
             t.has_member(name, true)
         })

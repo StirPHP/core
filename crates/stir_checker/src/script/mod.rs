@@ -22,6 +22,7 @@ use crate::codes;
 
 mod facade;
 pub(crate) mod hooks;
+pub mod laravel;
 pub(crate) mod magic;
 mod members;
 mod node;
@@ -47,6 +48,7 @@ pub(crate) static ENGINE: LazyLock<Engine> = LazyLock::new(|| {
     node::register(&mut engine);
     facade::register(&mut engine);
     reflect::register(&mut engine);
+    laravel::register(&mut engine);
     engine
 });
 

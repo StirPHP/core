@@ -129,7 +129,7 @@ impl Playground {
         files.extend(framework.stubs.iter().map(|(path, text)| {
             SourceFile::new(
                 &self.db,
-                format!("stubs://override/frameworks/{path}").into(),
+                format!("stubs://{path}").into(),
                 (*text).to_owned(),
                 FileOrigin::Stub,
             )

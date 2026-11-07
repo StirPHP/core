@@ -1,0 +1,37 @@
+<?php
+
+namespace Illuminate\Database\Eloquent;
+
+/**
+ * What a query of models hands its callbacks is a collection of models, where Laravel's PHPDoc has
+ * the collection it comes from.
+ *
+ * @template TModel of Model
+ */
+class Builder
+{
+    /**
+     * @param int $count
+     * @param callable(\Illuminate\Database\Eloquent\Collection<int, TModel>, int): mixed $callback
+     * @return bool
+     */
+    public function chunk($count, callable $callback) {}
+
+    /**
+     * @param int $count
+     * @param callable(\Illuminate\Database\Eloquent\Collection<int, TModel>, int): mixed $callback
+     * @param string|null $column
+     * @param string|null $alias
+     * @return bool
+     */
+    public function chunkById($count, callable $callback, $column = null, $alias = null) {}
+
+    /**
+     * @param int $count
+     * @param callable(\Illuminate\Database\Eloquent\Collection<int, TModel>, int): mixed $callback
+     * @param string|null $column
+     * @param string|null $alias
+     * @return bool
+     */
+    public function chunkByIdDesc($count, callable $callback, $column = null, $alias = null) {}
+}

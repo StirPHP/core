@@ -14,7 +14,8 @@ pub struct Framework {
     /// The script's file name, under `stir_db::BUNDLED_PREFIX`.
     pub script_name: &'static str,
     pub script: &'static str,
-    /// Stub files laid over the framework's own declarations, by a path under `stubs://override`.
+    /// Stub files, by their path under `stubs://`: under `override/`, what's laid over the
+    /// framework's own declarations, and elsewhere what's declared as it is.
     pub stubs: &'static [(&'static str, &'static str)],
 }
 
@@ -24,7 +25,16 @@ pub const FRAMEWORKS: &[Framework] = &[
         name: "laravel",
         script_name: "laravel.rhai",
         script: include_str!("../frameworks/laravel.rhai"),
-        stubs: &[],
+        stubs: &[
+            (
+                "frameworks/laravel/aliases.php",
+                include_str!("../frameworks/laravel/aliases.php"),
+            ),
+            (
+                "override/frameworks/laravel/EloquentBuilder.stub",
+                include_str!("../frameworks/laravel/EloquentBuilder.stub"),
+            ),
+        ],
     },
     Framework {
         name: "symfony",
