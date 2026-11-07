@@ -483,10 +483,58 @@ fn config(key: &str) -> Dynamic {
     .unwrap_or(Dynamic::UNIT)
 }
 
+/// The macros the project's code adds, `Collection::macro('toUpper', ..)`: by the class's
+/// lowercase name, the macros' names.
+#[salsa::tracked(returns(ref))]
+pub fn laravel_macros(db: &dyn Db, ws: Workspace) -> BTreeMap<String, Vec<String>> {
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for &file in ws.files(db) {
+        if file.origin(db) != FileOrigin::Source || !file.text(db).contains("macro(") {
+            continue;
+        }
+        let root = stir_db::parse(db, file).syntax();
+        let items = stir_hir::file_items(db, file);
+        for call in root.descendants().filter(|n| n.kind() == STATIC_CALL_EXPR) {
+            let Some(fetch) = call.children().next() else {
+                continue;
+            };
+            if name_of(&fetch).as_deref() != Some("macro") {
+                continue;
+            }
+            let Some(class) = fetch.children().next().filter(|c| c.kind() == NAME_EXPR) else {
+                continue;
+            };
+            let Some(name) = arguments(&call).first().and_then(string_value) else {
+                continue;
+            };
+            let scope = items.scope_at(call.text_range().start());
+            let class = scope.resolve_class(class.text().to_string().trim());
+            let names = out.entry(class.as_str().to_ascii_lowercase()).or_default();
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    out
+}
+
+/// `laravel_macros(class)`: the names of the macros the project adds to `class` itself.
+fn macros(class: &str) -> Array {
+    let key = class.trim_start_matches('\\').to_ascii_lowercase();
+    stir_db::attached(|db| {
+        let ws = Workspace::try_get(db)?;
+        let names = laravel_macros(db, ws).get(&key)?;
+        Some(names.iter().map(|n| Dynamic::from(n.clone())).collect())
+    })
+    .flatten()
+    .unwrap_or_default()
+}
+
 pub(super) fn register(engine: &mut Engine) {
     engine
         .register_fn("laravel_columns", columns)
-        .register_fn("laravel_config", config);
+        .register_fn("laravel_config", config)
+        .register_fn("laravel_macros", macros);
 }
 
 #[cfg(test)]

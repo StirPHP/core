@@ -351,6 +351,12 @@ fn magic_method(type, name, is_static) {
     if class_name == "Illuminate\\Database\\Query\\Builder" && is_dynamic_where(name) {
         return "$this";
     }
+    // a macro the project adds, `Collection::macro('toUpper', ..)`: what it is isn't followed
+    if c.is_subtype_of("Illuminate\\Support\\Traits\\Macroable") {
+        for ancestor in c.ancestors() {
+            if name in laravel_macros(ancestor) { return "mixed"; }
+        }
+    }
     // `$query->orWhere->active()`: a scope of whichever model it's a query of
     if class_name == "Illuminate\\Database\\Eloquent\\HigherOrderBuilderProxy" {
         return "mixed";

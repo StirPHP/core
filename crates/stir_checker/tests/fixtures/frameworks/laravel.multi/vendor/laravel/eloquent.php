@@ -99,10 +99,21 @@ namespace Illuminate\Database\Eloquent\Relations {
     class BelongsTo extends Relation {}
 }
 
+namespace Illuminate\Support\Traits {
+    trait Macroable
+    {
+        public static function macro(string $name, callable $macro): void {}
+        public function __call(string $method, array $parameters): mixed { return null; }
+    }
+}
+
 namespace Illuminate\Support {
     /**
      * @template TKey of array-key
      * @template-covariant TValue
      */
-    class Collection {}
+    class Collection
+    {
+        use Traits\Macroable;
+    }
 }

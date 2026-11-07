@@ -57,3 +57,10 @@ function auth_user(): void
     wants_string($user); // error: argument.type
     auth()->logout();
 }
+
+function macros(\Illuminate\Support\Collection $items): void
+{
+    \Illuminate\Support\Collection::macro('shout', fn () => 1);
+    $items->shout();
+    $items->whisper(); // error: method.notFound
+}
