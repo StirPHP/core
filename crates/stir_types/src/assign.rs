@@ -440,6 +440,9 @@ impl<'a> Checker<'a> {
         let r = match variance {
             Variance::Out => self.check(a, b),
             Variance::In => self.check(b, a),
+            // `static` of a class is that class or one below: as PHPStan has it, that may be the
+            // same, which isn't wrong
+            Variance::Invariant if same_class_or_static(a, b) => Ok(()),
             Variance::Invariant => self.check(a, b).and_then(|()| self.check(b, a)),
         };
         r.map_err(|cause| {
@@ -1025,7 +1028,9 @@ impl<'a> Checker<'a> {
                         }
                         Variance::Out => self.maybe(x, y, d),
                         Variance::In => self.maybe(y, x, d),
-                        Variance::Invariant => self.ok(x, y) && self.ok(y, x),
+                        Variance::Invariant => {
+                            same_class_or_static(x, y) || self.ok(x, y) && self.ok(y, x)
+                        }
                     })
             }
             _ => false,
@@ -1061,5 +1066,18 @@ impl<'a> Checker<'a> {
             }
             _ => return None,
         })
+    }
+}
+
+/// Is one of `a` and `b` the `static` of the class the other is?
+fn same_class_or_static(a: &Ty, b: &Ty) -> bool {
+    let class = |t: &Ty| match t.kind() {
+        crate::TyKind::SelfType { class, .. } => Some((class.clone(), true)),
+        crate::TyKind::Class { .. } => Some((t.clone(), false)),
+        _ => None,
+    };
+    match (class(a), class(b)) {
+        (Some((x, sx)), Some((y, sy))) => sx != sy && x == y,
+        _ => false,
     }
 }

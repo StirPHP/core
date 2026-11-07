@@ -6344,7 +6344,20 @@ fn class_of(ty: &Ty) -> Ty {
 
 /// Replaces `static`/`$this` in a return type with the receiver's type.
 pub(crate) fn resolve_self(ret: &Ty, recv: &Ty) -> Ty {
-    if matches!(ret.kind(), TyKind::SelfType { .. }) {
+    // the receiver's own arguments keep their `static`: the `static` of `Builder<static>`, from a
+    // model's `static::query()`, is the model's and not the builder's
+    let mut kept = Vec::new();
+    if let TyKind::Class { args, .. } = recv.kind() {
+        for a in args.iter() {
+            a.walk(&mut |t| {
+                if matches!(t.kind(), TyKind::SelfType { .. }) {
+                    kept.push(t.clone());
+                }
+                true
+            });
+        }
+    }
+    if matches!(ret.kind(), TyKind::SelfType { .. }) && !kept.contains(ret) {
         return recv.clone();
     }
     // inside another type `$this` is no more than `static`: `Builder<static>`
@@ -6353,6 +6366,7 @@ pub(crate) fn resolve_self(ret: &Ty, recv: &Ty) -> Ty {
         _ => recv.clone(),
     };
     ret.transform(&mut |t| match t.kind() {
+        TyKind::SelfType { .. } if kept.contains(t) => Some(t.clone()),
         TyKind::SelfType { .. } => Some(nested.clone()),
         _ => None,
     })
