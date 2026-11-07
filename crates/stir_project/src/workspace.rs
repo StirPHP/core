@@ -61,6 +61,8 @@ pub struct Loaded {
     pub notices: Vec<String>,
     /// The project's scripts, whether they're allowed to run or not.
     pub rules: Vec<ScriptFile>,
+    /// The frameworks there's support for in the workspace, by name.
+    pub frameworks: Vec<&'static str>,
 }
 
 /// Builds the database for `project`: discovered sources, all builtin stubs and
@@ -114,6 +116,7 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
     };
 
     let rules = read_rules(project).await;
+    let frameworks = crate::frameworks::frameworks_of(project, composer.as_ref(), &source_texts);
 
     let db = RootDatabase::default();
     let mut files = Vec::new();
@@ -130,6 +133,8 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         .filter(|f| f.path(&db).to_string_lossy().starts_with("stubs://"))
         .count();
     files.extend(builtins);
+    let (bundled, framework_stubs) = crate::frameworks::bundled_inputs(&db, &frameworks);
+    files.extend(framework_stubs);
 
     if vendor_dir.join("phpstan/phpstan").is_dir() {
         files.push(SourceFile::new(
@@ -182,8 +187,13 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
     for rule in &allowed {
         tracing::info!(path = %rule.path(&db).display(), "running rules");
     }
+    let frameworks: Vec<&'static str> = frameworks.iter().map(|f| f.name).collect();
+    if !frameworks.is_empty() {
+        tracing::info!(?frameworks, "framework support");
+    }
     let workspace = Workspace::builder(files, settings)
         .scripts(allowed)
+        .bundled_scripts(bundled)
         .new(&db);
     tracing::debug!(
         sources = sources.len(),
@@ -202,6 +212,7 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
         vendor_dir,
         notices,
         rules,
+        frameworks,
     })
 }
 

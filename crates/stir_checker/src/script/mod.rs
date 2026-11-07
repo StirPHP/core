@@ -74,6 +74,14 @@ struct Targets {
     static_methods: Vec<(SmolStr, SmolStr)>,
 }
 
+/// Is `script` one of ours, rather than the project's?
+pub fn is_bundled(db: &dyn Db, script: ScriptFile) -> bool {
+    script
+        .path(db)
+        .to_str()
+        .is_some_and(|p| p.starts_with(stir_db::BUNDLED_PREFIX))
+}
+
 fn script_name(path: &std::path::Path) -> String {
     path.file_name()
         .map_or_else(|| path.display().to_string(), |n| n.display().to_string())
@@ -242,7 +250,8 @@ impl ScriptIndex {
 #[salsa::tracked(returns(ref))]
 pub fn script_index(db: &dyn Db, ws: Workspace) -> ScriptIndex {
     let mut index = ScriptIndex::default();
-    for &script in ws.scripts(db) {
+    // the project's first: what they say counts over what ours say
+    for &script in ws.scripts(db).iter().chain(ws.bundled_scripts(db)) {
         let c = compiled_script(db, script);
         for (kinds, function) in &c.visits {
             for kind in *kinds {
@@ -315,6 +324,11 @@ fn script_range(db: &dyn Db, script: ScriptFile, error: &ScriptError) -> TextRan
 /// diagnostic, at the script, however many files it failed for.
 pub fn script_diagnostics(db: &dyn Db, ws: Workspace, files: &[SourceFile]) -> Vec<Diagnostic> {
     let mut out = Vec::new();
+    for &script in ws.bundled_scripts(db) {
+        if let Some(error) = &compiled_script(db, script).error {
+            tracing::error!(script = %script.path(db).display(), %error, "a bundled script can't be used");
+        }
+    }
     for &script in ws.scripts(db) {
         if let Some(error) = &compiled_script(db, script).error {
             let name = script_name(script.path(db));
@@ -332,6 +346,17 @@ pub fn script_diagnostics(db: &dyn Db, ws: Workspace, files: &[SourceFile]) -> V
     let mut order = Vec::new();
     for &file in files {
         for failure in &crate::checked_file(db, ws, file).script_failures {
+            // ours failing is our mistake, not the project's: it's logged, and that's all
+            if is_bundled(db, failure.script) {
+                tracing::warn!(
+                    script = %failure.script.path(db).display(),
+                    function = %failure.function,
+                    file = ?failure.file,
+                    message = %failure.message,
+                    "a bundled script failed"
+                );
+                continue;
+            }
             let key = (failure.script, failure.function.clone());
             let entry = failed.entry(key.clone()).or_insert_with(|| {
                 order.push(key);

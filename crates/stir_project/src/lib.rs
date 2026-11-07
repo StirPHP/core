@@ -6,6 +6,7 @@ mod composer;
 mod config;
 mod discover;
 mod error;
+pub mod frameworks;
 pub mod init;
 mod neon_edit;
 pub mod workspace;

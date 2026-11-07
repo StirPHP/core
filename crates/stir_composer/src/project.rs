@@ -68,6 +68,8 @@ const FRAMEWORK_PACKAGES: &[(&str, Framework)] = &[
     ("laravel/framework", Framework::Laravel),
     ("magento/product-community-edition", Framework::Magento),
     ("magento/framework", Framework::Magento),
+    // what a plugin or theme is checked against
+    ("php-stubs/wordpress-stubs", Framework::WordPress),
     ("roots/wordpress", Framework::WordPress),
     ("slim/slim", Framework::Slim),
     ("symfony/framework-bundle", Framework::Symfony),
@@ -212,6 +214,11 @@ impl Composer {
         self.packages.iter().any(|p| p.name == name)
             || self.required.iter().any(|r| r == name)
             || self.name.as_deref() == Some(name)
+    }
+
+    /// Does the root package itself require `name`, in `require` or `require-dev`?
+    pub fn requires(&self, name: &str) -> bool {
+        self.required.iter().any(|r| r == name)
     }
 
     /// The frameworks the project uses, sorted.

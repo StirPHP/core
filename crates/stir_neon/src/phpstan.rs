@@ -101,7 +101,12 @@ pub struct StirphpParameters {
     pub deprecations: bool,
     /// `phpstan`: how to run PHPStan next to our own analysis.
     pub phpstan: PhpstanRun,
+    /// `frameworks`: framework support turned on or off by name, over what's found in the project.
+    pub frameworks: Vec<(String, bool)>,
 }
+
+/// The frameworks `parameters.stirphp.frameworks` can name.
+pub const FRAMEWORKS: &[&str] = &["laravel", "symfony", "wordpress"];
 
 /// How to run PHPStan, from `parameters.stirphp.phpstan` or an editor's settings. What's left out
 /// is found out or takes a default.
@@ -483,8 +488,38 @@ impl PhpstanConfig {
                 }
                 "deprecations" => out.deprecations = boolean(v, &k)?,
                 "phpstan" => out.phpstan = self.phpstan_run(v)?,
+                "frameworks" => out.frameworks = self.frameworks(v)?,
                 other => return Err(self.invalid(KEY, format!("unknown key `{other}`"))),
             }
+        }
+        Ok(out)
+    }
+
+    /// `parameters.stirphp.frameworks`: `{laravel: false}` and the like.
+    fn frameworks(&self, value: &Value) -> Result<Vec<(String, bool)>, ConfigError> {
+        const KEY: &str = "stirphp";
+        let Some(entries) = value.entries() else {
+            return Err(self.invalid(
+                KEY,
+                "`frameworks` must be a mapping, such as `{laravel: false}`",
+            ));
+        };
+        let mut out = Vec::new();
+        for (k, v) in entries {
+            let name = key_string(&k);
+            if !FRAMEWORKS.contains(&name.as_str()) {
+                return Err(self.invalid(
+                    KEY,
+                    format!(
+                        "`frameworks` has no `{name}`: there's {}",
+                        FRAMEWORKS.join(", ")
+                    ),
+                ));
+            }
+            let Value::Bool(on) = v else {
+                return Err(self.invalid(KEY, format!("`frameworks.{name}` must be true or false")));
+            };
+            out.push((name, *on));
         }
         Ok(out)
     }

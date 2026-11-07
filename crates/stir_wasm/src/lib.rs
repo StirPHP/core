@@ -97,10 +97,46 @@ impl Playground {
     /// what its visitor chose to.
     #[wasm_bindgen(js_name = addRule)]
     pub fn add_rule(&mut self, name: &str, source: &str) {
+        // a visitor's script is never taken for one of ours
+        let name = name.trim_start_matches(stir_db::BUNDLED_PREFIX);
         let script = ScriptFile::new(&self.db, name.into(), Ok(source.to_owned()));
         let mut scripts = self.ws.scripts(&self.db).clone();
         scripts.push(script);
         let _ = self.ws.set_scripts(&mut self.db).to(scripts);
+    }
+
+    /// Turns on what StirPHP ships for a framework (`laravel`, `symfony` or `wordpress`), as a
+    /// project using it would have: its bundled script and stubs. False for one there's none for.
+    #[wasm_bindgen(js_name = useFramework)]
+    pub fn use_framework(&mut self, name: &str) -> bool {
+        let Some(framework) = stir_stubs::frameworks::framework(name) else {
+            return false;
+        };
+        let path = format!("{}{}", stir_db::BUNDLED_PREFIX, framework.script_name);
+        let mut scripts = self.ws.bundled_scripts(&self.db).clone();
+        if scripts
+            .iter()
+            .any(|s| s.path(&self.db).to_str() == Some(path.as_str()))
+        {
+            return true;
+        }
+        scripts.push(ScriptFile::new(
+            &self.db,
+            path.into(),
+            Ok(framework.script.to_owned()),
+        ));
+        let mut files = self.ws.files(&self.db).clone();
+        files.extend(framework.stubs.iter().map(|(path, text)| {
+            SourceFile::new(
+                &self.db,
+                format!("stubs://override/frameworks/{path}").into(),
+                (*text).to_owned(),
+                FileOrigin::Stub,
+            )
+        }));
+        let _ = self.ws.set_bundled_scripts(&mut self.db).to(scripts);
+        let _ = self.ws.set_files(&mut self.db).to(files);
+        true
     }
 
     /// Removes all rule scripts.

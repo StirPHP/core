@@ -60,6 +60,7 @@
 //! [JetBrains/phpstorm-stubs]: https://github.com/JetBrains/phpstorm-stubs
 
 mod extensions;
+pub mod frameworks;
 
 pub use extensions::{EXTENSIONS, PHP_EXTENSIONS};
 

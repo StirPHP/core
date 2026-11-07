@@ -479,6 +479,38 @@ fn stirphp_section_rejects_what_it_does_not_know() {
 }
 
 #[test]
+fn frameworks_turned_on_and_off() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = root(&tmp);
+    let file = write(
+        &dir,
+        "stirphp.neon",
+        "parameters:\n    stirphp:\n        frameworks:\n            laravel: false\n            wordpress: true\n",
+    );
+    let own = PhpstanConfig::load_with(&file, &opts()).unwrap().stirphp;
+    assert_eq!(
+        own.frameworks,
+        [
+            ("laravel".to_owned(), false),
+            ("wordpress".to_owned(), true)
+        ]
+    );
+    for section in [
+        "frameworks: laravel",
+        "frameworks:\n            drupal: true",
+        "frameworks:\n            laravel: 0",
+    ] {
+        let text = format!("parameters:\n    stirphp:\n        {section}\n");
+        let file = write(&dir, "stirphp.neon", &text);
+        let err = PhpstanConfig::load_with(&file, &opts()).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::Invalid { .. }),
+            "{section}: {err}"
+        );
+    }
+}
+
+#[test]
 fn how_to_run_phpstan() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = root(&tmp);

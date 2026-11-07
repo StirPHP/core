@@ -34,6 +34,8 @@ pub struct Config {
     pub phpstan: PhpstanRun,
     /// PHPStan's `tmpDir`, whose `.php` files are its caches and never the project's sources.
     pub phpstan_tmp_dir: Option<PathBuf>,
+    /// Framework support turned on or off by name, over what's found in the project.
+    pub frameworks: Vec<(String, bool)>,
 }
 
 impl Default for Config {
@@ -49,6 +51,7 @@ impl Default for Config {
             deprecations: false,
             phpstan: PhpstanRun::default(),
             phpstan_tmp_dir: None,
+            frameworks: Vec::new(),
         }
     }
 }
@@ -76,6 +79,7 @@ impl Config {
             deprecations: own.deprecations,
             phpstan: own.phpstan,
             phpstan_tmp_dir,
+            frameworks: own.frameworks,
         })
     }
 }

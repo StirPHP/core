@@ -474,3 +474,81 @@ async fn phpstan_caches_are_not_sources() {
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].path, root.join("src/a.php"));
 }
+
+// ---------- frameworks ----------
+
+async fn frameworks_in(root: &Path) -> (Vec<&'static str>, Vec<String>) {
+    use stir_project::workspace::{LoadOptions, load_workspace};
+    let project = Project::load_or_default(root).await.unwrap();
+    let options = LoadOptions {
+        vendor: false,
+        ..LoadOptions::default()
+    };
+    let loaded = load_workspace(&project, options).await.unwrap();
+    let scripts = loaded
+        .workspace
+        .bundled_scripts(&loaded.db)
+        .iter()
+        .map(|s| s.path(&loaded.db).display().to_string())
+        .collect();
+    (loaded.frameworks, scripts)
+}
+
+#[tokio::test]
+async fn frameworks_are_found_and_can_be_turned_off_or_on() {
+    let tmp = TempDir::new().unwrap();
+    let root = canon(&tmp);
+    write(
+        root.join("composer.json"),
+        r#"{"require": {"laravel/framework": "^13"}}"#,
+    );
+    write(root.join("app/a.php"), "<?php\n");
+    let (found, scripts) = frameworks_in(&root).await;
+    assert_eq!(found, ["laravel"]);
+    // ours, by a name no file of the project can have
+    assert_eq!(scripts, ["bundled://laravel.rhai"]);
+
+    write(
+        root.join("stirphp.neon"),
+        "parameters:\n    stirphp:\n        frameworks:\n            laravel: false\n            symfony: true\n",
+    );
+    let (found, _) = frameworks_in(&root).await;
+    assert_eq!(found, ["symfony"]);
+}
+
+#[tokio::test]
+async fn a_wordpress_plugin_or_site_is_wordpress() {
+    let tmp = TempDir::new().unwrap();
+    let root = canon(&tmp);
+    write(
+        root.join("my-plugin.php"),
+        "<?php\n/**\n * Plugin Name: My Plugin\n */\n",
+    );
+    assert_eq!(frameworks_in(&root).await.0, ["wordpress"]);
+
+    let tmp = TempDir::new().unwrap();
+    let root = canon(&tmp);
+    write(root.join("wp-config.php"), "<?php\n");
+    assert_eq!(frameworks_in(&root).await.0, ["wordpress"]);
+
+    let tmp = TempDir::new().unwrap();
+    let root = canon(&tmp);
+    write(root.join("index.php"), "<?php\necho 1;\n");
+    assert!(frameworks_in(&root).await.0.is_empty());
+}
+
+#[tokio::test]
+async fn symfony_components_without_another_framework_are_symfony() {
+    let tmp = TempDir::new().unwrap();
+    let root = canon(&tmp);
+    write(
+        root.join("composer.json"),
+        r#"{"require": {"symfony/dependency-injection": "^7", "symfony/console": "^7"}}"#,
+    );
+    assert_eq!(frameworks_in(&root).await.0, ["symfony"]);
+    write(
+        root.join("composer.json"),
+        r#"{"require": {"laravel/framework": "^13", "symfony/dependency-injection": "^7"}}"#,
+    );
+    assert_eq!(frameworks_in(&root).await.0, ["laravel"]);
+}

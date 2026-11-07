@@ -64,8 +64,12 @@ pub fn is_overlay(path: &Path) -> bool {
     path.starts_with("stubs://override") || path.starts_with("stubs://overlay")
 }
 
-/// A project's script (`parameters.stirphp.rules`). An input of its own, so that changing a script
-/// invalidates what ran it and nothing else.
+/// Where our own scripts are in a workspace (`stir_stubs::frameworks`): a name that isn't a place
+/// on disk, so no script of a project can be taken for one.
+pub const BUNDLED_PREFIX: &str = "bundled://";
+
+/// A project's script (`parameters.stirphp.rules`), or one of ours. An input of its own, so that
+/// changing a script invalidates what ran it and nothing else.
 #[salsa::input(debug)]
 pub struct ScriptFile {
     #[returns(ref)]
@@ -94,6 +98,11 @@ pub struct Workspace {
     #[returns(ref)]
     #[default]
     pub scripts: Vec<ScriptFile>,
+    /// Our own scripts for the frameworks the project uses (see `stir_stubs::frameworks`). They
+    /// run without anyone's say-so, and after the project's, which can override what they say.
+    #[returns(ref)]
+    #[default]
+    pub bundled_scripts: Vec<ScriptFile>,
 }
 
 /// The highest PHPStan rule level (`max`).
