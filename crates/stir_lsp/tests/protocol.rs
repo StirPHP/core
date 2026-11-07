@@ -959,3 +959,131 @@ async fn what_is_deprecated_is_struck_through() {
     assert_eq!(diags[0]["tags"], json!([2]), "the tag for deprecated");
     assert_eq!(diags[0]["range"]["start"]["line"], 3);
 }
+
+/// The position of `needle` in `text`, `at` characters into it.
+fn position_of(text: &str, needle: &str, at: usize) -> Value {
+    let start = text.find(needle).unwrap_or_else(|| panic!("no {needle}")) + at;
+    let line = text[..start].matches('\n').count();
+    let character = start - text[..start].rfind('\n').map_or(0, |n| n + 1);
+    json!({"line": line, "character": character})
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn framework_magic_reaches_completion_hover_and_definition() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap().join("project");
+    let fixtures =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../stir_checker/tests/fixtures/frameworks");
+    let laravel = fixtures.join("laravel.multi");
+    for file in [
+        "vendor/laravel/eloquent.php",
+        "vendor/laravel/support.php",
+        "app/Models/Post.php",
+        "app/Models/User.php",
+        "database/migrations/2026_01_01_000000_create_posts_table.php",
+    ] {
+        write(
+            &root.join(file.replace("vendor/laravel", "framework")),
+            &std::fs::read_to_string(laravel.join(file)).unwrap(),
+        );
+    }
+    write(
+        &root.join("framework/wordpress.php"),
+        &std::fs::read_to_string(fixtures.join("wordpress.multi/vendor/wordpress.php")).unwrap(),
+    );
+    // ours run without asking, even where the editor doesn't trust the workspace
+    write(
+        &root.join("stirphp.neon"),
+        "parameters:\n    stirphp:\n        frameworks:\n            laravel: true\n            wordpress: true\n",
+    );
+    write(
+        &root.join("routes/web.php"),
+        "<?php\nRoute::get('/posts/{post}', fn () => 1)->name('posts.show');\n",
+    );
+    write(
+        &root.join("resources/views/posts/show.blade.php"),
+        "<h1>{{ $title }}</h1>\n",
+    );
+    write(
+        &root.join("plugin.php"),
+        "<?php\nfunction plugin_boot(): void { do_action('plugin_ready', 1); }\n",
+    );
+    let main = root.join("main.php");
+    let text = "<?php\nuse App\\Models\\Post;\nfunction run(Post $post): void {\n    $post->views;\n    $post->author;\n    Post::published(2024);\n    route('posts.show');\n    view('posts.show');\n    add_action('plugin_ready', 'run');\n    Post::\n}\n";
+    write(&main, text);
+    let main_uri = uri(&main);
+    let mut c = Client::start_with(trust_options(&tmp.path().join("trust.json")));
+    c.request(
+        "initialize",
+        json!({"processId": null, "rootUri": uri(&root), "capabilities": asking_client(),
+               "initializationOptions": {"workspaceTrusted": false}}),
+    )
+    .await;
+    c.notify("initialized", json!({})).await;
+    c.notify(
+        "textDocument/didOpen",
+        json!({"textDocument": {"uri": main_uri, "languageId": "php", "version": 1, "text": text}}),
+    )
+    .await;
+    let at = |needle: &str, offset: usize| json!({"textDocument": {"uri": main_uri}, "position": position_of(text, needle, offset)});
+
+    // a column from the migrations
+    let mut shown = String::new();
+    for _ in 0..200 {
+        let got = c.request("textDocument/hover", at("views", 1)).await;
+        shown = got["contents"]["value"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        if shown.contains("int") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(shown.contains("int $views"), "{shown}");
+
+    // a relation's property leads to its method, a scope to its method
+    let def = c.request("textDocument/definition", at("author", 1)).await;
+    assert_eq!(def["uri"], uri(&root.join("app/Models/Post.php")), "{def}");
+    let def = c
+        .request("textDocument/definition", at("published", 1))
+        .await;
+    assert_eq!(def["uri"], uri(&root.join("app/Models/Post.php")), "{def}");
+    let line = def["range"]["start"]["line"].as_u64().unwrap() as usize;
+    let post = std::fs::read_to_string(root.join("app/Models/Post.php")).unwrap();
+    assert!(
+        post.lines().nth(line).unwrap().contains("scopePublished"),
+        "{def}"
+    );
+
+    // names in strings
+    let def = c
+        .request("textDocument/definition", at("posts.show')", 1))
+        .await;
+    assert_eq!(def["uri"], uri(&root.join("routes/web.php")), "{def}");
+    let def = c
+        .request("textDocument/definition", at("view('posts", 7))
+        .await;
+    assert_eq!(
+        def["uri"],
+        uri(&root.join("resources/views/posts/show.blade.php")),
+        "{def}"
+    );
+    let def = c
+        .request("textDocument/definition", at("plugin_ready", 1))
+        .await;
+    assert_eq!(def["uri"], uri(&root.join("plugin.php")), "{def}");
+
+    // scopes and what's forwarded to the query, statically
+    let got = c
+        .request("textDocument/completion", at("Post::\n", 6))
+        .await;
+    let items = got["items"]
+        .as_array()
+        .cloned()
+        .or(got.as_array().cloned())
+        .unwrap();
+    let labels: Vec<&str> = items.iter().map(|i| i["label"].as_str().unwrap()).collect();
+    assert!(labels.contains(&"published"), "{labels:?}");
+    assert!(labels.contains(&"where"), "{labels:?}");
+}

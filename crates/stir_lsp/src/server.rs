@@ -1377,6 +1377,19 @@ impl LanguageServer for Server {
         self.read(
             &params.text_document_position_params.text_document.uri,
             move |db, ws, file, map| {
+                // a name in a string that a framework knows: a hook, a view, a route
+                let named =
+                    stir_checker::script::links::string_targets(db, ws, file, map.offset(pos));
+                if !named.is_empty() {
+                    let locs: Vec<Location> = named
+                        .into_iter()
+                        .filter_map(|(f, range)| location(db, f, range, enc))
+                        .collect();
+                    return Some(match <[Location; 1]>::try_from(locs) {
+                        Ok([one]) => GotoDefinitionResponse::Scalar(one),
+                        Err(many) => GotoDefinitionResponse::Array(many),
+                    });
+                }
                 let (_, def) = nav::def_at(db, ws, file, map.offset(pos))?;
                 let t = nav::target(db, ws, file, &def)?;
                 let loc = location(db, t.file, t.focus_range, enc)?;

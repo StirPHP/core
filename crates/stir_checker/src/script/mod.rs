@@ -23,6 +23,7 @@ use crate::codes;
 mod facade;
 pub(crate) mod hooks;
 pub mod laravel;
+pub mod links;
 pub(crate) mod magic;
 mod members;
 mod node;
