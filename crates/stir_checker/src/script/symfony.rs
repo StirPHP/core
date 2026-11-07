@@ -161,13 +161,16 @@ fn scalar(kind: Option<&str>, text: &str) -> Value {
     }
 }
 
+/// A collection's items, by key where they have one.
+type Items = Vec<(Option<String>, Value)>;
+
 /// What Symfony's `XmlDumper` writes, read back: services under `<services>`, parameters under
 /// `<parameters>`, collections nested.
 fn parse(text: &str) -> Container {
     let mut container = Container::default();
     let mut in_parameters = false;
     // the collections being read, innermost last, each with its key
-    let mut open: Vec<(Option<String>, Vec<(Option<String>, Value)>)> = Vec::new();
+    let mut open: Vec<(Option<String>, Items)> = Vec::new();
     // for each `<parameter>` not closed yet, whether it's a collection
     let mut unclosed: Vec<bool> = Vec::new();
     for (tag, content) in tags(text) {
