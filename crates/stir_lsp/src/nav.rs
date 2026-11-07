@@ -295,6 +295,21 @@ pub fn target(db: &dyn Db, ws: Workspace, file: SourceFile, def: &Def) -> Option
             at(loc.file, ptr_range(&c.ptr), c.name_range)
         }
         Def::Member { class, kind, name } => {
+            // what a script says is declared elsewhere, such as a relation's method
+            let declared = match kind {
+                MemberKind::Method | MemberKind::Property => {
+                    stir_checker::script::magic_origin(db, ws, class, *kind, name)
+                }
+                _ => None,
+            };
+            if let Some(o) = declared.filter(|o| &o.class != class || &o.name != name) {
+                let def = Def::Member {
+                    class: o.class,
+                    kind: o.kind,
+                    name: o.name,
+                };
+                return target(db, ws, file, &def);
+            }
             let loc = class_loc(db, ws, class)?;
             let c = &file_items(db, loc.file).classes[loc.index as usize];
             let root = stir_db::parse(db, loc.file).syntax();

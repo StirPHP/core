@@ -23,10 +23,14 @@ use crate::codes;
 mod facade;
 pub(crate) mod hooks;
 pub(crate) mod magic;
+mod members;
 mod node;
+mod reflect;
 mod rules;
 
 pub(crate) use facade::ScriptCtx;
+pub use magic::Origin;
+pub use members::magic_origin;
 pub(crate) use node::Node;
 pub use rules::{RuleCheck, rule_check};
 
@@ -42,6 +46,7 @@ pub(crate) static ENGINE: LazyLock<Engine> = LazyLock::new(|| {
     });
     node::register(&mut engine);
     facade::register(&mut engine);
+    reflect::register(&mut engine);
     engine
 });
 
@@ -51,6 +56,8 @@ pub(crate) const RETURN_TYPE_OF_FUNCTION: &str = "return_type_of_function";
 pub(crate) const RETURN_TYPE_OF_METHOD: &str = "return_type_of_method";
 pub(crate) const RETURN_TYPE_OF_STATIC_METHOD: &str = "return_type_of_static_method";
 pub(crate) const MAGIC_MEMBERS: &str = "magic_members";
+pub(crate) const MAGIC_METHOD: &str = "magic_method";
+pub(crate) const MAGIC_PROPERTY: &str = "magic_property";
 /// What a script answers return types for: its `return_type_of_*` only get called for these.
 const RETURN_TYPE_TARGETS: &str = "return_type_targets";
 
@@ -63,6 +70,8 @@ pub struct Compiled {
     visits: Vec<(&'static [SyntaxKind], SmolStr)>,
     targets: Targets,
     magic: bool,
+    magic_method: bool,
+    magic_property: bool,
 }
 
 /// What `return_type_targets()` says.
@@ -96,6 +105,8 @@ pub fn compiled_script(db: &dyn Db, script: ScriptFile) -> Compiled {
         visits: Vec::new(),
         targets: Targets::default(),
         magic: false,
+        magic_method: false,
+        magic_property: false,
     };
     let text = match script.text(db) {
         Ok(text) => text,
@@ -107,22 +118,32 @@ pub fn compiled_script(db: &dyn Db, script: ScriptFile) -> Compiled {
         Err(error) => return refuse(error),
     };
     match read_declarations(&ast) {
-        Ok((visits, targets, magic)) => Compiled {
+        Ok(d) => Compiled {
             ast: Some(ast),
             error: None,
-            visits,
-            targets,
-            magic,
+            visits: d.visits,
+            targets: d.targets,
+            magic: d.magic,
+            magic_method: d.magic_method,
+            magic_property: d.magic_property,
         },
         Err(error) => refuse(error),
     }
 }
 
-type Declarations = (Vec<(&'static [SyntaxKind], SmolStr)>, Targets, bool);
+/// What a script declares by the functions it has.
+struct Declarations {
+    visits: Vec<(&'static [SyntaxKind], SmolStr)>,
+    targets: Targets,
+    magic: bool,
+    magic_method: bool,
+    magic_property: bool,
+}
 
 fn read_declarations(ast: &AST) -> Result<Declarations, ScriptError> {
     let mut visits = Vec::new();
     let mut magic = false;
+    let (mut magic_method, mut magic_property) = (false, false);
     let mut has_targets = false;
     let mut needs_targets = None;
     let takes = |name: &str, found: usize, wanted: usize| {
@@ -163,6 +184,14 @@ fn read_declarations(ast: &AST) -> Result<Declarations, ScriptError> {
                 takes(f.name, found, 1)?;
                 magic = true;
             }
+            MAGIC_METHOD => {
+                takes(f.name, found, 3)?;
+                magic_method = true;
+            }
+            MAGIC_PROPERTY => {
+                takes(f.name, found, 2)?;
+                magic_property = true;
+            }
             _ => {}
         }
     }
@@ -175,7 +204,13 @@ fn read_declarations(ast: &AST) -> Result<Declarations, ScriptError> {
     } else {
         Targets::default()
     };
-    Ok((visits, targets, magic))
+    Ok(Declarations {
+        visits,
+        targets,
+        magic,
+        magic_method,
+        magic_property,
+    })
 }
 
 fn read_targets(ast: &AST) -> Result<Targets, ScriptError> {
@@ -238,6 +273,9 @@ pub struct ScriptIndex {
     /// By lowercase function name.
     pub(crate) functions: FxHashMap<SmolStr, Vec<ScriptFile>>,
     pub(crate) magic: Vec<ScriptFile>,
+    /// The scripts with a `magic_method`, and those with a `magic_property`.
+    pub(crate) magic_methods: Vec<ScriptFile>,
+    pub(crate) magic_properties: Vec<ScriptFile>,
 }
 
 impl ScriptIndex {
@@ -272,6 +310,12 @@ pub fn script_index(db: &dyn Db, ws: Workspace) -> ScriptIndex {
         }
         if c.magic {
             index.magic.push(script);
+        }
+        if c.magic_method {
+            index.magic_methods.push(script);
+        }
+        if c.magic_property {
+            index.magic_properties.push(script);
         }
     }
     index

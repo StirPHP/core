@@ -590,3 +590,115 @@ fn an_edit_does_not_wait_for_a_slow_script() {
     assert!(worker.join().unwrap().is_err());
     assert!(codes(&s.db, s.ws, s.files[0]).is_empty());
 }
+
+/// What's reported in `php` with `scripts`, as `"line code"`.
+fn reported(php: &str, scripts: &[&str], level: u8) -> Vec<String> {
+    let s = setup(&[("/a.php", php)], scripts);
+    let ws = s.ws;
+    let settings = ws.settings(&s.db).clone();
+    let mut db = s.db;
+    ws.set_settings(&mut db).to(Settings {
+        php_level: level,
+        ..settings
+    });
+    let mut found: Vec<String> = check_file(&db, ws, s.files[0])
+        .iter()
+        .map(|d| {
+            let line = php[..usize::from(d.range.start())].matches('\n').count() + 1;
+            format!("{line} {}", d.code)
+        })
+        .collect();
+    found.extend(
+        script_diagnostics(&db, ws, &s.files)
+            .iter()
+            .map(|d| format!("script {}: {}", d.code, d.message)),
+    );
+    found
+}
+
+const FORWARDING: &str = r#"
+    fn magic_members(name) {
+        let c = class(name);
+        if c == () || name == "App\\Model" || !c.is_subtype_of("App\\Model") { return; }
+        let properties = #{};
+        let casts = c.property("casts").default_value;
+        for column in casts.keys() {
+            properties[column] = if casts[column] == "integer" { "int" } else { "string" };
+        }
+        let relation = c.method("author");
+        if relation != () {
+            let made = relation.returned_call();
+            properties["author"] = #{ type: made.args["0"], declared_at: name + "::author" };
+        }
+        #{ properties: properties, forward_calls: "App\\Builder<static>" }
+    }
+
+    fn magic_method(type, name, is_static) {
+        if type.class_name != "App\\Builder" { return; }
+        let model = class(type.type_args[0].class_name);
+        let scope = model.method("scope" + name);
+        if scope != () {
+            return #{ returns: "$this", params: "int $year", declared_at: scope.class + "::" + scope.name };
+        }
+        if name.starts_with("where") { return "$this"; }
+    }
+
+    fn magic_property(type, name) {
+        if type.class_name == "App\\Proxy" { return #{ forward_to: "App\\Post" }; }
+    }
+"#;
+
+const FORWARDING_PHP: &str = r#"<?php
+declare(strict_types=1);
+namespace App;
+/** @template TModel of Model */
+class Builder {
+    /** @return $this */
+    public function where(string $column): static { return $this; }
+    /** @return TModel|null */
+    public function first(): ?Model { return null; }
+    public function __call(string $m, array $a): mixed { return null; }
+}
+class Model {
+    public function __call(string $m, array $a): mixed { return null; }
+    public static function __callStatic(string $m, array $a): mixed { return null; }
+    public function __get(string $n): mixed { return null; }
+    public function belongsTo(string $class): object { return new $class(); }
+}
+class User extends Model {}
+class Post extends Model {
+    protected $casts = ['views' => 'integer', 'title' => 'string'];
+    public function scopePublished(Builder $q, int $year): void {}
+    public function author() { return $this->belongsTo(User::class); }
+}
+class Proxy { public function __get(string $n): mixed { return null; } }
+function wants_int(int $n): void {}
+function run(Post $post, Proxy $proxy): void {
+    wants_int($post->views);
+    wants_int($post->title);
+    $first = Post::where('a')->published(2024)->whereTitle('x')->first();
+    wants_int($first);
+    Post::published('x');
+    Post::nope();
+    $post->nope();
+    wants_int($post->author);
+    wants_int($proxy->views);
+    $proxy->nope;
+}
+"#;
+
+#[test]
+fn scripts_can_forward_calls_and_answer_for_one_name() {
+    assert_eq!(
+        reported(FORWARDING_PHP, &[FORWARDING], 5),
+        [
+            "28 argument.type",         // a string
+            "30 argument.type",         // ?App\Post
+            "31 argument.type",         // the scope takes an int
+            "32 staticMethod.notFound", // on Post, not on what it's forwarded to
+            "33 method.notFound",
+            "34 argument.type", // App\User
+            "36 property.notFound",
+        ]
+    );
+}

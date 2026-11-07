@@ -113,6 +113,8 @@ pub struct Checker<'a, 'db> {
     prepass: u32,
     /// Inside `isset`, `empty` or the left of `??`: the value is allowed not to exist.
     probing: u32,
+    /// How many calls scripts have forwarded the one being checked through.
+    pub(crate) forwards: u32,
     /// The function (by `fns` depth) that ran `include` or `extract`, which can
     /// define any variable from then on.
     dynamic_vars_fn: Option<usize>,
@@ -257,6 +259,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             loops: Vec::new(),
             prepass: 0,
             probing: 0,
+            forwards: 0,
             dynamic_vars_fn: None,
             frames: vec![FxHashMap::default()],
             fns: Vec::new(),
@@ -275,7 +278,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
-    fn def(&mut self, range: TextRange, def: Def) {
+    pub(crate) fn def(&mut self, range: TextRange, def: Def) {
         self.defs.insert(range, def);
     }
 
@@ -4351,7 +4354,7 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     /// Checks arguments against a signature, inferring generics. `class_map`
     /// substitutes the declaring class's parameters.
-    fn check_args(
+    pub(crate) fn check_args(
         &mut self,
         call: &SyntaxNode,
         sig: &FnSig,
@@ -5003,7 +5006,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
-    fn member_type(&mut self, recv: &Ty, name: &str, range: TextRange) -> Ty {
+    pub(crate) fn member_type(&mut self, recv: &Ty, name: &str, range: TextRange) -> Ty {
         let recv = &self.bound_of(recv);
         let recv = &self
             .intersection_member(recv, |this, m| this.ctx.find_property(m, name).is_some())
@@ -5053,6 +5056,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                         // every child element of a document is a property
                         if class_named("SimpleXMLElement") {
                             return Ty::class("SimpleXMLElement", Vec::new());
+                        }
+                        if let Some(t) = self.magic_property(&cls, name, range) {
+                            return t;
                         }
                         // PHPStan's `reportMagicProperties`: fine at level 0, but from level 1
                         // a property only `__get` knows of has to be declared with `@property`
@@ -5293,7 +5299,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
-    fn call_member(
+    pub(crate) fn call_member(
         &mut self,
         node: &SyntaxNode,
         recv: &Ty,
@@ -5359,6 +5365,11 @@ impl<'a, 'db> Checker<'a, 'db> {
         if matches!(cls.kind(), TyKind::Class { .. }) && !self.class_known(&cls) {
             self.check_args_untyped(node);
             return Ty::untyped();
+        }
+        if matches!(cls.kind(), TyKind::Class { .. })
+            && let Some(t) = self.magic_call(node, &cls, recv, name, range, expected, false)
+        {
+            return t;
         }
         // PHPStan's `reportMagicMethods`: fine at level 0, but from level 1 a method only
         // `__call` knows of has to be declared with `@method`
@@ -5449,6 +5460,8 @@ impl<'a, 'db> Checker<'a, 'db> {
         matches!(cls.kind(), TyKind::Class { .. })
             && (self.ctx.find_method(&cls, name).is_some()
                 || self.has_magic(&cls, "__call")
+                || self.ctx.magic_answer(&cls, name, Some(false)).is_some()
+                || self.ctx.forwarded_calls(&cls).is_some()
                 || !self.class_known(&cls))
             || matches!(ty.kind(), TyKind::Mixed | TyKind::Object | TyKind::Error)
             || ty.is_untyped()
@@ -5683,6 +5696,17 @@ impl<'a, 'db> Checker<'a, 'db> {
                 ) {
                     self.check_args_untyped(node);
                     return Ty::error();
+                }
+                if let Some(t) = self.magic_call(
+                    node,
+                    &cls,
+                    &cls,
+                    &name,
+                    name_node.text_range(),
+                    expected,
+                    true,
+                ) {
+                    return t;
                 }
                 if self.has_magic(&cls, "__callStatic") {
                     self.error(
@@ -6319,7 +6343,7 @@ fn class_of(ty: &Ty) -> Ty {
 }
 
 /// Replaces `static`/`$this` in a return type with the receiver's type.
-fn resolve_self(ret: &Ty, recv: &Ty) -> Ty {
+pub(crate) fn resolve_self(ret: &Ty, recv: &Ty) -> Ty {
     if matches!(ret.kind(), TyKind::SelfType { .. }) {
         return recv.clone();
     }
@@ -6335,7 +6359,7 @@ fn resolve_self(ret: &Ty, recv: &Ty) -> Ty {
 }
 
 /// `sig` as seen through a receiver: what `static` in its parameters stands for.
-fn sig_for_receiver(mut sig: FnSig, recv: &Ty) -> FnSig {
+pub(crate) fn sig_for_receiver(mut sig: FnSig, recv: &Ty) -> FnSig {
     for p in &mut sig.params {
         p.ty = resolve_self(&p.ty, recv);
     }

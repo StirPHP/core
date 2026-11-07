@@ -468,7 +468,8 @@ fn member_items(
             Visibility::Private => enclosing == Some(m.class.as_str()),
         };
         let wants_static = matches!(m.ty, MemberTy::Const(_) | MemberTy::Case) || m.is_static;
-        if !visible || wants_static != statics {
+        // a forwarded method is there for `__call` and `__callStatic` alike
+        if !visible || (wants_static != statics && !m.forwarded) {
             continue;
         }
         let (kind, detail, insert) = match &m.ty {

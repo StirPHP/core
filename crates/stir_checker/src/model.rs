@@ -161,7 +161,10 @@ pub struct Ctx<'db> {
     /// What the project's scripts subscribe to.
     pub scripts: &'db crate::script::ScriptIndex,
     /// What went wrong with them for this model.
-    script_failures: RefCell<Vec<crate::ScriptFailure>>,
+    pub(crate) script_failures: RefCell<Vec<crate::ScriptFailure>>,
+    /// What scripts said a name is on a type: see [`Ctx::magic_answer`].
+    pub(crate) magic_answers:
+        RefCell<FxHashMap<(Ty, SmolStr, u8), Option<crate::script::magic::Answer>>>,
     params: RefCell<ParamTable>,
     classes: RefCell<FxHashMap<SmolStr, Option<Rc<ClassModel<'db>>>>>,
     supers: RefCell<FxHashMap<SmolStr, Rc<Supers>>>,
@@ -187,6 +190,7 @@ impl<'db> Ctx<'db> {
             index: stir_hir::def_index(db, ws),
             scripts: crate::script::script_index(db, ws),
             script_failures: RefCell::default(),
+            magic_answers: RefCell::default(),
             params: RefCell::default(),
             classes: RefCell::default(),
             supers: RefCell::default(),

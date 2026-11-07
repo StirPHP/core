@@ -66,6 +66,25 @@ impl TypeFacade {
         TypeFacade::new(of.clone(), self.ws).class_name()
     }
 
+    /// The type arguments of a generic class type, such as `int` and `App\User` for
+    /// `Collection<int, App\User>`, or of an array or list type.
+    fn type_args(&self) -> Array {
+        let base = stir_types::without_null(&self.ty);
+        let args: Vec<Ty> = match base.kind() {
+            TyKind::Class { args, .. } => args.to_vec(),
+            TyKind::SelfType { class, .. } => match class.kind() {
+                TyKind::Class { args, .. } => args.to_vec(),
+                _ => Vec::new(),
+            },
+            TyKind::Array { key, value, .. } => vec![key.clone(), value.clone()],
+            TyKind::List { elem, .. } => vec![elem.clone()],
+            _ => Vec::new(),
+        };
+        args.into_iter()
+            .map(|t| Dynamic::from(TypeFacade::new(t, self.ws)))
+            .collect()
+    }
+
     /// The value of a literal type.
     fn literal(&self) -> Dynamic {
         match self.ty.kind() {
@@ -363,6 +382,7 @@ pub(super) fn register(engine: &mut Engine) {
             t.class_string().map_or(Dynamic::UNIT, Dynamic::from)
         })
         .register_get("literal", |t: &mut TypeFacade| t.literal())
+        .register_get("type_args", |t: &mut TypeFacade| t.type_args())
         .register_fn("members", |t: &mut TypeFacade| t.members())
         .register_fn("has_method", |t: &mut TypeFacade, name: &str| {
             t.has_member(name, true)

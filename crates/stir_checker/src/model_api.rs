@@ -188,10 +188,18 @@ pub struct MemberInfo {
     pub visibility: stir_hir::Visibility,
     /// It, or its class, is marked deprecated.
     pub deprecated: bool,
+    /// A method of another type that calls are forwarded to, as scripts say: it can be called
+    /// statically or not, whatever it is there.
+    pub forwarded: bool,
 }
 
 /// Every member of `ty` (a class type), nearest declaration first.
 pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
+    members_through(ctx, ty, 0)
+}
+
+/// [`members`], through `forwards` forwarded calls so far.
+fn members_through(ctx: &Ctx<'_>, ty: &Ty, forwards: u32) -> Vec<MemberInfo> {
     let ty = match ty.kind() {
         TyKind::SelfType { class, .. } => class,
         _ => ty,
@@ -226,6 +234,7 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
                 is_static: m.mods.is_static,
                 visibility: m.mods.visibility,
                 deprecated: m.deprecated.is_some() || c.def.deprecated.is_some(),
+                forwarded: false,
             };
             push(&mut out, member, 0);
         }
@@ -264,6 +273,7 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
                 is_static,
                 visibility,
                 deprecated,
+                forwarded: false,
             };
             push(&mut out, member, 1);
         }
@@ -276,6 +286,7 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
                 is_static: true,
                 visibility: k.mods.visibility,
                 deprecated: k.deprecated.is_some() || c.def.deprecated.is_some(),
+                forwarded: false,
             };
             push(&mut out, member, 2);
         }
@@ -287,6 +298,7 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
                 is_static: true,
                 visibility: stir_hir::Visibility::Public,
                 deprecated: k.deprecated.is_some() || c.def.deprecated.is_some(),
+                forwarded: false,
             };
             push(&mut out, member, 2);
         }
@@ -311,6 +323,7 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
                         is_static: m.mods.is_static,
                         visibility: m.mods.visibility,
                         deprecated: false,
+                        forwarded: false,
                     });
                 }
             }
@@ -328,6 +341,22 @@ pub fn members(ctx: &Ctx<'_>, ty: &Ty) -> Vec<MemberInfo> {
                         is_static: false,
                         visibility: p.mods.visibility,
                         deprecated: false,
+                        forwarded: false,
+                    });
+                }
+            }
+        }
+        // the public methods of what calls are forwarded to, as `__call` and `__callStatic` reach
+        if let Some(to) = ctx.forwarded_calls(ty).filter(|_| forwards < 4) {
+            for m in members_through(ctx, &to, forwards + 1) {
+                let public = m.visibility == stir_hir::Visibility::Public;
+                if public
+                    && matches!(m.ty, MemberTy::Method(_))
+                    && seen.insert((0, m.name.to_ascii_lowercase()))
+                {
+                    out.push(MemberInfo {
+                        forwarded: true,
+                        ..m
                     });
                 }
             }
