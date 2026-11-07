@@ -155,7 +155,7 @@ fn model_members(c) {
             if attribute != "" && !properties.contains(attribute) {
                 let t = m.method.return_type;
                 let ty = if t.is_unknown() { "mixed" } else { t.to_string() };
-                properties[attribute] = #{ type: ty, declared_at: m.class + "::" + name };
+                properties[attribute] = #{ type: ty, write: "mixed", declared_at: m.class + "::" + name };
             }
         } else if m.returns_class == "Illuminate\\Database\\Eloquent\\Casts\\Attribute" {
             let attribute = snake(name);
@@ -165,7 +165,7 @@ fn model_members(c) {
                     let args = m.method.return_type.type_args;
                     if args.len() > 0 && !args[0].is_unknown() { ty = args[0].to_string(); }
                 }
-                properties[attribute] = #{ type: ty, declared_at: m.class + "::" + name };
+                properties[attribute] = #{ type: ty, write: "mixed", declared_at: m.class + "::" + name };
             }
         }
     }
@@ -195,13 +195,14 @@ fn model_members(c) {
         if ty != () && !properties.contains(name) {
             let column = columns[name];
             let nullable = column != () && column.nullable && ty != "mixed";
-            properties[name] = if nullable { "?" + ty } else { ty };
+            // Laravel casts what's set, too
+            properties[name] = #{ type: if nullable { "?" + ty } else { ty }, write: "mixed" };
         }
     }
 
     for name in columns.keys() {
         if !properties.contains(name) {
-            properties[name] = columns[name].type;
+            properties[name] = #{ type: columns[name].type, write: "mixed" };
         }
     }
 
@@ -350,6 +351,10 @@ fn magic_method(type, name, is_static) {
     if class_name == "Illuminate\\Database\\Query\\Builder" && is_dynamic_where(name) {
         return "$this";
     }
+    // `$query->orWhere->active()`: a scope of whichever model it's a query of
+    if class_name == "Illuminate\\Database\\Eloquent\\HigherOrderBuilderProxy" {
+        return "mixed";
+    }
 }
 
 // What a query of models has from the model: its scopes, and the query methods it declares itself,
@@ -406,12 +411,18 @@ fn is_dynamic_where(name) {
 // has it. Its migrations, if there are any, aren't the whole story.
 fn magic_property(type, name) {
     let class_name = type.class_name;
-    if class_name == () || class_name == model_class() { return; }
+    if class_name == () { return; }
+    if class_name == model_class() { return "mixed"; }
     let c = class(class_name);
     if c == () { return; }
     if c.is_subtype_of(model_class()) { return "mixed"; }
     // a request's input, by name
     if c.is_subtype_of("Illuminate\\Http\\Request") { return "mixed"; }
+    // `$users->map->name`: each value's, as the values have it
+    if class_name == "Illuminate\\Support\\HigherOrderCollectionProxy" {
+        let args = type.type_args;
+        if args.len() > 1 && args[1].class_name != () { return #{ forward_to: args[1].to_string() }; }
+    }
 }
 
 // ----------------------------------------------------------------------------- return types

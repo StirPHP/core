@@ -91,6 +91,33 @@ impl<'db> Ctx<'db> {
 }
 
 impl Checker<'_, '_> {
+    /// What a property scripts declare takes, for `$object->name = ..`, if that's not its type.
+    pub(crate) fn magic_write_type(&self, lhs: &SyntaxNode) -> Option<Ty> {
+        if lhs.kind() != stir_syntax::SyntaxKind::PROPERTY_FETCH_EXPR
+            || self.ctx.scripts.magic.is_empty()
+        {
+            return None;
+        }
+        let base = lhs.children().next()?;
+        let name = lhs
+            .children()
+            .find(|c| c.kind() == stir_syntax::SyntaxKind::NAME)?;
+        let name = name.text().to_string();
+        let ty = self.types.get(&base.text_range())?;
+        let ty = stir_types::without_null(ty);
+        let class = match ty.kind() {
+            TyKind::SelfType { class, .. } => class.clone(),
+            _ => ty.clone(),
+        };
+        let p = self.ctx.find_property(&class, name.trim())?;
+        if !p.magic {
+            return None;
+        }
+        let takes = self.ctx.script_magic(&p.class).write_type(name.trim())?;
+        let cx = self.ctx.class_cx(&p.class);
+        super::hooks::parse_type(self.ctx, takes, cx.self_ty.as_ref()).ok()
+    }
+
     /// A method scripts make available on `cls`, called on `recv` (the same, unless it's `static`
     /// or `$this`): the type of the call, or nothing if they don't know of one.
     #[allow(clippy::too_many_arguments)]

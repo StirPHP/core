@@ -44,10 +44,19 @@ pub struct ScriptMagic {
     pub forward_calls: Option<String>,
     /// Where members are declared, by kind and name, when that's not the class.
     pub origins: Vec<(MemberKind, SmolStr, Origin)>,
+    /// What properties take when they're written, by name, where that's not what they give.
+    pub write_types: Vec<(SmolStr, String)>,
     pub failures: Vec<ScriptFailure>,
 }
 
 impl ScriptMagic {
+    pub fn write_type(&self, name: &str) -> Option<&str> {
+        self.write_types
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, t)| t.as_str())
+    }
+
     pub fn origin(&self, kind: MemberKind, name: &str) -> Option<&Origin> {
         self.origins
             .iter()
@@ -110,6 +119,21 @@ fn ask_script(
     };
     let mut doc = String::from("/**\n");
     let mut origins = Vec::new();
+    let mut writes = Vec::new();
+    if let Some(properties) = entries(&wrong, &map, "properties")? {
+        for (name, value) in &properties {
+            let Some(details) = value.clone().try_cast::<Map>() else {
+                continue;
+            };
+            if let Some(takes) = details.get("write") {
+                let takes = text_field(&wrong, name, takes)?;
+                writes.push((
+                    SmolStr::new(name.trim_start_matches('$')),
+                    checked_text(&wrong, &takes, true)?,
+                ));
+            }
+        }
+    }
     for (tag, origin) in property_tags(&wrong, &map)? {
         doc.push_str(&format!(" * {tag}\n"));
         origins.extend(origin);
@@ -147,6 +171,9 @@ fn ask_script(
                 .find(|(k, n, _)| *k == MemberKind::Property && n == &p.name)
             {
                 out.origins.push(o.clone());
+            }
+            if let Some(w) = writes.iter().find(|(n, _)| n == &p.name) {
+                out.write_types.push(w.clone());
             }
             out.properties.push(p);
         }

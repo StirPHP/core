@@ -3530,7 +3530,12 @@ impl<'a, 'db> Checker<'a, 'db> {
                 let lt = self.expr(lhs, None);
                 self.check_mutable_target(lhs);
                 self.check_assign_target_writable(lhs);
-                let declared = self.declared_target_type(lhs).unwrap_or(lt.clone());
+                // what a script says a magic property takes, when that's not what it gives
+                let takes = self.magic_write_type(lhs);
+                let declared = takes
+                    .clone()
+                    .or_else(|| self.declared_target_type(lhs))
+                    .unwrap_or(lt.clone());
                 let vt = self.expr(rhs, Some(&declared));
                 let result = match op {
                     EQ => vt.clone(),
@@ -3588,6 +3593,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                     self.forget_properties_of(&key);
                     for frame in &mut self.frames {
                         frame.remove(key.as_str());
+                    }
+                    // what it gives isn't what it was given
+                    if takes.is_some() {
+                        return result;
                     }
                     // what it holds now, within what it's declared to hold; `null` isn't kept, since
                     // a call could fill it in and comparing with it would then look pointless
@@ -5448,6 +5457,19 @@ impl<'a, 'db> Checker<'a, 'db> {
         Ty::union(results)
     }
 
+    /// Do the calls scripts forward from `cls` go somewhere with a method `name`?
+    fn forwarded_has(&self, cls: &Ty, name: &str, depth: u32) -> bool {
+        if depth > 3 {
+            return false;
+        }
+        let Some(to) = self.ctx.forwarded_calls(cls) else {
+            return false;
+        };
+        self.ctx.find_method(&to, name).is_some()
+            || self.ctx.magic_answer(&to, name, Some(false)).is_some()
+            || self.forwarded_has(&to, name, depth + 1)
+    }
+
     fn responds_to(&self, ty: &Ty, name: &str) -> bool {
         if let TyKind::Intersection(ms) = ty.kind() {
             return ms.iter().any(|m| self.responds_to(m, name));
@@ -5456,12 +5478,13 @@ impl<'a, 'db> Checker<'a, 'db> {
             let b = self.bound_of(ty);
             return matches!(b.kind(), TyKind::Param { .. }) || self.responds_to(&b, name);
         }
+        // only `__call` isn't enough: as PHPStan has it, a member of a union without the method
+        // makes it a level 7 problem
         let cls = class_of(ty);
         matches!(cls.kind(), TyKind::Class { .. })
             && (self.ctx.find_method(&cls, name).is_some()
-                || self.has_magic(&cls, "__call")
                 || self.ctx.magic_answer(&cls, name, Some(false)).is_some()
-                || self.ctx.forwarded_calls(&cls).is_some()
+                || self.forwarded_has(&cls, name, 0)
                 || !self.class_known(&cls))
             || matches!(ty.kind(), TyKind::Mixed | TyKind::Object | TyKind::Error)
             || ty.is_untyped()
