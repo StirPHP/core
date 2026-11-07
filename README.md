@@ -125,6 +125,7 @@ parameters:
         indent: 4                   # or `tab`, for `stirphp fmt`; in an editor, the default is the editor's
         deprecations: true          # report the use of what's deprecated; see PHPStan compatibility
         phpstan: true               # or `false`, or settings; see Running PHPStan
+        frameworks: {laravel: false}  # turn a framework's support off, or on; see Frameworks
 ```
 
 An unknown key is an error.
@@ -188,10 +189,10 @@ differ from PHPStan's. So:
 
 The limits:
 
-- PHPStan extensions and custom rules are PHP code, which can't run in this engine. A project that relies on them, such
-  as framework extensions or strict rules, should [run PHPStan alongside StirPHP](#running-phpstan), or write what it needs
-  as [scripts](#custom-rules). Until a framework's magic is described that way, expect errors PHPStan's extensions would
-  have explained away.
+- PHPStan extensions and custom rules are PHP code, which can't run in this engine. StirPHP has its own support for
+  [Laravel, Symfony and WordPress](#frameworks), covering part of what larastan, phpstan-symfony, phpstan-doctrine and
+  phpstan-wordpress do. For the rest, and for other extensions such as strict rules, [run PHPStan alongside
+  StirPHP](#running-phpstan), or write what a project needs as [scripts](#custom-rules).
 - The checks don't all exist yet, and those that exist don't always agree with PHPStan. Conditions and comparisons that can
   only go one way are reported only where that's certain, so far fewer of them are found. A project with
   `treatPhpDocTypesAsCertain: false` gets none of them, because types here don't say which came from PHPDoc.
@@ -334,7 +335,9 @@ is what the signature says.
 
 Magic members are PHPStan's class reflection extensions: lookups, hover and completion see them on a class and its
 subclasses, as if `@property` and `@method` tags said so. Anything PHP itself declares comes first. A property's value is
-a type or `#{ type, read_only }`, a method's a return type or `#{ returns, params, is_static }`:
+a type or `#{ type, read_only, write, declared_at }`, a method's a return type or
+`#{ returns, params, is_static, declared_at }`. `write` is what a property takes when it's set, if that's not its type, and
+`declared_at` (`"App\\Post::author"`, or `"App\\Post::$title"` for a property) is where going to the definition leads:
 
 ```rhai
 // What `__get` and `__call` make available on a model and its subclasses.
@@ -347,6 +350,44 @@ fn magic_members(class_name) {
     }
 }
 ```
+
+Besides `properties` and `methods`, the answer can say `forward_calls: "App\\Query<static>"`: calls of methods the class
+hasn't got, on an object or statically, are made on a value of that type instead, and give what they give there, as with
+a model forwarding to its query builder. `static` in it is the class the call is made on. Completion offers that type's
+public methods too.
+
+What depends on a type's arguments, or on the name itself, is answered one name at a time. These run only where nothing
+else has the member, `@mixin` types included, just before `__call` and `__get` would be reported:
+
+```rhai
+// `$query->whereEmail($email)`, on a query of any model
+fn magic_method(type, name, is_static) {
+    if type.class_name == "App\\Query" && name.starts_with("where") { return "$this"; }
+}
+
+// what a proxy has is what the value it's a proxy for has
+fn magic_property(type, name) {
+    if type.class_name == "App\\Proxy" { return #{ forward_to: type.type_args[0].to_string() }; }
+}
+```
+
+`magic_method` answers like a method in `magic_members`, and `magic_property` like a property, or either with
+`#{ forward_to, fluent }`: the member of that name on that type. With `fluent: true`, a call that gives back the value it
+was forwarded to gives back the original one, as a relation does with its query. `global_type(name)` gives the type of a
+global variable, for `global $name;`.
+
+Scripts see the project's classes with `class("App\\Post")`, which is `()` for one that isn't there. A class has `name`,
+`kind`, `parent`, `type`, `type_params`, `is_abstract`, `is_subtype_of("..")` (traits count), `ancestors()`, `methods()`,
+`method("..")`, `properties()`, `property("..")`, `constant("..")` and `attributes()`, as `#{ name, args }` with arguments
+by position (`"0"`) and by name. A method has `name`, `class`, `is_static`, `is_magic`, `visibility`, `return_type`,
+`params`, `params_text(skip)` (as a `@method` tag writes them), `attributes()`, `returned_value()` and `returned_call()`,
+the first call on `$this` of what it returns, such as `#{ name: "hasMany", args: #{ "0": "App\\Comment" } }`. A property
+has `name`, `class`, `type`, `is_static`, `visibility` and `default_value`. Values are only what's written out literally:
+strings, numbers, booleans, `null`, arrays of them, `Foo::class` as the class's name, and constants with such values.
+Nothing's inferred from code, so that a class's members never depend on checking the code that uses them. Asking about many
+methods is much cheaper all at once, with `method_details(names)`, or `methods_below("App\\Model")` for those a class has
+that its ancestor hasn't. Types also have `type_args`, `types()` (a union's members), `method_type("..")` and
+`callable_params()` (`#{ required, max }`, `max` being `-1` for any number).
 
 Scripts are sandboxed. They can't reach files, the network or other programs, have no clock, randomness, `import` or
 `eval`, and keep nothing between calls, so only their functions run and the same input gets the same answer. A call that
@@ -379,6 +420,72 @@ Syntax and library functions are checked against it:
 error[classConstant.nativeTypeNotSupported]: PHP 8.3 added typed class constants, but this project targets PHP 8.2
 error[SPHP0061]: PHP 8.4 added `array_find()`, but this project targets PHP 8.2
 ```
+
+## Frameworks
+
+StirPHP ships support for Laravel, Symfony and WordPress: scripts like the ones above, inside the binary, with native code
+where reading many files would be slow in a script. They're ours, so they run without anyone being asked, in editors too,
+and they're never read from disk, so no file of a project can stand in for one. A project's own scripts come first and can
+override what they say.
+
+Each is on when the project uses that framework: `laravel/framework`, `symfony/framework-bundle`, `symfony/symfony` or
+`symfony/dependency-injection` (unless the project is built on Laravel or Drupal), and for WordPress
+`johnpbloch/wordpress-core`, `roots/wordpress`, `php-stubs/wordpress-stubs`, a `wp-config.php` or `wp-content` folder, or
+a plugin's `Plugin Name:` header. `parameters.stirphp.frameworks` turns one off or on: `{laravel: false, wordpress: true}`.
+
+**Laravel**, after what larastan does:
+
+- Models get properties for the columns their migrations in `database/migrations` create (by `$table`, or the class's
+  name in plural, as Laravel has it), their `$casts` and `casts()`, accessors (`getFullNameAttribute()` and
+  `fullName(): Attribute`) and relations, typed as what the relation gives. They accept anything when set, as Laravel
+  converts it. An attribute nothing declares is `mixed` rather than an error, as migrations aren't always the whole story.
+- Scopes (`scopeActive()` and `#[Scope]`) are on the model and its queries, with their parameters. Calls a model hasn't got,
+  statically or not, go to `Builder<Model>`, and a relation's go to a query of its related model; `where{Column}()` works
+  on both, and so do query methods a model declares, such as `withTrashed()` from `SoftDeletes`.
+- Facades forward to what their accessor names, by class or by the container's names for Laravel's services, and contracts
+  such as `Illuminate\Contracts\Auth\Factory` to the class Laravel binds them to. `auth()->user()`, `Auth::user()` and
+  `$request->user()` give the user model `config/auth.php` names. Laravel's class aliases, such as `\DB`, are there.
+- Macros the project adds with `Foo::macro('name', ..)` aren't reported, though what they return isn't known.
+- In an editor, these complete, hover and lead to where they're declared: a relation's property to its method, a scope to its
+  `scopeX` method. Going to the definition of `route('name')` finds `->name('name')` in `routes/`, and of `view('a.b')`
+  the template in `resources/views`.
+
+**Symfony and Doctrine**, after phpstan-symfony and phpstan-doctrine: services and parameters come from the compiled
+container, `parameters.symfony.containerXmlPath` or else the newest one in `var/cache/`, so `$container->get('app.mailer')`
+and `$this->getParameter('kernel.debug')` have types. A container that hasn't been compiled isn't compiled; then a
+`get(Foo::class)` is still a `Foo`. `getRepository(Product::class)` gives the repository
+`#[ORM\Entity(repositoryClass: ..)]` names, and repositories have `findByX()`, `findOneByX()` and `countByX()`.
+
+**WordPress**, after phpstan-wordpress: `php-stubs/wordpress-stubs` is loaded when it's installed, `global $wpdb;` and the
+other globals WordPress sets up have their types, and `add_action()` and `add_filter()` are checked: a callback that isn't
+a function, one that needs more arguments than `$accepted_args`, or takes fewer than it says, and `$accepted_args` above what
+any `do_action()` or `apply_filters()` of that hook in the project passes (`wordpress.hookArguments`). Going to the
+definition of a hook's name finds where it runs.
+
+What's measured, with PHPStan and the extension at the same level:
+
+- Laravel's framework repository, with no configuration: 8993 reported before, 4937 now. 4074 went, 3577 of which PHPStan
+  without larastan reports on the same line with the same identifier: calls and properties only Laravel's magic has.
+  18 are new, errors that the ones before stopped short of.
+- [BookStack](https://github.com/BookStackApp/BookStack), an MIT-licensed Laravel application, at its own level 5: 149 before,
+  36 now. PHPStan with larastan reports none. What's left isn't about Laravel's magic: argument types the checker gets wrong,
+  such as Collection where an array is taken.
+- A new Laravel application with models, relations, scopes, casts and a controller: 20 before, 4 now. Larastan reports 6.
+  Both find the 3 mistakes written in on purpose. Larastan also reports an `Attribute` accessor without type arguments, a
+  property of a relation without them, and a macro added outside a service provider, which are all fine. StirPHP also
+  reports `$this` in `routes/console.php`, which Laravel binds to a command: a false alarm.
+- A new Symfony application with an entity, its repository and a controller, and a container: 5 before, 1 now, the same as
+  PHPStan's.
+- A WordPress plugin with hooks: none of its 3 mistakes before, all of them now, plus a hook's arguments PHPStan doesn't check.
+
+On the framework repository, with thousands of models in its tests, a run takes about a fifth more CPU time, most of it in
+the models' scripts and the extra checking of what used to be unknown. On BookStack it's within the noise, as it is on
+Symfony's and PHPStan's repositories.
+
+Not there yet: config keys of `config()`, the results of `$collection->map->name` (it's the property's type, not a
+collection of them), relation names in `with()` and `has()`, route names in groups, `Request` input as more than `mixed`,
+Doctrine's `@ORM` annotations in PHPDoc, Symfony forms, routes as a reason a method is used, and the return types of
+`apply_filters()` from the hook's PHPDoc.
 
 ## Composer
 
@@ -508,11 +615,11 @@ closure; and inlining methods.
 ## Current state
 
 This is early, and accuracy against PHPStan is still being improved. On Laravel's framework, Symfony and PHPStan's own
-source, each with its own configuration, it reports about 9000, 1300 and 1300 problems, in about 4 to 5 seconds each. Those
+source, each with its own configuration, it reports about 4900, 1300 and 1300 problems, in about 4 to 6 seconds each. Those
 include false alarms, at a rate nobody has measured overall yet. Reducing them is the current work. If `stirphp check` is wrong
 about your code, please [open an issue](https://github.com/StirPHP/core/issues) with a small example.
 
-Not there yet: wrapping long lines when formatting, and framework support out of the box.
+Not there yet: wrapping long lines when formatting, and the rest of what [frameworks](#frameworks) need.
 
 ## Layout
 
@@ -524,7 +631,7 @@ Not there yet: wrapping long lines when formatting, and framework support out of
 | `stir_types` | type representation and relations |
 | `stir_db` | salsa database: files, parsing, diagnostics, settings |
 | `stir_hir` | declarations, name resolution, and PHPDoc and stub attribute lowering |
-| `stir_stubs` | embedded phpstorm-stubs, and PHPStan's stubs for PHP's classes |
+| `stir_stubs` | embedded phpstorm-stubs, PHPStan's stubs for PHP's classes, and our scripts and stubs for frameworks |
 | `stir_checker` | the type checker, and what scripts see of a project |
 | `stir_script` | the sandbox scripts run in |
 | `stir_composer` | reads Composer's files |
@@ -546,7 +653,7 @@ cargo test --release -p stir_fmt --test corpus -- --ignored --nocapture  # forma
 ```
 
 Checker fixtures live in `crates/stir_checker/tests/fixtures/` and mark expected diagnostics inline:
-`return 1; // error: return.type`.
+`return 1; // error: return.type`. `// @framework laravel` in one turns on what we ship for that framework.
 
 `STIRPHP_LOG` sets the log level, on stderr, as in `STIRPHP_LOG=debug stirphp check`.
 

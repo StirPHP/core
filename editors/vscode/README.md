@@ -71,6 +71,13 @@ you open it:
 Scripts have no access to files, the network or other programs, can't tell the time, and are stopped when they take too
 long. `stirphp check` on the command line runs them without asking, since running it in a project is your choice.
 
+## Frameworks
+
+What StirPHP knows of Laravel, Symfony and WordPress is part of it, not code from your project, so it runs without asking,
+in trusted workspaces and others alike: completion, hover and going to definitions work through models' columns, relations
+and scopes, facades, container services and the like, and from a hook's, view's or route's name to where it's defined. See
+the [main README](https://github.com/StirPHP/core#frameworks) for what's covered and how to turn it off.
+
 ## PHPStan
 
 If a project has PHPStan's configuration (`phpstan.neon` and so on) and PHPStan among its Composer packages, the extension can
