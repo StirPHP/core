@@ -451,9 +451,9 @@ a plugin's `Plugin Name:` header. `parameters.stirphp.frameworks` turns one off 
   the template in `resources/views`.
 
 **Symfony and Doctrine**, after phpstan-symfony and phpstan-doctrine: services and parameters come from the compiled
-container, `parameters.symfony.containerXmlPath` or else one in `var/cache/`, the `dev` environment's first, so `$container->get('app.mailer')`
-and `$this->getParameter('kernel.debug')` have types. A container that hasn't been compiled isn't compiled; then a
-`get(Foo::class)` is still a `Foo`. `getRepository(Product::class)` gives the repository
+container, `parameters.symfony.containerXmlPath` or else one in `var/cache/`, the `dev` environment's first, so
+`$container->get('app.mailer')` and `$this->getParameter('kernel.debug')` have types. A container that hasn't been
+compiled isn't compiled; then a `get(Foo::class)` is still a `Foo`. `getRepository(Product::class)` gives the repository
 `#[ORM\Entity(repositoryClass: ..)]` names, and repositories have `findByX()`, `findOneByX()` and `countByX()`.
 
 **WordPress**, after phpstan-wordpress: `php-stubs/wordpress-stubs` is loaded when it's installed, `global $wpdb;` and the
