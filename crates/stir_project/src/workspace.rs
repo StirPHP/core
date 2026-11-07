@@ -169,6 +169,14 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
             files.push(SourceFile::new(&db, path, text, FileOrigin::Vendor));
         }
     }
+    // WordPress's declarations, where only its stubs are installed: they're no package's autoload
+    if options.vendor && frameworks.iter().any(|f| f.name == "wordpress") {
+        let stubs = vendor_dir.join("php-stubs/wordpress-stubs/wordpress-stubs.php");
+        let known = files.iter().any(|f| f.path(&db) == &stubs);
+        if !known && let Ok(text) = tokio::fs::read_to_string(&stubs).await {
+            files.push(SourceFile::new(&db, stubs, text, FileOrigin::Vendor));
+        }
+    }
     let mut data_files = Vec::new();
     if frameworks.iter().any(|f| f.name == "symfony") {
         let configured = config

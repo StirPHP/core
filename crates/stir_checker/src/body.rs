@@ -923,12 +923,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             GLOBAL_STMT => {
                 for v in node.descendants().filter(|d| d.kind() == VARIABLE_EXPR) {
                     let name = text_of(&v);
-                    self.declare(
-                        &name[1..],
-                        Ty::untyped(),
-                        LocalKind::Variable,
-                        v.text_range(),
-                    );
+                    let ty = self.ctx.global_type(&name[1..]).unwrap_or_else(Ty::untyped);
+                    self.declare(&name[1..], ty, LocalKind::Variable, v.text_range());
                 }
             }
             STATIC_VAR_STMT => {

@@ -29,6 +29,7 @@ mod node;
 mod reflect;
 mod rules;
 pub mod symfony;
+pub mod wordpress;
 
 pub(crate) use facade::ScriptCtx;
 pub use magic::Origin;
@@ -51,6 +52,7 @@ pub(crate) static ENGINE: LazyLock<Engine> = LazyLock::new(|| {
     reflect::register(&mut engine);
     laravel::register(&mut engine);
     symfony::register(&mut engine);
+    wordpress::register(&mut engine);
     engine
 });
 
@@ -62,6 +64,7 @@ pub(crate) const RETURN_TYPE_OF_STATIC_METHOD: &str = "return_type_of_static_met
 pub(crate) const MAGIC_MEMBERS: &str = "magic_members";
 pub(crate) const MAGIC_METHOD: &str = "magic_method";
 pub(crate) const MAGIC_PROPERTY: &str = "magic_property";
+pub(crate) const GLOBAL_TYPE: &str = "global_type";
 /// What a script answers return types for: its `return_type_of_*` only get called for these.
 const RETURN_TYPE_TARGETS: &str = "return_type_targets";
 
@@ -76,6 +79,7 @@ pub struct Compiled {
     magic: bool,
     magic_method: bool,
     magic_property: bool,
+    global_type: bool,
 }
 
 /// What `return_type_targets()` says.
@@ -111,6 +115,7 @@ pub fn compiled_script(db: &dyn Db, script: ScriptFile) -> Compiled {
         magic: false,
         magic_method: false,
         magic_property: false,
+        global_type: false,
     };
     let text = match script.text(db) {
         Ok(text) => text,
@@ -130,6 +135,7 @@ pub fn compiled_script(db: &dyn Db, script: ScriptFile) -> Compiled {
             magic: d.magic,
             magic_method: d.magic_method,
             magic_property: d.magic_property,
+            global_type: d.global_type,
         },
         Err(error) => refuse(error),
     }
@@ -142,12 +148,14 @@ struct Declarations {
     magic: bool,
     magic_method: bool,
     magic_property: bool,
+    global_type: bool,
 }
 
 fn read_declarations(ast: &AST) -> Result<Declarations, ScriptError> {
     let mut visits = Vec::new();
     let mut magic = false;
     let (mut magic_method, mut magic_property) = (false, false);
+    let mut global_type = false;
     let mut has_targets = false;
     let mut needs_targets = None;
     let takes = |name: &str, found: usize, wanted: usize| {
@@ -196,6 +204,10 @@ fn read_declarations(ast: &AST) -> Result<Declarations, ScriptError> {
                 takes(f.name, found, 2)?;
                 magic_property = true;
             }
+            GLOBAL_TYPE => {
+                takes(f.name, found, 1)?;
+                global_type = true;
+            }
             _ => {}
         }
     }
@@ -214,6 +226,7 @@ fn read_declarations(ast: &AST) -> Result<Declarations, ScriptError> {
         magic,
         magic_method,
         magic_property,
+        global_type,
     })
 }
 
@@ -280,6 +293,8 @@ pub struct ScriptIndex {
     /// The scripts with a `magic_method`, and those with a `magic_property`.
     pub(crate) magic_methods: Vec<ScriptFile>,
     pub(crate) magic_properties: Vec<ScriptFile>,
+    /// The scripts with a `global_type`.
+    pub(crate) globals: Vec<ScriptFile>,
 }
 
 impl ScriptIndex {
@@ -320,6 +335,9 @@ pub fn script_index(db: &dyn Db, ws: Workspace) -> ScriptIndex {
         }
         if c.magic_property {
             index.magic_properties.push(script);
+        }
+        if c.global_type {
+            index.globals.push(script);
         }
     }
     index

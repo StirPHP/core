@@ -69,6 +69,61 @@ impl<'db> Ctx<'db> {
         found
     }
 
+    /// What the scripts say the global variable `name` holds, for `global $name;`: its type, if
+    /// one of them knows.
+    pub(crate) fn global_type(&self, name: &str) -> Option<Ty> {
+        if self.scripts.globals.is_empty() {
+            return None;
+        }
+        if let Some(found) = self.globals.borrow().get(name) {
+            return found.clone();
+        }
+        let mut found = None;
+        for &script in &self.scripts.globals {
+            let Some(ast) =
+                stir_db::attached(|db| super::compiled_script(db, script).ast.clone()).flatten()
+            else {
+                continue;
+            };
+            let answer =
+                stir_script::call(&super::ENGINE, &ast, super::GLOBAL_TYPE, vec![name.into()]);
+            let failed = |error| {
+                let failure = ScriptFailure::new(script, super::GLOBAL_TYPE, error, None);
+                let mut failures = self.script_failures.borrow_mut();
+                if !failures.contains(&failure) {
+                    failures.push(failure);
+                }
+            };
+            match answer {
+                Ok(a) if a.is_unit() => {}
+                Ok(a) => match a.into_string() {
+                    Ok(text) => match super::hooks::parse_type(self, &text, None) {
+                        Ok(ty) => {
+                            found = Some(ty);
+                            break;
+                        }
+                        Err(super::hooks::BadType::Unknown) => {}
+                        Err(super::hooks::BadType::Syntax(why)) => {
+                            failed(stir_script::ScriptError::new(format!(
+                                "`{}` answered `{text}`, which isn't a type: {why}",
+                                super::GLOBAL_TYPE
+                            )))
+                        }
+                    },
+                    Err(_) => failed(stir_script::ScriptError::new(format!(
+                        "`{}` should answer a PHPDoc type as a string, or nothing",
+                        super::GLOBAL_TYPE
+                    ))),
+                },
+                Err(error) => failed(error),
+            }
+        }
+        self.globals
+            .borrow_mut()
+            .insert(SmolStr::new(name), found.clone());
+        found
+    }
+
     /// Where calls of methods `ty` hasn't got go, as `magic_members` says for it or the nearest
     /// of its ancestors. `static` in it is `ty`.
     pub(crate) fn forwarded_calls(&self, ty: &Ty) -> Option<Ty> {

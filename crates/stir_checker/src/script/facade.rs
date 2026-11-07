@@ -137,6 +137,54 @@ impl TypeFacade {
         .unwrap_or_default()
     }
 
+    /// How many arguments a callable of this type takes, as `#{ required, max }` with `max` `-1`
+    /// for any number: for a closure or other function type, and for a string naming a function.
+    fn callable_params(&self) -> Dynamic {
+        use stir_types::ParamKind;
+        let counts = |params: &mut dyn Iterator<Item = ParamKind>| {
+            let (mut required, mut max) = (0, 0);
+            for kind in params {
+                match kind {
+                    ParamKind::Required => {
+                        required += 1;
+                        max += 1;
+                    }
+                    ParamKind::Optional => max += 1,
+                    ParamKind::Variadic => max = -1,
+                }
+                if max < 0 {
+                    break;
+                }
+            }
+            let mut out = Map::new();
+            out.insert("required".into(), (required as INT).into());
+            out.insert("max".into(), (max as INT).into());
+            Dynamic::from(out)
+        };
+        match self.ty.kind() {
+            TyKind::Callable { sig: Some(sig), .. } => {
+                counts(&mut sig.params.iter().map(|p| p.kind))
+            }
+            TyKind::Literal(LitValue::String(name)) => self
+                .with_model(|ctx| {
+                    let loc = ctx.function(name)?;
+                    let sig = ctx.function_sig(loc);
+                    Some(counts(&mut sig.params.iter().map(|p| {
+                        if p.variadic {
+                            ParamKind::Variadic
+                        } else if p.optional {
+                            ParamKind::Optional
+                        } else {
+                            ParamKind::Required
+                        }
+                    })))
+                })
+                .flatten()
+                .unwrap_or(Dynamic::UNIT),
+            _ => Dynamic::UNIT,
+        }
+    }
+
     /// What calling the method `name` on a value of this type returns, as its signature says.
     fn method_type(&self, name: &str) -> Dynamic {
         let base = stir_types::without_null(&self.ty);
@@ -412,6 +460,7 @@ pub(super) fn register(engine: &mut Engine) {
         .register_fn("method_type", |t: &mut TypeFacade, name: &str| {
             t.method_type(name)
         })
+        .register_fn("callable_params", |t: &mut TypeFacade| t.callable_params())
         .register_fn("has_method", |t: &mut TypeFacade, name: &str| {
             t.has_member(name, true)
         })
