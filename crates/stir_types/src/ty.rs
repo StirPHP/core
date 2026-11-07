@@ -180,6 +180,110 @@ impl ShapeTy {
     }
 }
 
+/// Past this many arrays in a union, arrays of the same form become one: shapes with the same
+/// keys, arrays with the same key type, lists. Branches that each write another part of an array
+/// would otherwise double the union at each `if`, and a union of thousands of nested arrays takes
+/// minutes and gigabytes to check. PHPStan has a limit like it (`CONSTANT_ARRAY_UNION_THRESHOLD`).
+const ARRAY_UNION_LIMIT: usize = 16;
+
+/// The types in an array that [`merge_arrays`] puts together: the value of each field of a
+/// shape, an array's value type, a list's element type.
+fn array_parts(t: &Ty) -> Option<Vec<&Ty>> {
+    match t.kind() {
+        TyKind::Shape(s) => Some(s.fields.iter().map(|f| &f.ty).collect()),
+        TyKind::Array { value, .. } => Some(vec![value]),
+        TyKind::List { elem, .. } => Some(vec![elem]),
+        _ => None,
+    }
+}
+
+/// Whether `a` and `b` are arrays [`merge_arrays`] can put together.
+fn same_form(a: &Ty, b: &Ty) -> bool {
+    match (a.kind(), b.kind()) {
+        // the same keys, in the same order and as optional, so that the parts line up
+        (TyKind::Shape(a), TyKind::Shape(b)) => {
+            a.sealed == b.sealed
+                && a.fields.len() == b.fields.len()
+                && (a.fields.iter().zip(&b.fields))
+                    .all(|(f, g)| f.key == g.key && f.optional == g.optional)
+        }
+        (
+            TyKind::Array {
+                key: ka,
+                non_empty: na,
+                ..
+            },
+            TyKind::Array {
+                key: kb,
+                non_empty: nb,
+                ..
+            },
+        ) => ka == kb && na == nb,
+        (TyKind::List { non_empty: na, .. }, TyKind::List { non_empty: nb, .. }) => na == nb,
+        _ => false,
+    }
+}
+
+/// Puts the arrays in `members` of the same form together, when there are too many of them.
+fn merge_arrays(members: &mut Vec<Ty>) {
+    let arrays = members.iter().filter(|m| array_parts(m).is_some()).count();
+    if arrays <= ARRAY_UNION_LIMIT {
+        return;
+    }
+    // each group: its first array, and the types of each of its parts
+    let mut groups: Vec<(&Ty, Vec<Vec<Ty>>)> = Vec::new();
+    let mut out: Vec<Option<Ty>> = Vec::new();
+    for m in members.iter() {
+        let Some(parts) = array_parts(m) else {
+            out.push(Some(m.clone()));
+            continue;
+        };
+        match groups.iter_mut().find(|(first, _)| same_form(first, m)) {
+            Some((_, types)) => {
+                for (all, part) in types.iter_mut().zip(parts) {
+                    all.push(part.clone());
+                }
+            }
+            None => {
+                // a place for it, filled once the group is complete
+                out.push(None);
+                groups.push((m, parts.into_iter().map(|p| vec![p.clone()]).collect()));
+            }
+        }
+    }
+    let mut merged = groups.into_iter().map(|(first, types)| {
+        let mut parts = types.into_iter().map(Ty::union);
+        let mut next = || parts.next().expect("a type for each part");
+        match first.kind() {
+            TyKind::Shape(s) => Ty::shape(
+                s.fields
+                    .iter()
+                    .map(|f| ShapeField {
+                        key: f.key.clone(),
+                        ty: next(),
+                        optional: f.optional,
+                    })
+                    .collect(),
+                s.sealed,
+            ),
+            TyKind::Array { key, non_empty, .. } => Ty::raw(TyKind::Array {
+                key: key.clone(),
+                value: next(),
+                non_empty: *non_empty,
+            }),
+            TyKind::List { non_empty, .. } => Ty::raw(TyKind::List {
+                elem: next(),
+                non_empty: *non_empty,
+            }),
+            _ => unreachable!("only arrays are grouped"),
+        }
+    });
+    *members = out
+        .into_iter()
+        .map(|t| t.unwrap_or_else(|| merged.next().expect("a merged array")))
+        .collect();
+}
+
 /// Whether a function parameter is required, optional (has a default) or variadic.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ParamKind {
@@ -705,6 +809,7 @@ impl Ty {
             out.remove(second);
             out[first] = Ty::bool();
         }
+        merge_arrays(&mut out);
 
         match out.len() {
             0 => Ty::never(),

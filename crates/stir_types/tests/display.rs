@@ -244,3 +244,48 @@ fn union_hash_is_order_independent() {
     let set: HashSet<Ty> = [a, b].into_iter().collect();
     assert_eq!(set.len(), 1);
 }
+
+#[test]
+fn many_arrays_of_the_same_form_are_one() {
+    // a few stay apart
+    let few = union(
+        (0..16)
+            .map(|n| shape(&[("a", Ty::lit_int(n))], true))
+            .collect(),
+    );
+    assert_eq!(few.members().len(), 16);
+    // more become one shape, beside what isn't one
+    let many = union(
+        (0..17)
+            .map(|n| shape(&[("a", Ty::lit_int(n)), ("b", Ty::string())], true))
+            .chain([shape(&[("a", Ty::int())], true), Ty::null()])
+            .collect(),
+    );
+    assert_eq!(
+        many,
+        union(vec![
+            shape(
+                &[
+                    ("a", union((0..17).map(Ty::lit_int).collect())),
+                    ("b", Ty::string())
+                ],
+                true
+            ),
+            shape(&[("a", Ty::int())], true),
+            Ty::null(),
+        ])
+    );
+    // as do arrays with the same key type
+    let arrays = union(
+        (0..17)
+            .map(|n| Ty::non_empty_array(Ty::string(), shape(&[("a", Ty::lit_int(n))], true)))
+            .collect(),
+    );
+    assert_eq!(
+        arrays,
+        Ty::non_empty_array(
+            Ty::string(),
+            shape(&[("a", union((0..17).map(Ty::lit_int).collect()))], true)
+        )
+    );
+}
