@@ -28,6 +28,7 @@ mod members;
 mod node;
 mod reflect;
 mod rules;
+pub mod symfony;
 
 pub(crate) use facade::ScriptCtx;
 pub use magic::Origin;
@@ -49,6 +50,7 @@ pub(crate) static ENGINE: LazyLock<Engine> = LazyLock::new(|| {
     facade::register(&mut engine);
     reflect::register(&mut engine);
     laravel::register(&mut engine);
+    symfony::register(&mut engine);
     engine
 });
 

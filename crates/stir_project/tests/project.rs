@@ -552,3 +552,39 @@ async fn symfony_components_without_another_framework_are_symfony() {
     );
     assert_eq!(frameworks_in(&root).await.0, ["laravel"]);
 }
+
+#[tokio::test]
+async fn symfonys_compiled_container_is_read() {
+    use stir_project::workspace::{LoadOptions, load_workspace};
+    let tmp = TempDir::new().unwrap();
+    let root = canon(&tmp);
+    write(
+        root.join("composer.json"),
+        r#"{"require": {"symfony/framework-bundle": "^8"}}"#,
+    );
+    write(root.join("src/a.php"), "<?php\n");
+    write(
+        root.join("var/cache/prod/App_KernelProdContainer.xml"),
+        "<container/>",
+    );
+    write(
+        root.join("var/cache/dev/App_KernelDevDebugContainer.xml"),
+        "<container/>",
+    );
+    let project = Project::load_or_default(&root).await.unwrap();
+    let options = LoadOptions {
+        vendor: false,
+        ..LoadOptions::default()
+    };
+    let loaded = load_workspace(&project, options).await.unwrap();
+    let data: Vec<PathBuf> = loaded
+        .workspace
+        .data_files(&loaded.db)
+        .iter()
+        .map(|f| f.path(&loaded.db).clone())
+        .collect();
+    assert_eq!(
+        data,
+        [root.join("var/cache/dev/App_KernelDevDebugContainer.xml")]
+    );
+}

@@ -133,8 +133,27 @@ fn run(paths: &[PathBuf]) -> Result<(), Failed> {
             )
         }));
     }
+    // a `.multi` fixture's `.xml` files are what a framework left for the project, such as
+    // Symfony's compiled container
+    let data_files = paths
+        .first()
+        .and_then(|p| {
+            p.ancestors()
+                .find(|a| a.extension().is_some_and(|e| e == "multi"))
+        })
+        .map(|dir| {
+            php_files_with(dir, "xml")
+                .into_iter()
+                .map(|p| {
+                    let text = std::fs::read_to_string(&p).unwrap();
+                    stir_db::DataFile::new(&db, p, text)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let ws = Workspace::builder(files, settings(&texts))
         .bundled_scripts(scripts)
+        .data_files(data_files)
         .new(&db);
     let mut msg = String::new();
     for ((path, text), file) in paths.iter().zip(&texts).zip(&sources) {
@@ -238,6 +257,20 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
         } else if p.is_dir() {
             out.extend(walk(&p));
         } else if stir_syntax::is_php_path(&p) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// Every file with the extension `ext` under `dir`.
+fn php_files_with(dir: &Path, ext: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.extend(php_files_with(&p, ext));
+        } else if p.extension().is_some_and(|e| e == ext) {
             out.push(p);
         }
     }

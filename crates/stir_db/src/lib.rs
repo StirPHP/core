@@ -79,6 +79,16 @@ pub struct ScriptFile {
     pub text: Result<String, String>,
 }
 
+/// A file of a project that isn't PHP but says something about it, such as the container Symfony
+/// compiles: read by what we ship for frameworks, through the scripts' API.
+#[salsa::input(debug)]
+pub struct DataFile {
+    #[returns(ref)]
+    pub path: PathBuf,
+    #[returns(ref)]
+    pub text: String,
+}
+
 /// Runs `f` with the database of the query this thread is in, if it's in one. For code called from
 /// a query that can't be handed the database, a script's native functions: what `f` reads is tracked
 /// as what the query depends on.
@@ -103,6 +113,10 @@ pub struct Workspace {
     #[returns(ref)]
     #[default]
     pub bundled_scripts: Vec<ScriptFile>,
+    /// What the frameworks the project uses left for it to read: see [`DataFile`].
+    #[returns(ref)]
+    #[default]
+    pub data_files: Vec<DataFile>,
 }
 
 /// The highest PHPStan rule level (`max`).

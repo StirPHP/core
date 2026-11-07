@@ -88,3 +88,35 @@ pub fn bundled_inputs(
         .collect();
     (scripts, stubs)
 }
+
+/// The compiled container of a Symfony project, as phpstan-symfony reads it: the file
+/// `parameters.symfony.containerXmlPath` names, or else what `var/cache/` has, the `dev`
+/// environment's first. Read only; nothing is warmed up or built.
+pub fn container_xml(root: &Path, configured: Option<PathBuf>) -> Option<(PathBuf, String)> {
+    /// The most of a container that's read.
+    const MAX: u64 = 64 * 1024 * 1024;
+    let path = configured.filter(|p| p.is_file()).or_else(|| {
+        let cache = root.join("var/cache");
+        let mut found: Vec<PathBuf> = std::fs::read_dir(&cache)
+            .ok()?
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .flat_map(|e| std::fs::read_dir(e.path()).into_iter().flatten().flatten())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension().is_some_and(|e| e == "xml")
+                    && p.file_stem()
+                        .is_some_and(|s| s.to_string_lossy().ends_with("Container"))
+            })
+            .collect();
+        // `dev` first, then by name, so the same project always gets the same one
+        found.sort_by_key(|p| (!p.components().any(|c| c.as_os_str() == "dev"), p.clone()));
+        found.into_iter().next()
+    })?;
+    if std::fs::metadata(&path).ok()?.len() > MAX {
+        tracing::warn!(path = %path.display(), "the container is too large to read");
+        return None;
+    }
+    let text = std::fs::read_to_string(&path).ok()?;
+    Some((path, text))
+}

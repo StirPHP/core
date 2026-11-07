@@ -169,6 +169,29 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
             files.push(SourceFile::new(&db, path, text, FileOrigin::Vendor));
         }
     }
+    let mut data_files = Vec::new();
+    if frameworks.iter().any(|f| f.name == "symfony") {
+        let configured = config
+            .as_ref()
+            .and_then(|c| c.param("symfony"))
+            .and_then(|s| s.get("containerXmlPath"))
+            .and_then(|p| p.as_str())
+            .map(|p| {
+                let base = project.config_file.as_ref().and_then(|f| f.parent());
+                base.unwrap_or(&project.root).join(p)
+            });
+        let root = project.root.clone();
+        let found = tokio::task::spawn_blocking(move || {
+            crate::frameworks::container_xml(&root, configured)
+        })
+        .await
+        .ok()
+        .flatten();
+        if let Some((path, text)) = found {
+            tracing::info!(path = %path.display(), "reading Symfony's container");
+            data_files.push(stir_db::DataFile::new(&db, path, text));
+        }
+    }
     let (mut settings, ignore_notice) =
         settings_from(project, config, composer.as_ref(), options.baseline).await;
     notices.extend(ignore_notice);
@@ -194,6 +217,7 @@ pub async fn load_workspace(project: &Project, options: LoadOptions) -> anyhow::
     let workspace = Workspace::builder(files, settings)
         .scripts(allowed)
         .bundled_scripts(bundled)
+        .data_files(data_files)
         .new(&db);
     tracing::debug!(
         sources = sources.len(),

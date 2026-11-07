@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<container xmlns="http://symfony.com/schema/dic/services">
+  <parameters>
+    <parameter key="kernel.debug">true</parameter>
+    <parameter key="app.per_page">25</parameter>
+  </parameters>
+  <services>
+    <service id="App\Mailer" class="App\Mailer" public="true"/>
+    <service id="app.mailer" alias="App\Mailer" public="true"/>
+  </services>
+</container>
