@@ -451,7 +451,7 @@ a plugin's `Plugin Name:` header. `parameters.stirphp.frameworks` turns one off 
   the template in `resources/views`.
 
 **Symfony and Doctrine**, after phpstan-symfony and phpstan-doctrine: services and parameters come from the compiled
-container, `parameters.symfony.containerXmlPath` or else the newest one in `var/cache/`, so `$container->get('app.mailer')`
+container, `parameters.symfony.containerXmlPath` or else one in `var/cache/`, the `dev` environment's first, so `$container->get('app.mailer')`
 and `$this->getParameter('kernel.debug')` have types. A container that hasn't been compiled isn't compiled; then a
 `get(Foo::class)` is still a `Foo`. `getRepository(Product::class)` gives the repository
 `#[ORM\Entity(repositoryClass: ..)]` names, and repositories have `findByX()`, `findOneByX()` and `countByX()`.
