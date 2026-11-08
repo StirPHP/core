@@ -276,7 +276,11 @@ pub fn php_versions(db: &dyn Db) -> PhpVersions {
 
 #[salsa::tracked(returns(ref), no_eq)]
 pub fn parse(db: &dyn Db, file: SourceFile) -> Parse {
-    stir_syntax::parse(file.text(db))
+    if stir_syntax::is_blade_path(file.path(db)) {
+        stir_syntax::parse_blade(file.text(db))
+    } else {
+        stir_syntax::parse(file.text(db))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

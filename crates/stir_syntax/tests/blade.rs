@@ -69,6 +69,7 @@ fn is_text(src: &str) {
 
 // ---------- echos and comments ----------
 blade!(echos, "<p>{{ $a }}</p>{!! $b->c !!}{{{ $d }}}{{$e}}\n");
+blade!(echo_before_crlf, "{{ $a }}\r\nb");
 blade!(echo_ends_with_semicolon, "{{ $a; }}");
 blade!(echo_of_several_lines, "{{\n    $a\n        ->b()\n}}");
 blade!(echo_multibyte_around, "👋 {{ 'سلام' }} 👋");
