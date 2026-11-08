@@ -1,20 +1,26 @@
 //! The StirPHP language server.
 //!
 //! Editor features are plain functions over the salsa database (`hover`,
-//! `nav`, `complete`, ...), testable without a client; [`server`] wires them
-//! to the Language Server Protocol.
+//! `nav`, `complete`, ...), testable without a client. [`handlers`] answers the
+//! Language Server Protocol's requests with them, for both ways of speaking it:
+//! [`server`] over stdio (tokio and threads), and [`session`] one message at a
+//! time with no threads or clock of its own, which is what runs in the browser.
 
 pub mod actions;
 pub mod complete;
 pub mod convert;
+pub mod handlers;
 pub mod hierarchy;
 pub mod hints;
 pub mod hover;
 pub mod imports;
+pub mod links;
 pub mod nav;
 pub mod render;
 #[cfg(feature = "server")]
 pub mod server;
+pub mod session;
+pub mod state;
 pub mod symbols;
 pub mod tokens;
 #[cfg(feature = "server")]

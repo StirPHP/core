@@ -4,28 +4,27 @@
 //! edit cancels outstanding snapshots, whose requests then fail with
 //! `ContentModified` and are retried by the client.
 
-use std::collections::BTreeMap;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use salsa::Setter as _;
-use stir_db::{
-    Db, Diagnostic, FileOrigin, RootDatabase, ScriptFile, Settings, Severity, SourceFile, Workspace,
-};
+use stir_db::{Db, Diagnostic, RootDatabase, ScriptFile, SourceFile, Workspace};
 use stir_project::Project;
-use stir_project::workspace::{LoadOptions, builtin_files, load_workspace};
-use stir_syntax::{TextRange, TextSize};
+use stir_project::workspace::{LoadOptions, load_workspace};
 use tokio::sync::Notify;
 use tower_lsp_server::jsonrpc::{Error, ErrorCode, Result};
 use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer};
 
 use crate::convert::{Encoding, LineMap};
+use crate::handlers::diagnostics::{self, Published};
+use crate::handlers::{self, Failure, Snapshot};
+use crate::links::Links;
+use crate::state::State;
 use crate::trust::{self, TrustStore};
-use crate::{complete, hierarchy, hints, hover, nav, symbols, tokens};
 
 mod actions;
 mod phpstan;
@@ -36,51 +35,7 @@ const DIAGNOSTICS_DELAY: Duration = Duration::from_millis(150);
 /// a client that shows no such questions.
 const TRUST_ANSWER_WAIT: Duration = Duration::from_secs(30);
 
-struct State {
-    db: RootDatabase,
-    ws: Workspace,
-    /// Files with a path on disk (project sources and vendor), by canonical path.
-    files: FxHashMap<PathBuf, SourceFile>,
-    /// Documents open in the editor, with their version.
-    open: FxHashMap<PathBuf, i32>,
-    /// The project root (where its configuration or `composer.json` is, else the workspace folder).
-    root: Option<PathBuf>,
-    /// Directories whose files are not project sources (generated output,
-    /// `vendor/`): opened files there are dependencies, never checked.
-    foreign: Vec<PathBuf>,
-    /// The project's scripts, whether they're allowed to run or not. Those that are in the
-    /// workspace's `scripts`, and those alone, run.
-    rules: Vec<ScriptFile>,
-    /// How the project says to indent, over what the editor says.
-    indent: Option<stir_neon::phpstan::FormatIndent>,
-}
-
 impl State {
-    fn new(
-        db: RootDatabase,
-        ws: Workspace,
-        root: Option<PathBuf>,
-        vendor: Option<PathBuf>,
-    ) -> Self {
-        let files = ws
-            .files(&db)
-            .iter()
-            .filter(|f| f.origin(&db) != FileOrigin::Stub)
-            .map(|f| (f.path(&db).clone(), *f))
-            .collect();
-        State {
-            db,
-            ws,
-            files,
-            open: FxHashMap::default(),
-            // a stub opened from the cache directory stays a dependency
-            foreign: vendor.into_iter().chain([stub_dir()]).collect(),
-            root,
-            rules: Vec::new(),
-            indent: None,
-        }
-    }
-
     /// What identifies the project's scripts as they are now.
     fn rules_hash(&self) -> String {
         let root = self.root.clone().unwrap_or_default();
@@ -97,75 +52,12 @@ impl State {
             .collect();
         trust::scripts_hash(&root, &scripts)
     }
+}
 
-    /// Lets the project's scripts run, or stops them.
-    fn set_rules_running(&mut self, running: bool) {
-        let scripts = if running {
-            self.rules.clone()
-        } else {
-            Vec::new()
-        };
-        if self.ws.scripts(&self.db) != &scripts {
-            self.ws.set_scripts(&mut self.db).to(scripts);
-        }
-    }
-
-    /// A workspace with only the builtin stubs.
-    fn empty() -> Self {
-        let db = RootDatabase::default();
-        let files = builtin_files(&db);
-        let ws = Workspace::new(&db, files, Settings::default());
-        State::new(db, ws, None, None)
-    }
-
-    /// Sets the text of `path`, adding it as a project source if it is new.
-    fn set_text(&mut self, path: &Path, text: String) -> SourceFile {
-        if let Some(&file) = self.files.get(path) {
-            if file.text(&self.db) != &text {
-                file.set_text(&mut self.db).to(text);
-            }
-            return file;
-        }
-        let origin = if self.foreign.iter().any(|d| path.starts_with(d)) {
-            FileOrigin::Vendor
-        } else {
-            FileOrigin::Source
-        };
-        let file = SourceFile::new(&self.db, path.to_owned(), text, origin);
-        let mut files = self.ws.files(&self.db).clone();
-        files.push(file);
-        self.ws.set_files(&mut self.db).to(files);
-        self.files.insert(path.to_owned(), file);
-        file
-    }
-
-    fn remove(&mut self, path: &Path) {
-        if let Some(file) = self.files.remove(path) {
-            let files = self
-                .ws
-                .files(&self.db)
-                .iter()
-                .copied()
-                .filter(|f| *f != file)
-                .collect();
-            self.ws.set_files(&mut self.db).to(files);
-        }
-    }
-
-    /// Is `path` a project source location (in the project, not generated or vendored)?
-    fn is_project_path(&self, path: &Path) -> bool {
-        self.root.as_ref().is_some_and(|r| path.starts_with(r))
-            && !self.foreign.iter().any(|d| path.starts_with(d))
-    }
-
-    fn sources(&self) -> Vec<SourceFile> {
-        self.ws
-            .files(&self.db)
-            .iter()
-            .copied()
-            .filter(|f| f.origin(&self.db) == FileOrigin::Source)
-            .collect()
-    }
+/// A workspace with only the builtin stubs.
+fn empty_state() -> State {
+    // a stub opened from the cache directory stays a dependency
+    State::empty(vec![stub_dir()])
 }
 
 fn is_source_path(path: &Path) -> bool {
@@ -187,81 +79,33 @@ fn stub_dir() -> PathBuf {
     base.join("stirphp").join(env!("CARGO_PKG_VERSION"))
 }
 
-/// A URI for `file`: its path, or (for builtins) a copy in the cache directory.
-fn file_uri(db: &dyn Db, file: SourceFile) -> Option<Uri> {
-    let path = file.path(db);
-    let s = path.to_string_lossy();
-    // a project's stub file is a file of the project
-    if let Some(real) = s.strip_prefix(stir_db::OVERLAY_PREFIX) {
-        return Uri::from_file_path(real);
-    }
-    if let Some(rest) = s.strip_prefix("stubs://") {
-        let target = stub_dir().join("stubs").join(rest);
-        let text = file.text(db);
-        let fresh = std::fs::read_to_string(&target).is_ok_and(|t| &t == text);
-        if !fresh {
-            std::fs::create_dir_all(target.parent()?).ok()?;
-            std::fs::write(&target, text).ok()?;
+/// Files on disk: a URI is a file's path, and a builtin's is a copy in the cache directory.
+#[derive(Debug, Clone, Copy)]
+struct OnDisk;
+
+impl Links for OnDisk {
+    fn uri(&self, db: &dyn Db, file: SourceFile) -> Option<Uri> {
+        let path = file.path(db);
+        let s = path.to_string_lossy();
+        // a project's stub file is a file of the project
+        if let Some(real) = s.strip_prefix(stir_db::OVERLAY_PREFIX) {
+            return Uri::from_file_path(real);
         }
-        return Uri::from_file_path(target);
+        if let Some(rest) = s.strip_prefix("stubs://") {
+            let target = stub_dir().join("stubs").join(rest);
+            let text = file.text(db);
+            let fresh = std::fs::read_to_string(&target).is_ok_and(|t| &t == text);
+            if !fresh {
+                std::fs::create_dir_all(target.parent()?).ok()?;
+                std::fs::write(&target, text).ok()?;
+            }
+            return Uri::from_file_path(target);
+        }
+        Uri::from_file_path(path)
     }
-    Uri::from_file_path(path)
-}
 
-fn location(db: &dyn Db, file: SourceFile, range: TextRange, enc: Encoding) -> Option<Location> {
-    let map = LineMap::new(file.text(db), enc);
-    Some(Location::new(file_uri(db, file)?, map.range(range)))
-}
-
-/// Where PHPStan says what an identifier of its means.
-fn phpstan_docs(identifier: &str) -> Option<CodeDescription> {
-    let href = format!("https://phpstan.org/error-identifiers/{identifier}");
-    Some(CodeDescription {
-        href: href.parse().ok()?,
-    })
-}
-
-fn lsp_diagnostic(
-    d: &Diagnostic,
-    map: &LineMap,
-    uri: &Uri,
-) -> tower_lsp_server::ls_types::Diagnostic {
-    let mut message = d.message.clone();
-    for note in &d.notes {
-        message.push('\n');
-        message.push_str(note);
-    }
-    let related = (!d.labels.is_empty()).then(|| {
-        d.labels
-            .iter()
-            .map(|(r, l)| DiagnosticRelatedInformation {
-                location: Location::new(uri.clone(), map.range(*r)),
-                message: l.clone(),
-            })
-            .collect()
-    });
-    tower_lsp_server::ls_types::Diagnostic {
-        range: map.range(d.range),
-        severity: Some(match d.severity {
-            Severity::Error => DiagnosticSeverity::ERROR,
-            Severity::Warning => DiagnosticSeverity::WARNING,
-            Severity::Hint => DiagnosticSeverity::HINT,
-        }),
-        // a report of PHPStan's may have no identifier
-        code: (!d.code.is_empty()).then(|| NumberOrString::String(d.code.to_string())),
-        code_description: (d.from_phpstan && !d.code.is_empty())
-            .then(|| phpstan_docs(&d.code))
-            .flatten(),
-        source: Some(if d.from_phpstan { "phpstan" } else { "stirphp" }.into()),
-        message,
-        related_information: related,
-        tags: if d.code == stir_checker::codes::UNUSED_IMPORT {
-            Some(vec![DiagnosticTag::UNNECESSARY])
-        } else {
-            stir_checker::deprecations::is_deprecation(&d.code)
-                .then(|| vec![DiagnosticTag::DEPRECATED])
-        },
-        ..Default::default()
+    fn path(&self, uri: &Uri) -> Option<PathBuf> {
+        uri_path(uri)
     }
 }
 
@@ -270,6 +114,13 @@ fn content_modified() -> Error {
         code: ErrorCode::ServerError(-32801),
         message: "content modified".into(),
         data: None,
+    }
+}
+
+fn failure(f: Failure) -> Error {
+    match f {
+        Failure::InvalidParams(msg) => Error::invalid_params(msg),
+        Failure::ContentModified => content_modified(),
     }
 }
 
@@ -289,7 +140,7 @@ pub struct Server {
     notices: Mutex<Vec<String>>,
     rules: RulesTrust,
     phpstan: phpstan::Phpstan,
-    action_support: Mutex<actions::ActionSupport>,
+    action_support: Mutex<handlers::actions::ActionSupport>,
 }
 
 /// What it takes to decide whether a workspace's scripts run. See [`trust`].
@@ -329,7 +180,7 @@ impl Server {
     }
 
     pub fn with_trust(client: Client, trust: TrustOptions) -> Self {
-        let state = Arc::new(Mutex::new(State::empty()));
+        let state = Arc::new(Mutex::new(empty_state()));
         let diagnostics = Arc::new(Notify::new());
         let rules = RulesTrust {
             store: trust.store,
@@ -357,7 +208,7 @@ impl Server {
             notices: Mutex::new(Vec::new()),
             rules,
             phpstan,
-            action_support: Mutex::new(actions::ActionSupport::default()),
+            action_support: Mutex::new(handlers::actions::ActionSupport::default()),
         };
         tokio::spawn(diagnostics_loop(
             server.client.clone(),
@@ -382,7 +233,7 @@ impl Server {
     async fn read<T, F>(&self, uri: &Uri, f: F) -> Result<Option<T>>
     where
         T: Send + 'static,
-        F: FnOnce(&RootDatabase, Workspace, SourceFile, &LineMap) -> Option<T> + Send + 'static,
+        F: FnOnce(&Snapshot, SourceFile, &LineMap) -> Option<T> + Send + 'static,
     {
         self.wait_ready().await;
         let Some(path) = uri_path(uri) else {
@@ -398,7 +249,13 @@ impl Server {
         };
         self.run(move || {
             let map = LineMap::new(file.text(&db), enc);
-            f(&db, ws, file, &map)
+            let snapshot = Snapshot {
+                db: &db,
+                ws,
+                enc,
+                links: &OnDisk,
+            };
+            f(&snapshot, file, &map)
         })
         .await
     }
@@ -407,7 +264,7 @@ impl Server {
     async fn read_ws<T, F>(&self, f: F) -> Result<Option<T>>
     where
         T: Send + 'static,
-        F: FnOnce(&RootDatabase, Workspace, Encoding) -> Option<T> + Send + 'static,
+        F: FnOnce(&Snapshot) -> Option<T> + Send + 'static,
     {
         self.wait_ready().await;
         let enc = self.encoding();
@@ -415,7 +272,15 @@ impl Server {
             let s = self.state.lock().unwrap();
             (s.db.clone(), s.ws)
         };
-        self.run(move || f(&db, ws, enc)).await
+        self.run(move || {
+            f(&Snapshot {
+                db: &db,
+                ws,
+                enc,
+                links: &OnDisk,
+            })
+        })
+        .await
     }
 
     async fn run<T: Send + 'static>(
@@ -453,37 +318,26 @@ impl Server {
             .as_ref()
             .map(|l| (l.root.clone(), l.vendor_dir.clone(), l.phpstan.clone()));
         {
-            let mut s = self.state.lock().unwrap();
-            // documents opened meanwhile keep their editor text
-            let open: Vec<(PathBuf, i32, String)> = s
-                .open
-                .iter()
-                .filter_map(|(p, v)| {
-                    s.files
-                        .get(p)
-                        .map(|f| (p.clone(), *v, f.text(&s.db).clone()))
-                })
-                .collect();
             let mut state = match loaded {
                 Some(l) => {
-                    let mut state = State::new(l.db, l.ws, Some(l.root), Some(l.vendor_dir));
-                    // PHPStan's caches are `.php` files, written while we watch for those
-                    state.foreign.extend(l.phpstan_tmp_dir);
-                    state
+                    // a stub opened from the cache directory stays a dependency, and PHPStan's
+                    // caches are `.php` files, written while we watch for those
+                    let foreign = [l.vendor_dir, stub_dir()]
+                        .into_iter()
+                        .chain(l.phpstan_tmp_dir)
+                        .collect();
+                    State::new(l.db, l.ws, Some(l.root), foreign)
                 }
                 None => {
-                    let mut st = State::empty();
+                    let mut st = empty_state();
                     st.root = folder.clone();
                     st
                 }
             };
-            for (path, version, text) in open {
-                state.set_text(&path, text);
-                state.open.insert(path, version);
-            }
             state.rules = rules;
             state.indent = indent;
-            *s = state;
+            // documents opened meanwhile keep their editor text
+            self.state.lock().unwrap().reload(state);
         }
         self.decide_rules();
         self.phpstan.decide(
@@ -712,7 +566,7 @@ async fn diagnostics_loop(
     notify: Arc<Notify>,
     phpstan: Arc<Mutex<Arc<phpstan::Results>>>,
 ) {
-    let mut published: FxHashMap<PathBuf, Vec<Diagnostic>> = FxHashMap::default();
+    let mut published = Published::default();
     loop {
         notify.notified().await;
         tokio::time::sleep(DIAGNOSTICS_DELAY).await;
@@ -734,14 +588,10 @@ async fn diagnostics_loop(
         let result = tokio::task::spawn_blocking(move || {
             salsa::Cancelled::catch(AssertUnwindSafe(|| {
                 let to_lsp = |path: &Path, text: &str, diags: &[Diagnostic]| {
-                    Uri::from_file_path(path).map(|uri| {
-                        let map = LineMap::new(text, enc);
-                        let lsp = diags
-                            .iter()
-                            .map(|d| lsp_diagnostic(d, &map, &uri))
-                            .collect();
-                        (uri, lsp)
-                    })
+                    OnDisk
+                        .path_uri(path)
+                        .map(|uri| (diagnostics::to_lsp(diags, text, enc, &uri), uri))
+                        .map(|(lsp, uri)| (uri, lsp))
                 };
                 // what PHPStan said of a file, if that's still the text it read
                 let from_phpstan = |path: &Path, text: &str, ours: &[Diagnostic]| {
@@ -758,18 +608,7 @@ async fn diagnostics_loop(
                     .iter()
                     .map(|&f| {
                         let path = f.path(&db).clone();
-                        let mut diags = stir_checker::check_file(&db, ws, f).as_ref().clone();
-                        // whatever the project says of it, what's deprecated gets struck through
-                        if !ws.settings(&db).deprecations {
-                            let marks = stir_checker::deprecations::deprecations(&db, ws, f);
-                            diags.extend(
-                                marks
-                                    .iter()
-                                    .cloned()
-                                    .map(|d| d.with_severity(Severity::Hint)),
-                            );
-                        }
-                        diags.extend(crate::actions::unused_import_hints(&db, f));
+                        let mut diags = diagnostics::of_source(&db, ws, f);
                         let theirs = from_phpstan(&path, f.text(&db), &diags);
                         diags.extend(theirs);
                         let lsp = to_lsp(&path, f.text(&db), &diags);
@@ -777,16 +616,8 @@ async fn diagnostics_loop(
                     })
                     .collect::<Vec<_>>();
                 // what's wrong with a script is at the script
-                let mut by_script: BTreeMap<PathBuf, Vec<Diagnostic>> = BTreeMap::new();
-                for d in stir_checker::script_diagnostics(&db, ws, &sources) {
-                    by_script.entry(d.file.clone()).or_default().push(d);
-                }
-                for (path, diags) in by_script {
-                    let script = ws.scripts(&db).iter().find(|s| s.path(&db) == &path);
-                    let text = script
-                        .and_then(|s| s.text(&db).as_ref().ok())
-                        .map_or("", String::as_str);
-                    let lsp = to_lsp(&path, text, &diags);
+                for (path, text, diags) in diagnostics::of_scripts(&db, ws, &sources) {
+                    let lsp = to_lsp(&path, &text, &diags);
                     results.push((path, diags, lsp));
                 }
                 for (path, file) in &elsewhere {
@@ -810,21 +641,14 @@ async fn diagnostics_loop(
         let mut seen = FxHashSet::default();
         for (path, diags, lsp) in results {
             seen.insert(path.clone());
-            if published.get(&path) == Some(&diags) {
+            let Some((uri, lsp)) = lsp else { continue };
+            if !published.is_news(&path, &diags) {
                 continue;
             }
-            let Some((uri, lsp)) = lsp else { continue };
             client.publish_diagnostics(uri, lsp, None).await;
-            published.insert(path, diags);
         }
         // removed files
-        let gone: Vec<PathBuf> = published
-            .keys()
-            .filter(|p| !seen.contains(*p))
-            .cloned()
-            .collect();
-        for path in gone {
-            published.remove(&path);
+        for path in published.gone(&seen) {
             if let Some(uri) = Uri::from_file_path(&path) {
                 client.publish_diagnostics(uri, Vec::new(), None).await;
             }
@@ -832,211 +656,16 @@ async fn diagnostics_loop(
     }
 }
 
-fn symbol_kind(kind: symbols::SymbolKind) -> SymbolKind {
-    use symbols::SymbolKind as K;
-    match kind {
-        K::Function => SymbolKind::FUNCTION,
-        K::Class => SymbolKind::CLASS,
-        K::Interface => SymbolKind::INTERFACE,
-        K::Enum => SymbolKind::ENUM,
-        K::Method => SymbolKind::METHOD,
-        K::Property => SymbolKind::PROPERTY,
-        K::Constant => SymbolKind::CONSTANT,
-        K::EnumMember => SymbolKind::ENUM_MEMBER,
-    }
-}
-
-#[allow(deprecated)]
-fn document_symbol(s: symbols::Symbol, map: &LineMap) -> DocumentSymbol {
-    DocumentSymbol {
-        name: s.name,
-        detail: s.detail,
-        kind: symbol_kind(s.kind),
-        tags: s.deprecated.then(|| vec![SymbolTag::DEPRECATED]),
-        deprecated: s.deprecated.then_some(true),
-        range: map.range(s.full_range),
-        selection_range: map.range(s.focus_range),
-        children: Some(
-            s.children
-                .into_iter()
-                .map(|c| document_symbol(c, map))
-                .collect(),
-        ),
-    }
-}
-
-fn completion_kind(kind: complete::ItemKind) -> CompletionItemKind {
-    use complete::ItemKind as K;
-    match kind {
-        K::Local => CompletionItemKind::VARIABLE,
-        K::Param => CompletionItemKind::VARIABLE,
-        K::Function => CompletionItemKind::FUNCTION,
-        K::Method => CompletionItemKind::METHOD,
-        K::Property => CompletionItemKind::PROPERTY,
-        K::Const => CompletionItemKind::CONSTANT,
-        K::EnumCase => CompletionItemKind::ENUM_MEMBER,
-        K::Class => CompletionItemKind::CLASS,
-        K::Interface => CompletionItemKind::INTERFACE,
-        K::Enum => CompletionItemKind::ENUM,
-        K::Keyword => CompletionItemKind::KEYWORD,
-    }
-}
-
-/// The rename edit for one occurrence: keeps the occurrence's `$` (variables and
-/// static properties are written with it, others without).
-fn renamed(old: &str, new: &str) -> String {
-    let bare = new.trim_start_matches('$');
-    if old.starts_with('$') {
-        format!("${bare}")
-    } else {
-        bare.to_owned()
-    }
-}
-
-fn valid_identifier(name: &str) -> bool {
-    let bare = name.strip_prefix('$').unwrap_or(name);
-    let mut chars = bare.chars();
-    chars
-        .next()
-        .is_some_and(|c| c.is_alphabetic() || c == '_' || !c.is_ascii())
-        && chars.all(|c| c.is_alphanumeric() || c == '_' || !c.is_ascii())
-}
-
-/// A place in a workspace file a client hands back to us later: its path may be `stubs://`, which
-/// no URI says.
-fn hierarchy_data(db: &dyn Db, file: SourceFile, offset: TextSize) -> serde_json::Value {
-    serde_json::json!({
-        "path": file.path(db).to_string_lossy(),
-        "offset": u32::from(offset),
-    })
-}
-
-/// The file and offset of [`hierarchy_data`].
-fn from_hierarchy_data(
-    db: &dyn Db,
-    ws: Workspace,
-    data: Option<&serde_json::Value>,
-) -> Option<(SourceFile, TextSize)> {
-    let data = data?;
-    let path = Path::new(data.get("path")?.as_str()?);
-    let offset = u32::try_from(data.get("offset")?.as_u64()?).ok()?;
-    let file = ws.files(db).iter().find(|f| f.path(db) == path)?;
-    Some((*file, offset.into()))
-}
-
-fn call_item(db: &dyn Db, item: &hierarchy::CallItem, enc: Encoding) -> Option<CallHierarchyItem> {
-    let map = LineMap::new(item.file.text(db), enc);
-    let kind = match item.kind {
-        hierarchy::CallKind::Function => SymbolKind::FUNCTION,
-        hierarchy::CallKind::Method => SymbolKind::METHOD,
-        hierarchy::CallKind::Constructor => SymbolKind::CONSTRUCTOR,
-        hierarchy::CallKind::File => SymbolKind::FILE,
-    };
-    let mut data = hierarchy_data(db, item.file, item.focus_range.start());
-    data["end"] = serde_json::json!(u32::from(item.full_range.end()));
-    data["start"] = serde_json::json!(u32::from(item.full_range.start()));
-    data["top"] = serde_json::json!(item.kind == hierarchy::CallKind::File);
-    Some(CallHierarchyItem {
-        name: item.name.clone(),
-        kind,
-        tags: None,
-        detail: item.detail.clone(),
-        uri: file_uri(db, item.file)?,
-        range: map.range(item.full_range),
-        selection_range: map.range(item.focus_range),
-        data: Some(data),
-    })
-}
-
-fn type_kind(kind: stir_hir::ClassKind) -> SymbolKind {
-    match kind {
-        stir_hir::ClassKind::Class => SymbolKind::CLASS,
-        stir_hir::ClassKind::Interface => SymbolKind::INTERFACE,
-        stir_hir::ClassKind::Trait => SymbolKind::CLASS,
-        stir_hir::ClassKind::Enum => SymbolKind::ENUM,
-    }
-}
-
-fn type_hierarchy_item(
-    db: &dyn Db,
-    item: &hierarchy::TypeItem,
-    enc: Encoding,
-) -> Option<TypeHierarchyItem> {
-    let map = LineMap::new(item.file.text(db), enc);
-    Some(TypeHierarchyItem {
-        name: item.name.clone(),
-        kind: type_kind(item.kind),
-        tags: None,
-        detail: item.detail.clone(),
-        uri: file_uri(db, item.file)?,
-        range: map.range(item.full_range),
-        selection_range: map.range(item.focus_range),
-        data: Some(serde_json::json!({ "key": item.key.as_str() })),
-    })
-}
-
-fn type_key(item: &TypeHierarchyItem) -> Option<String> {
-    Some(item.data.as_ref()?.get("key")?.as_str()?.to_owned())
-}
-
-fn scalar_or_array(locations: Vec<Location>) -> Option<GotoDefinitionResponse> {
-    match locations.len() {
-        0 => None,
-        1 => locations
-            .into_iter()
-            .next()
-            .map(GotoDefinitionResponse::Scalar),
-        _ => Some(GotoDefinitionResponse::Array(locations)),
-    }
-}
-
-/// How to indent: the project's say, then the editor's.
-fn format_options(
-    project: Option<stir_neon::phpstan::FormatIndent>,
-    editor: &FormattingOptions,
-) -> stir_fmt::Options {
-    use stir_neon::phpstan::FormatIndent;
-    let indent = match project {
-        Some(FormatIndent::Tab) => stir_fmt::Indent::Tabs,
-        Some(FormatIndent::Spaces(n)) => stir_fmt::Indent::Spaces(u32::from(n)),
-        None if editor.insert_spaces => stir_fmt::Indent::Spaces(editor.tab_size.clamp(1, 16)),
-        None => stir_fmt::Indent::Tabs,
-    };
-    stir_fmt::Options { indent }
-}
-
-fn text_edits(map: &LineMap, edits: Vec<stir_fmt::Edit>) -> Vec<TextEdit> {
-    edits
-        .into_iter()
-        .map(|e| TextEdit {
-            range: map.range(e.range),
-            new_text: e.text,
-        })
-        .collect()
-}
-
 impl LanguageServer for Server {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-        let utf8 = params
-            .capabilities
-            .general
-            .as_ref()
-            .and_then(|g| g.position_encodings.as_ref())
-            .is_some_and(|e| e.contains(&PositionEncodingKind::UTF8));
-        *self.action_support.lock().unwrap() = actions::ActionSupport::read(&params);
+        let utf8 = handlers::wants_utf8(&params);
+        *self.action_support.lock().unwrap() = handlers::actions::ActionSupport::read(&params);
         *self.encoding.lock().unwrap() = if utf8 {
             Encoding::Utf8
         } else {
             Encoding::Utf16
         };
-        #[allow(deprecated)]
-        let folder = params
-            .workspace_folders
-            .as_ref()
-            .and_then(|f| f.first())
-            .map(|f| f.uri.clone())
-            .or(params.root_uri.clone())
-            .and_then(|u| uri_path(&u));
+        let folder = handlers::workspace_folder(&params).and_then(|u| uri_path(&u));
         *self.workspace_folder.lock().unwrap() = folder;
         // an editor that knows this workspace isn't trusted says so: its scripts don't get asked about
         let never = params
@@ -1067,122 +696,14 @@ impl LanguageServer for Server {
             .and_then(|w| w.did_change_watched_files.as_ref())
             .and_then(|d| d.dynamic_registration)
             .unwrap_or(false);
-        *self.type_hierarchy_dynamic.lock().unwrap() = params
-            .capabilities
-            .text_document
-            .as_ref()
-            .and_then(|t| t.type_hierarchy.as_ref())
-            .and_then(|t| t.dynamic_registration)
-            .unwrap_or(false);
-
-        let legend = SemanticTokensLegend {
-            token_types: tokens::TOKEN_TYPES
-                .iter()
-                .map(|t| SemanticTokenType::new(t))
-                .collect(),
-            token_modifiers: tokens::TOKEN_MODIFIERS
-                .iter()
-                .map(|m| SemanticTokenModifier::new(m))
-                .collect(),
-        };
-        Ok(InitializeResult {
-            offset_encoding: None,
-            server_info: Some(ServerInfo {
-                name: "stirphp".into(),
-                version: Some(env!("CARGO_PKG_VERSION").into()),
-            }),
-            capabilities: ServerCapabilities {
-                position_encoding: Some(if utf8 {
-                    PositionEncodingKind::UTF8
-                } else {
-                    PositionEncodingKind::UTF16
-                }),
-                text_document_sync: Some(TextDocumentSyncCapability::Options(
-                    TextDocumentSyncOptions {
-                        open_close: Some(true),
-                        change: Some(TextDocumentSyncKind::INCREMENTAL),
-                        // PHPStan runs on a save
-                        save: Some(TextDocumentSyncSaveOptions::Supported(true)),
-                        ..Default::default()
-                    },
-                )),
-                hover_provider: Some(HoverProviderCapability::Simple(true)),
-                definition_provider: Some(OneOf::Left(true)),
-                declaration_provider: Some(DeclarationCapability::Simple(true)),
-                implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
-                call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
-                type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
-                references_provider: Some(OneOf::Left(true)),
-                document_highlight_provider: Some(OneOf::Left(true)),
-                rename_provider: Some(OneOf::Right(RenameOptions {
-                    prepare_provider: Some(true),
-                    work_done_progress_options: Default::default(),
-                })),
-                completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(vec![">".into(), ":".into(), "$".into(), "\\".into()]),
-                    ..Default::default()
-                }),
-                signature_help_provider: Some(SignatureHelpOptions {
-                    trigger_characters: Some(vec!["(".into(), ",".into()]),
-                    ..Default::default()
-                }),
-                document_symbol_provider: Some(OneOf::Left(true)),
-                workspace_symbol_provider: Some(OneOf::Left(true)),
-                semantic_tokens_provider: Some(
-                    SemanticTokensServerCapabilities::SemanticTokensOptions(
-                        SemanticTokensOptions {
-                            legend,
-                            full: Some(SemanticTokensFullOptions::Bool(true)),
-                            range: Some(false),
-                            ..Default::default()
-                        },
-                    ),
-                ),
-                inlay_hint_provider: Some(OneOf::Left(true)),
-                folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
-                selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
-                document_formatting_provider: Some(OneOf::Left(true)),
-                document_range_formatting_provider: Some(OneOf::Left(true)),
-                code_action_provider: Some(CodeActionProviderCapability::Options(
-                    CodeActionOptions {
-                        code_action_kinds: Some(
-                            actions::KINDS
-                                .iter()
-                                .map(|k| CodeActionKind::new(k))
-                                .collect(),
-                        ),
-                        resolve_provider: Some(true),
-                        ..Default::default()
-                    },
-                )),
-                execute_command_provider: Some(ExecuteCommandOptions {
-                    commands: vec![actions::ADD_PARAMETER_COMMAND.to_owned()],
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-        })
+        *self.type_hierarchy_dynamic.lock().unwrap() = handlers::type_hierarchy_dynamic(&params);
+        Ok(handlers::initialize_result(utf8))
     }
 
     async fn initialized(&self, _: InitializedParams) {
         self.load().await;
         if *self.type_hierarchy_dynamic.lock().unwrap() {
-            let selector = DocumentFilter {
-                language: Some("php".into()),
-                scheme: None,
-                pattern: None,
-            };
-            let options = TypeHierarchyRegistrationOptions {
-                text_document_registration_options: TextDocumentRegistrationOptions {
-                    document_selector: Some(vec![selector]),
-                },
-                ..Default::default()
-            };
-            let registration = Registration {
-                id: "stirphp-type-hierarchy".into(),
-                method: "textDocument/prepareTypeHierarchy".into(),
-                register_options: serde_json::to_value(options).ok(),
-            };
+            let registration = handlers::type_hierarchy_registration();
             if let Err(error) = self.client.register_capability(vec![registration]).await {
                 tracing::warn!(%error, "cannot offer a type hierarchy");
             }
@@ -1225,10 +746,7 @@ impl LanguageServer for Server {
             return;
         };
         let doc = params.text_document;
-        self.write(|s| {
-            s.set_text(&path, doc.text);
-            s.open.insert(path, doc.version);
-        });
+        self.write(|s| s.open(path, doc.version, doc.text));
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -1237,30 +755,7 @@ impl LanguageServer for Server {
         };
         let enc = self.encoding();
         let version = params.text_document.version;
-        self.write(|s| {
-            if s.open.get(&path).is_some_and(|v| *v > version) {
-                return;
-            }
-            let Some(&file) = s.files.get(&path) else {
-                return;
-            };
-            let mut text = file.text(&s.db).clone();
-            for change in params.content_changes {
-                match change.range {
-                    Some(range) => {
-                        let map = LineMap::new(&text, enc);
-                        let r = map.text_range(range);
-                        text.replace_range(
-                            usize::from(r.start())..usize::from(r.end()),
-                            &change.text,
-                        );
-                    }
-                    None => text = change.text,
-                }
-            }
-            s.set_text(&path, text);
-            s.open.insert(path, version);
-        });
+        self.write(|s| s.change(path, version, params.content_changes, enc));
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
@@ -1279,16 +774,7 @@ impl LanguageServer for Server {
         };
         // back to what is on disk
         let disk = tokio::fs::read_to_string(&path).await.ok();
-        self.write(|s| {
-            s.open.remove(&path);
-            let in_project = s.is_project_path(&path);
-            match disk {
-                Some(text) if in_project => {
-                    s.set_text(&path, text);
-                }
-                _ => s.remove(&path),
-            }
-        });
+        self.write(|s| s.close(&path, disk));
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
@@ -1333,113 +819,44 @@ impl LanguageServer for Server {
         if rules_changed {
             self.reload_rules().await;
         }
-        self.write(|s| {
-            for (path, text) in updates {
-                if s.open.contains_key(&path) {
-                    continue;
-                }
-                let in_project = s.is_project_path(&path);
-                match text {
-                    Some(text) if s.files.contains_key(&path) || in_project => {
-                        s.set_text(&path, text);
-                    }
-                    Some(_) => {}
-                    None => s.remove(&path),
-                }
-            }
-        });
+        self.write(|s| s.stored_changed(updates));
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        let pos = params.text_document_position_params.position;
-        self.read(
-            &params.text_document_position_params.text_document.uri,
-            move |db, ws, file, map| {
-                let h = hover::hover(db, ws, file, map.offset(pos))?;
-                Some(Hover {
-                    contents: HoverContents::Markup(MarkupContent {
-                        kind: MarkupKind::Markdown,
-                        value: h.markdown,
-                    }),
-                    range: Some(map.range(h.range)),
-                })
-            },
-        )
-        .await
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        self.read(&uri, move |s, f, m| handlers::hover(s, f, m, params))
+            .await
     }
 
     async fn goto_definition(
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        let pos = params.text_document_position_params.position;
-        let enc = self.encoding();
-        self.read(
-            &params.text_document_position_params.text_document.uri,
-            move |db, ws, file, map| {
-                // a name in a string that a framework knows: a hook, a view, a route
-                let named =
-                    stir_checker::script::links::string_targets(db, ws, file, map.offset(pos));
-                if !named.is_empty() {
-                    let locs: Vec<Location> = named
-                        .into_iter()
-                        .filter_map(|(f, range)| location(db, f, range, enc))
-                        .collect();
-                    return Some(match <[Location; 1]>::try_from(locs) {
-                        Ok([one]) => GotoDefinitionResponse::Scalar(one),
-                        Err(many) => GotoDefinitionResponse::Array(many),
-                    });
-                }
-                let (_, def) = nav::def_at(db, ws, file, map.offset(pos))?;
-                let t = nav::target(db, ws, file, &def)?;
-                let loc = location(db, t.file, t.focus_range, enc)?;
-                Some(GotoDefinitionResponse::Scalar(loc))
-            },
-        )
-        .await
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        self.read(&uri, move |s, f, m| handlers::definition(s, f, m, params))
+            .await
     }
 
     async fn goto_type_definition(
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        let pos = params.text_document_position_params.position;
-        let enc = self.encoding();
-        self.read(
-            &params.text_document_position_params.text_document.uri,
-            move |db, ws, file, map| {
-                let offset = map.offset(pos);
-                let typed = stir_checker::typed_file(db, ws, file);
-                let ty = match nav::def_at(db, ws, file, offset) {
-                    Some((range, stir_checker::Def::Local { decl })) => typed
-                        .types
-                        .get(&range)
-                        .cloned()
-                        .or_else(|| typed.locals.get(&decl).map(|l| l.0.clone()))?,
-                    Some((range, _)) => typed.types.get(&range).cloned()?,
-                    None => typed
-                        .types
-                        .iter()
-                        .filter(|(r, _)| r.contains(offset))
-                        .min_by_key(|(r, _)| r.len())?
-                        .1
-                        .clone(),
-                };
-                let ty = stir_types::without_null(&ty);
-                let key = match ty.kind() {
-                    stir_types::TyKind::Class { name, .. } => name.to_ascii_lowercase(),
-                    _ => return None,
-                };
-                let def = stir_checker::Def::Class(key.trim_start_matches('\\').into());
-                let t = nav::target(db, ws, file, &def)?;
-                Some(GotoDefinitionResponse::Scalar(location(
-                    db,
-                    t.file,
-                    t.focus_range,
-                    enc,
-                )?))
-            },
-        )
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        self.read(&uri, move |s, f, m| {
+            handlers::type_definition(s, f, m, params)
+        })
         .await
     }
 
@@ -1447,39 +864,27 @@ impl LanguageServer for Server {
         &self,
         params: request::GotoDeclarationParams,
     ) -> Result<Option<request::GotoDeclarationResponse>> {
-        let pos = params.text_document_position_params.position;
-        let enc = self.encoding();
-        self.read(
-            &params.text_document_position_params.text_document.uri,
-            move |db, ws, file, map| {
-                let (_, def) = nav::def_at(db, ws, file, map.offset(pos))?;
-                let locations = hierarchy::declarations(db, ws, file, &def)
-                    .into_iter()
-                    .filter_map(|t| location(db, t.file, t.focus_range, enc))
-                    .collect();
-                scalar_or_array(locations)
-            },
-        )
-        .await
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        self.read(&uri, move |s, f, m| handlers::declaration(s, f, m, params))
+            .await
     }
 
     async fn goto_implementation(
         &self,
         params: request::GotoImplementationParams,
     ) -> Result<Option<request::GotoImplementationResponse>> {
-        let pos = params.text_document_position_params.position;
-        let enc = self.encoding();
-        self.read(
-            &params.text_document_position_params.text_document.uri,
-            move |db, ws, file, map| {
-                let (_, def) = nav::def_at(db, ws, file, map.offset(pos))?;
-                let locations = hierarchy::implementations(db, ws, file, &def)
-                    .into_iter()
-                    .filter_map(|t| location(db, t.file, t.focus_range, enc))
-                    .collect();
-                Some(GotoDefinitionResponse::Array(locations))
-            },
-        )
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        self.read(&uri, move |s, f, m| {
+            handlers::implementation(s, f, m, params)
+        })
         .await
     }
 
@@ -1487,15 +892,14 @@ impl LanguageServer for Server {
         &self,
         params: CallHierarchyPrepareParams,
     ) -> Result<Option<Vec<CallHierarchyItem>>> {
-        let pos = params.text_document_position_params.position;
-        let enc = self.encoding();
-        self.read(
-            &params.text_document_position_params.text_document.uri,
-            move |db, ws, file, map| {
-                let (_, item) = hierarchy::callable_at(db, ws, file, map.offset(pos))?;
-                Some(vec![call_item(db, &item, enc)?])
-            },
-        )
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        self.read(&uri, move |s, f, m| {
+            handlers::prepare_call_hierarchy(s, f, m, params)
+        })
         .await
     }
 
@@ -1503,67 +907,30 @@ impl LanguageServer for Server {
         &self,
         params: CallHierarchyIncomingCallsParams,
     ) -> Result<Option<Vec<CallHierarchyIncomingCall>>> {
-        let data = params.item.data;
-        self.read_ws(move |db, ws, enc| {
-            let (file, offset) = from_hierarchy_data(db, ws, data.as_ref())?;
-            let (def, _) = hierarchy::callable_at(db, ws, file, offset)?;
-            let calls = hierarchy::incoming_calls(db, ws, &def)
-                .into_iter()
-                .filter_map(|(caller, ranges)| {
-                    let map = LineMap::new(caller.file.text(db), enc);
-                    Some(CallHierarchyIncomingCall {
-                        from: call_item(db, &caller, enc)?,
-                        from_ranges: ranges.into_iter().map(|r| map.range(r)).collect(),
-                    })
-                })
-                .collect();
-            Some(calls)
-        })
-        .await
+        self.read_ws(move |s| handlers::incoming_calls(s, params))
+            .await
     }
 
     async fn outgoing_calls(
         &self,
         params: CallHierarchyOutgoingCallsParams,
     ) -> Result<Option<Vec<CallHierarchyOutgoingCall>>> {
-        let data = params.item.data;
-        self.read_ws(move |db, ws, enc| {
-            let (file, _) = from_hierarchy_data(db, ws, data.as_ref())?;
-            let at = |key: &str| {
-                data.as_ref()?
-                    .get(key)?
-                    .as_u64()
-                    .and_then(|v| u32::try_from(v).ok())
-            };
-            let range = TextRange::new(at("start")?.into(), at("end")?.into());
-            let map = LineMap::new(file.text(db), enc);
-            let calls = hierarchy::outgoing_calls(db, ws, file, range)
-                .into_iter()
-                .filter_map(|(callee, ranges)| {
-                    Some(CallHierarchyOutgoingCall {
-                        to: call_item(db, &callee, enc)?,
-                        from_ranges: ranges.into_iter().map(|r| map.range(r)).collect(),
-                    })
-                })
-                .collect();
-            Some(calls)
-        })
-        .await
+        self.read_ws(move |s| handlers::outgoing_calls(s, params))
+            .await
     }
 
     async fn prepare_type_hierarchy(
         &self,
         params: TypeHierarchyPrepareParams,
     ) -> Result<Option<Vec<TypeHierarchyItem>>> {
-        let pos = params.text_document_position_params.position;
-        let enc = self.encoding();
-        self.read(
-            &params.text_document_position_params.text_document.uri,
-            move |db, ws, file, map| {
-                let item = hierarchy::type_at(db, ws, file, map.offset(pos))?;
-                Some(vec![type_hierarchy_item(db, &item, enc)?])
-            },
-        )
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        self.read(&uri, move |s, f, m| {
+            handlers::prepare_type_hierarchy(s, f, m, params)
+        })
         .await
     }
 
@@ -1571,93 +938,34 @@ impl LanguageServer for Server {
         &self,
         params: TypeHierarchySupertypesParams,
     ) -> Result<Option<Vec<TypeHierarchyItem>>> {
-        let key = type_key(&params.item);
-        self.read_ws(move |db, ws, enc| {
-            let items = hierarchy::supertypes(db, ws, &key?);
-            Some(
-                items
-                    .iter()
-                    .filter_map(|i| type_hierarchy_item(db, i, enc))
-                    .collect(),
-            )
-        })
-        .await
+        self.read_ws(move |s| handlers::supertypes(s, params)).await
     }
 
     async fn subtypes(
         &self,
         params: TypeHierarchySubtypesParams,
     ) -> Result<Option<Vec<TypeHierarchyItem>>> {
-        let key = type_key(&params.item);
-        self.read_ws(move |db, ws, enc| {
-            let items = hierarchy::subtypes(db, ws, &key?);
-            Some(
-                items
-                    .iter()
-                    .filter_map(|i| type_hierarchy_item(db, i, enc))
-                    .collect(),
-            )
-        })
-        .await
+        self.read_ws(move |s| handlers::subtypes(s, params)).await
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
-        let pos = params.text_document_position.position;
-        let include_decl = params.context.include_declaration;
-        let enc = self.encoding();
-        self.read(
-            &params.text_document_position.text_document.uri,
-            move |db, ws, file, map| {
-                let (_, def) = nav::def_at(db, ws, file, map.offset(pos))?;
-                let decl = nav::target(db, ws, file, &def);
-                let refs = nav::references(db, ws, file, &def);
-                Some(
-                    refs.into_iter()
-                        .filter(|(f, r)| {
-                            include_decl
-                                || decl
-                                    .as_ref()
-                                    .is_none_or(|d| !(d.file == *f && d.focus_range == *r))
-                        })
-                        .filter_map(|(f, r)| location(db, f, r, enc))
-                        .collect(),
-                )
-            },
-        )
-        .await
+        let uri = params.text_document_position.text_document.uri.clone();
+        self.read(&uri, move |s, f, m| handlers::references(s, f, m, params))
+            .await
     }
 
     async fn document_highlight(
         &self,
         params: DocumentHighlightParams,
     ) -> Result<Option<Vec<DocumentHighlight>>> {
-        let pos = params.text_document_position_params.position;
-        self.read(
-            &params.text_document_position_params.text_document.uri,
-            move |db, ws, file, map| {
-                let (_, def) = nav::def_at(db, ws, file, map.offset(pos))?;
-                let decl = nav::target(db, ws, file, &def);
-                Some(
-                    nav::file_refs(db, ws, file)
-                        .iter()
-                        .filter(|(_, d)| *d == def)
-                        .map(|(r, _)| DocumentHighlight {
-                            range: map.range(*r),
-                            kind: Some(
-                                if decl
-                                    .as_ref()
-                                    .is_some_and(|d| d.file == file && d.focus_range == *r)
-                                {
-                                    DocumentHighlightKind::WRITE
-                                } else {
-                                    DocumentHighlightKind::READ
-                                },
-                            ),
-                        })
-                        .collect(),
-                )
-            },
-        )
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        self.read(&uri, move |s, f, m| {
+            handlers::document_highlight(s, f, m, params)
+        })
         .await
     }
 
@@ -1665,119 +973,28 @@ impl LanguageServer for Server {
         &self,
         params: TextDocumentPositionParams,
     ) -> Result<Option<PrepareRenameResponse>> {
-        let pos = params.position;
+        let uri = params.text_document.uri.clone();
         let result = self
-            .read(&params.text_document.uri, move |db, ws, file, map| {
-                let (range, def) = nav::def_at(db, ws, file, map.offset(pos))?;
-                if !hover::is_project_def(db, ws, file, &def) {
-                    return Some(Err("can't rename a declaration outside the project"));
-                }
-                // the name token itself (not `\Qualified\Name`)
-                let text = &file.text(db)[usize::from(range.start())..usize::from(range.end())];
-                let short = text.rsplit('\\').next().unwrap_or(text);
-                let start = range.end() - TextSize::of(short);
-                Some(Ok(PrepareRenameResponse::Range(
-                    map.range(TextRange::new(start, range.end())),
-                )))
+            .read(&uri, move |s, f, m| {
+                Some(handlers::prepare_rename(s, f, m, params))
             })
             .await?;
-        match result {
-            Some(Ok(r)) => Ok(Some(r)),
-            Some(Err(msg)) => Err(Error::invalid_params(msg)),
-            None => Ok(None),
-        }
+        result.transpose().map(Option::flatten).map_err(failure)
     }
 
     async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
-        let pos = params.text_document_position.position;
-        let new_name = params.new_name;
-        if !valid_identifier(&new_name) {
-            return Err(Error::invalid_params(format!(
-                "`{new_name}` is not a valid name"
-            )));
-        }
-        let enc = self.encoding();
+        handlers::check_new_name(&params).map_err(failure)?;
+        let uri = params.text_document_position.text_document.uri.clone();
         let result = self
-            .read(
-                &params.text_document_position.text_document.uri,
-                move |db, ws, file, map| {
-                    let (_, def) = nav::def_at(db, ws, file, map.offset(pos))?;
-                    if !hover::is_project_def(db, ws, file, &def) {
-                        return Some(Err("can't rename a declaration outside the project"));
-                    }
-                    let _ = map;
-                    let mut changes: std::collections::HashMap<Uri, Vec<TextEdit>> =
-                        Default::default();
-                    for (f, range) in nav::references(db, ws, file, &def) {
-                        let text = f.text(db);
-                        let old = &text[usize::from(range.start())..usize::from(range.end())];
-                        // only the last segment of a qualified name changes
-                        let short = old.rsplit('\\').next().unwrap_or(old);
-                        let range = TextRange::new(range.end() - TextSize::of(short), range.end());
-                        let Some(uri) = file_uri(db, f) else { continue };
-                        let fmap = LineMap::new(text, enc);
-                        changes.entry(uri).or_default().push(TextEdit {
-                            range: fmap.range(range),
-                            new_text: renamed(short, &new_name),
-                        });
-                    }
-                    Some(Ok(WorkspaceEdit {
-                        changes: Some(changes),
-                        ..Default::default()
-                    }))
-                },
-            )
+            .read(&uri, move |s, f, m| Some(handlers::rename(s, f, m, params)))
             .await?;
-        match result {
-            Some(Ok(e)) => Ok(Some(e)),
-            Some(Err(msg)) => Err(Error::invalid_params(msg)),
-            None => Ok(None),
-        }
+        result.transpose().map(Option::flatten).map_err(failure)
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        let pos = params.text_document_position.position;
-        self.read(
-            &params.text_document_position.text_document.uri,
-            move |db, ws, file, map| {
-                let c = complete::complete(db, ws, file, map.offset(pos));
-                let range = map.range(c.replace);
-                let items = c
-                    .items
-                    .into_iter()
-                    .map(|i| CompletionItem {
-                        deprecated: i.deprecated.then_some(true),
-                        filter_text: Some(i.label.clone()),
-                        sort_text: Some(format!("{}{:04}{}", i.rank, i.order, i.label)),
-                        kind: Some(completion_kind(i.kind)),
-                        detail: i.detail,
-                        label_details: i.qualified.map(|q| CompletionItemLabelDetails {
-                            detail: None,
-                            description: Some(q),
-                        }),
-                        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                            range,
-                            new_text: i.insert,
-                        })),
-                        additional_text_edits: i.import.map(|edit| {
-                            let at = map.position(edit.at);
-                            vec![TextEdit {
-                                range: Range::new(at, at),
-                                new_text: edit.text,
-                            }]
-                        }),
-                        tags: i.deprecated.then(|| vec![CompletionItemTag::DEPRECATED]),
-                        label: i.label,
-                        ..Default::default()
-                    })
-                    .collect();
-                Some(CompletionResponse::List(CompletionList {
-                    is_incomplete: c.incomplete,
-                    items,
-                }))
-            },
-        )
-        .await
+        let uri = params.text_document_position.text_document.uri.clone();
+        self.read(&uri, move |s, f, m| handlers::completion(s, f, m, params))
+            .await
     }
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
@@ -1793,12 +1010,10 @@ impl LanguageServer for Server {
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
-        let project = self.state.lock().unwrap().indent;
-        let options = format_options(project, &params.options);
-        self.read(&params.text_document.uri, move |db, _, file, map| {
-            // a file that doesn't parse isn't touched: it's probably being typed
-            let edits = stir_fmt::edits(file.text(db), &options).ok()?;
-            Some(text_edits(map, edits))
+        let indent = self.state.lock().unwrap().indent;
+        let uri = params.text_document.uri.clone();
+        self.read(&uri, move |s, f, m| {
+            handlers::formatting(s, f, m, params, indent)
         })
         .await
     }
@@ -1807,53 +1022,23 @@ impl LanguageServer for Server {
         &self,
         params: DocumentRangeFormattingParams,
     ) -> Result<Option<Vec<TextEdit>>> {
-        let project = self.state.lock().unwrap().indent;
-        let options = format_options(project, &params.options);
-        let range = params.range;
-        self.read(&params.text_document.uri, move |db, _, file, map| {
-            let edits = stir_fmt::range_edits(file.text(db), map.text_range(range), &options);
-            Some(text_edits(map, edits.ok()?))
+        let indent = self.state.lock().unwrap().indent;
+        let uri = params.text_document.uri.clone();
+        self.read(&uri, move |s, f, m| {
+            handlers::range_formatting(s, f, m, params, indent)
         })
         .await
     }
 
     async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
-        let pos = params.text_document_position_params.position;
-        self.read(
-            &params.text_document_position_params.text_document.uri,
-            move |db, ws, file, map| {
-                let h = hints::signature_help(db, ws, file, map.offset(pos))?;
-                let parameters = h
-                    .params
-                    .iter()
-                    .map(|&(s, e)| {
-                        let (s, e) = (s as usize, e as usize);
-                        ParameterInformation {
-                            label: ParameterLabel::LabelOffsets([
-                                map.measure(&h.label[..s]),
-                                map.measure(&h.label[..e]),
-                            ]),
-                            documentation: None,
-                        }
-                    })
-                    .collect();
-                Some(SignatureHelp {
-                    signatures: vec![SignatureInformation {
-                        label: h.label,
-                        documentation: h.doc.map(|d| {
-                            Documentation::MarkupContent(MarkupContent {
-                                kind: MarkupKind::Markdown,
-                                value: d,
-                            })
-                        }),
-                        parameters: Some(parameters),
-                        active_parameter: Some(h.active_param),
-                    }],
-                    active_signature: Some(0),
-                    active_parameter: Some(h.active_param),
-                })
-            },
-        )
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        self.read(&uri, move |s, f, m| {
+            handlers::signature_help(s, f, m, params)
+        })
         .await
     }
 
@@ -1861,11 +1046,9 @@ impl LanguageServer for Server {
         &self,
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
-        self.read(&params.text_document.uri, move |db, _, file, map| {
-            let syms = symbols::document_symbols(db, file);
-            Some(DocumentSymbolResponse::Nested(
-                syms.into_iter().map(|s| document_symbol(s, map)).collect(),
-            ))
+        let uri = params.text_document.uri.clone();
+        self.read(&uri, move |s, f, m| {
+            handlers::document_symbol_response(s, f, m, params)
         })
         .await
     }
@@ -1874,114 +1057,31 @@ impl LanguageServer for Server {
         &self,
         params: WorkspaceSymbolParams,
     ) -> Result<Option<WorkspaceSymbolResponse>> {
-        let query = params.query;
-        self.read_ws(move |db, ws, enc| {
-            #[allow(deprecated)]
-            let out = symbols::workspace_symbols(db, ws, &query)
-                .into_iter()
-                .filter_map(|s| {
-                    Some(SymbolInformation {
-                        name: s.name,
-                        kind: symbol_kind(s.kind),
-                        tags: s.deprecated.then(|| vec![SymbolTag::DEPRECATED]),
-                        deprecated: s.deprecated.then_some(true),
-                        location: location(db, s.file, s.range, enc)?,
-                        container_name: (!s.container.is_empty()).then_some(s.container),
-                    })
-                })
-                .collect();
-            Some(WorkspaceSymbolResponse::Flat(out))
-        })
-        .await
+        self.read_ws(move |s| handlers::workspace_symbols(s, params))
+            .await
     }
 
     async fn semantic_tokens_full(
         &self,
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
-        self.read(&params.text_document.uri, move |db, ws, file, map| {
-            let text = file.text(db);
-            let mut data = Vec::new();
-            let (mut prev_line, mut prev_col) = (0u32, 0u32);
-            for t in tokens::semantic_tokens(db, ws, file) {
-                // tokens can't span lines
-                for line in map.lines(t.range) {
-                    let piece = line.intersect(t.range).unwrap_or(line);
-                    let s = &text[usize::from(piece.start())..usize::from(piece.end())];
-                    let s = s.trim_end_matches(['\n', '\r']);
-                    if s.is_empty() {
-                        continue;
-                    }
-                    let pos = map.position(piece.start());
-                    let delta_line = pos.line - prev_line;
-                    let delta_start = if delta_line == 0 {
-                        pos.character - prev_col
-                    } else {
-                        pos.character
-                    };
-                    data.push(SemanticToken {
-                        delta_line,
-                        delta_start,
-                        length: map.measure(s),
-                        token_type: t.ty as u32,
-                        token_modifiers_bitset: t.modifiers,
-                    });
-                    prev_line = pos.line;
-                    prev_col = pos.character;
-                }
-            }
-            Some(SemanticTokensResult::Tokens(SemanticTokens {
-                result_id: None,
-                data,
-            }))
+        let uri = params.text_document.uri.clone();
+        self.read(&uri, move |s, f, m| {
+            handlers::semantic_tokens(s, f, m, params)
         })
         .await
     }
 
     async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
-        let range = params.range;
-        self.read(&params.text_document.uri, move |db, ws, file, map| {
-            let r = map.text_range(range);
-            Some(
-                hints::inlay_hints(db, ws, file, r)
-                    .into_iter()
-                    .map(|h| InlayHint {
-                        position: map.position(h.offset),
-                        label: InlayHintLabel::String(h.label),
-                        kind: Some(InlayHintKind::TYPE),
-                        text_edits: None,
-                        tooltip: None,
-                        padding_left: None,
-                        padding_right: None,
-                        data: None,
-                    })
-                    .collect(),
-            )
-        })
-        .await
+        let uri = params.text_document.uri.clone();
+        self.read(&uri, move |s, f, m| handlers::inlay_hints(s, f, m, params))
+            .await
     }
 
     async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
-        self.read(&params.text_document.uri, move |db, _, file, map| {
-            Some(
-                symbols::folding_ranges(db, file)
-                    .into_iter()
-                    .filter_map(|(r, kind)| {
-                        let start = map.position(r.start());
-                        let end = map.position(r.end());
-                        (end.line > start.line).then(|| FoldingRange {
-                            start_line: start.line,
-                            end_line: end.line,
-                            kind: Some(match kind {
-                                symbols::FoldKind::Region => FoldingRangeKind::Region,
-                                symbols::FoldKind::Comment => FoldingRangeKind::Comment,
-                                symbols::FoldKind::Imports => FoldingRangeKind::Imports,
-                            }),
-                            ..Default::default()
-                        })
-                    })
-                    .collect(),
-            )
+        let uri = params.text_document.uri.clone();
+        self.read(&uri, move |s, f, m| {
+            handlers::folding_ranges(s, f, m, params)
         })
         .await
     }
@@ -1990,27 +1090,9 @@ impl LanguageServer for Server {
         &self,
         params: SelectionRangeParams,
     ) -> Result<Option<Vec<SelectionRange>>> {
-        let positions = params.positions;
-        self.read(&params.text_document.uri, move |db, _, file, map| {
-            Some(
-                positions
-                    .iter()
-                    .map(|p| {
-                        let ranges = symbols::selection_ranges(db, file, map.offset(*p));
-                        let mut sel: Option<SelectionRange> = None;
-                        for r in ranges.into_iter().rev() {
-                            sel = Some(SelectionRange {
-                                range: map.range(r),
-                                parent: sel.map(Box::new),
-                            });
-                        }
-                        sel.unwrap_or(SelectionRange {
-                            range: Range::new(*p, *p),
-                            parent: None,
-                        })
-                    })
-                    .collect(),
-            )
+        let uri = params.text_document.uri.clone();
+        self.read(&uri, move |s, f, m| {
+            handlers::selection_ranges(s, f, m, params)
         })
         .await
     }

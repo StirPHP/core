@@ -6,14 +6,23 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use stir_lsp::server::TrustOptions;
+use stir_lsp::session::{Next, Session};
 use stir_lsp::trust::TrustStore;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, DuplexStream};
 use tokio::sync::mpsc;
 use tower_lsp_server::ls_types::Uri;
 use tower_lsp_server::{LspService, Server};
 
+/// How messages get to the server.
+enum Transport {
+    /// The native server, over a byte stream as stdio would be.
+    Native(tokio::io::WriteHalf<DuplexStream>),
+    /// The thread-free session, as in the browser, stepped on a task of its own.
+    Session(mpsc::UnboundedSender<Value>),
+}
+
 pub struct Client {
-    tx: tokio::io::WriteHalf<DuplexStream>,
+    tx: Transport,
     rx: mpsc::UnboundedReceiver<Value>,
     /// Messages received while waiting for something else.
     pub backlog: Vec<Value>,
@@ -68,7 +77,58 @@ impl Client {
             }
         });
         Client {
-            tx: cw,
+            tx: Transport::Native(cw),
+            rx,
+            backlog: Vec::new(),
+            next_id: 1,
+        }
+    }
+
+    /// The server as it runs in the browser: a [`Session`] stepped on a task, with the clock going
+    /// by as it would. It has no disk, so it's handed the files of the workspace folder at
+    /// `initialize`, and those that `workspace/didChangeWatchedFiles` names after that, as a page
+    /// would.
+    pub fn start_session() -> Client {
+        let (tx, mut incoming) = mpsc::unbounded_channel::<Value>();
+        let (out, rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let mut session = Session::new();
+            let start = tokio::time::Instant::now();
+            let now = || start.elapsed().as_secs_f64() * 1000.0;
+            loop {
+                let next = session.step(now());
+                for m in session.take_outgoing() {
+                    if out.send(m).is_err() {
+                        return;
+                    }
+                }
+                let message = match next {
+                    Next::Now => {
+                        tokio::task::yield_now().await;
+                        incoming.try_recv().ok()
+                    }
+                    Next::After(ms) => {
+                        let wait = Duration::from_secs_f64(ms / 1000.0);
+                        tokio::time::timeout(wait, incoming.recv())
+                            .await
+                            .ok()
+                            .flatten()
+                    }
+                    Next::Idle => match incoming.recv().await {
+                        Some(m) => Some(m),
+                        None => return,
+                    },
+                };
+                if let Some(m) = message {
+                    session.push(as_a_page_would(m));
+                }
+                while let Ok(m) = incoming.try_recv() {
+                    session.push(as_a_page_would(m));
+                }
+            }
+        });
+        Client {
+            tx: Transport::Session(tx),
             rx,
             backlog: Vec::new(),
             next_id: 1,
@@ -76,9 +136,14 @@ impl Client {
     }
 
     pub async fn send(&mut self, msg: Value) {
-        let body = msg.to_string();
-        let frame = format!("Content-Length: {}\r\n\r\n{body}", body.len());
-        self.tx.write_all(frame.as_bytes()).await.unwrap();
+        match &mut self.tx {
+            Transport::Native(tx) => {
+                let body = msg.to_string();
+                let frame = format!("Content-Length: {}\r\n\r\n{body}", body.len());
+                tx.write_all(frame.as_bytes()).await.unwrap();
+            }
+            Transport::Session(tx) => tx.send(msg).unwrap(),
+        }
     }
 
     pub async fn notify(&mut self, method: &str, params: Value) {
@@ -154,6 +219,56 @@ impl Client {
             }
             self.backlog.push(m);
         }
+    }
+}
+
+/// `message`, with the files a page hands the session where the native server reads them from disk.
+fn as_a_page_would(mut message: Value) -> Value {
+    match message["method"].as_str() {
+        Some("initialize") => {
+            let root = message["params"]["rootUri"]
+                .as_str()
+                .and_then(|u| u.parse::<Uri>().ok())
+                .and_then(|u| u.to_file_path().map(|p| p.into_owned()));
+            let mut files = serde_json::Map::new();
+            let mut dirs: Vec<_> = root.into_iter().collect();
+            while let Some(dir) = dirs.pop() {
+                for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        dirs.push(path);
+                    } else if let Ok(text) = std::fs::read_to_string(&path) {
+                        files.insert(path.display().to_string(), json!(text));
+                    }
+                }
+            }
+            let params = &mut message["params"];
+            if !params["initializationOptions"].is_object() {
+                params["initializationOptions"] = json!({});
+            }
+            params["initializationOptions"]["files"] = Value::Object(files);
+            message
+        }
+        Some("workspace/didChangeWatchedFiles") => {
+            let mut files = serde_json::Map::new();
+            for change in message["params"]["changes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                let Some(path) = change["uri"]
+                    .as_str()
+                    .and_then(|u| u.parse::<Uri>().ok())
+                    .and_then(|u| u.to_file_path().map(|p| p.into_owned()))
+                else {
+                    continue;
+                };
+                let text = std::fs::read_to_string(&path).map_or(Value::Null, Value::String);
+                files.insert(path.display().to_string(), text);
+            }
+            json!({"jsonrpc": "2.0", "method": "stirphp/setFiles", "params": {"files": files}})
+        }
+        _ => message,
     }
 }
 
