@@ -160,6 +160,8 @@ pub struct ViewSites {
     opens: Vec<(Target, OpenReason)>,
     /// `Blade::directive('name', ..)`, in lower case, with what it declares.
     custom_directives: Vec<(String, DirectiveVars)>,
+    /// The variables `View::share` is known to add.
+    shared: Vec<SmolStr>,
     /// Of a template: has `@props` or `@aware`, or `$this`.
     component: bool,
     uses_this: bool,
@@ -295,9 +297,17 @@ fn read_targets(expr: &SyntaxNode, out: &mut Vec<Target>, consumed: &mut Vec<Tex
         STRING_LITERAL => {
             if let Some(name) = plain_string(expr) {
                 consumed.push(expr.text_range());
-                // a package's, or text instead of a name for `@each`
-                if !name.contains("::") && !name.contains('|') {
-                    out.push(Target::Name(normal_view_name(&name)));
+                // text instead of a name, for `@each`
+                if name.contains('|') {
+                    return;
+                }
+                match name.rsplit_once("::") {
+                    // a package's, or a namespace the project adds for its own: going by the rest
+                    // of the name, as there's no telling where that one is
+                    Some((_, rest)) => {
+                        out.push(Target::Pattern(format!("*{}", normal_view_name(rest))));
+                    }
+                    None => out.push(Target::Name(normal_view_name(&name))),
                 }
             } else {
                 out.push(prefix_pattern(&text(expr)));
@@ -359,6 +369,24 @@ fn prefix_pattern(spelled: &str) -> Target {
     let inner = spelled.trim_start_matches('"');
     let end = inner.find(['$', '{']).unwrap_or(inner.len());
     Target::Pattern(format!("{}*", normal_view_name(&inner[..end])))
+}
+
+/// What `View::share` is given, as far as it's written.
+fn read_shared(key: &SyntaxNode, out: &mut Vec<SmolStr>) {
+    match key.kind() {
+        STRING_LITERAL => out.extend(plain_string(key).map(|k| SmolStr::new(&k))),
+        ARRAY_EXPR => {
+            for elem in key.children().filter(|c| c.kind() == ARRAY_ELEM) {
+                let name = elem.first_child().filter(|_| elem.has_token(FAT_ARROW));
+                out.extend(
+                    name.as_ref()
+                        .and_then(plain_string)
+                        .map(|k| SmolStr::new(&k)),
+                );
+            }
+        }
+        _ => {}
+    }
 }
 
 /// `$data` in `view('name', $data)` and the like.
@@ -789,6 +817,10 @@ impl Reader<'_> {
             }
             "share" => {
                 self.add_opens(vec![Target::Pattern("*".into())], OpenReason::Shared);
+                match args_by_param(call, &["key", "value"]).map(|mut a| a.remove(0)) {
+                    Some(Some(key)) => read_shared(&key, &mut self.out.shared),
+                    _ => {}
+                }
             }
             "composer" | "creator" => {
                 let mut targets = Vec::new();
@@ -1253,8 +1285,6 @@ pub struct ViewIndex {
     package_directives: FxHashSet<String>,
     /// On a cycle of templates including each other.
     recursive: FxHashSet<String>,
-    /// What packages' code gives templates of the project it renders by name, without types.
-    package_calls: FxHashMap<String, Vec<ViewCall>>,
 }
 
 impl ViewIndex {
@@ -1270,11 +1300,29 @@ impl ViewIndex {
     }
 }
 
-/// What packages say about the project's templates: `view('auth.login')` from a controller's trait,
-/// read as it's written, as their code isn't checked. Only what's rendered by a name counts: a name
-/// worked out in a package is no more likely to be this template than any other.
-fn read_packages(db: &dyn Db, ws: Workspace, index: &mut ViewIndex) {
+/// What packages say about the project's templates.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PackageViews {
+    /// What's opened by name.
+    opens: Vec<(Target, OpenReason)>,
+    /// The custom directives that can be read.
+    directives: Vec<(String, Vec<SmolStr>)>,
+    /// Those that can't: see [`ViewIndex::package_directives`].
+    unread_directives: FxHashSet<String>,
+    /// What's given to templates it renders by name, without types.
+    calls: FxHashMap<String, Vec<ViewCall>>,
+    /// The variables it shares with all templates.
+    shared: Vec<SmolStr>,
+}
+
+/// See [`PackageViews`]: `view('auth.login')` from a controller's trait, read as it's written, as
+/// a package's code isn't checked. Only what's rendered by a name counts: a name worked out in a
+/// package is no more likely to be this template than any other. On its own, as nothing here
+/// changes with an edit of the project.
+#[salsa::tracked(returns(ref))]
+pub fn package_views(db: &dyn Db, ws: Workspace) -> PackageViews {
     let names = view_names(db, ws);
+    let mut out = PackageViews::default();
     for &file in ws.files(db) {
         if file.origin(db) != FileOrigin::Vendor {
             continue;
@@ -1282,7 +1330,7 @@ fn read_packages(db: &dyn Db, ws: Workspace, index: &mut ViewIndex) {
         let source = file.text(db);
         let renders =
             !names.is_empty() && (source.contains("view(") || source.contains("View::make("));
-        if !renders && !source.contains("directive(") {
+        if !renders && !source.contains("directive(") && !source.contains("share(") {
             continue;
         }
         let root = stir_db::parse(db, file).syntax();
@@ -1297,8 +1345,15 @@ fn read_packages(db: &dyn Db, ws: Workspace, index: &mut ViewIndex) {
                 CALL_EXPR => reader.call(&node),
                 STATIC_CALL_EXPR => reader.static_call(&node),
                 METHOD_CALL_EXPR => {
-                    if method_name(&node).is_some_and(|m| m == "directive") {
+                    let Some(method) = method_name(&node) else {
+                        continue;
+                    };
+                    if method == "directive" {
                         reader.directive_declared(&node, false);
+                    } else if method == "share"
+                        && receiver_of(&node).is_some_and(|r| looks_like_factory(&text(&r)))
+                    {
+                        reader.factory_method(&node, &method);
                     }
                 }
                 _ => {}
@@ -1306,21 +1361,18 @@ fn read_packages(db: &dyn Db, ws: Workspace, index: &mut ViewIndex) {
         }
         for (name, vars) in reader.out.custom_directives {
             match vars {
-                Some(vars) => {
-                    index.custom_directives.entry(name).or_insert(Some(vars));
-                }
+                Some(vars) => out.directives.push((name, vars)),
                 // what renders a component, which has its own variables
                 None if name == "livewire" => {}
                 None => {
-                    if !index.custom_directives.contains_key(&name) {
-                        index.package_directives.insert(name);
-                    }
+                    out.unread_directives.insert(name);
                 }
             }
         }
+        out.shared.extend(reader.out.shared);
         for (target, why) in reader.out.opens {
             if matches!(&target, Target::Name(n) if names.contains(n)) {
-                index.opens.push((target, why));
+                out.opens.push((target, why));
             }
         }
         for site in reader.out.sites {
@@ -1352,14 +1404,13 @@ fn read_packages(db: &dyn Db, ws: Workspace, index: &mut ViewIndex) {
                 }
             }
             for name in known {
-                index
-                    .package_calls
-                    .entry(name)
-                    .or_default()
-                    .push(call.clone());
+                out.calls.entry(name).or_default().push(call.clone());
             }
         }
     }
+    out.shared.sort();
+    out.shared.dedup();
+    out
 }
 
 /// See [`ViewIndex`].
@@ -1400,7 +1451,18 @@ pub fn view_index(db: &dyn Db, ws: Workspace) -> ViewIndex {
         }
     }
     index.recursive = on_cycles(&edges);
-    read_packages(db, ws, &mut index);
+    let packages = package_views(db, ws);
+    index.opens.extend(packages.opens.iter().cloned());
+    for (name, vars) in &packages.directives {
+        index
+            .custom_directives
+            .entry(name.clone())
+            .or_insert_with(|| Some(vars.clone()));
+    }
+    index.package_directives = (packages.unread_directives.iter())
+        .filter(|name| !index.custom_directives.contains_key(*name))
+        .cloned()
+        .collect();
     index
 }
 
@@ -1721,7 +1783,9 @@ pub fn view_calls(db: &dyn Db, ws: Workspace, file: SourceFile) -> Vec<ViewCall>
                 };
                 if !is_test_case {
                     if mail_variables(&ctx, &class, &mut call.vars).is_none() {
-                        // `->markdown()` on something that's known and isn't a mail
+                        // `->view()` on something else, that could do anything with the name
+                        call.open = Some(OpenReason::SourceNotUnderstood);
+                        push_call(&mut out, call);
                         continue;
                     }
                     message_variable(&ctx, &mut call.vars);
@@ -1821,10 +1885,8 @@ pub fn view_data(db: &dyn Db, ws: Workspace, file: SourceFile) -> ViewData {
         return ViewData::opened(OpenReason::CustomDirective);
     }
     let sources = index.sources.get(&name).map_or(&[][..], |s| s.as_slice());
-    let by_packages = index
-        .package_calls
-        .get(&name)
-        .map_or(&[][..], |c| c.as_slice());
+    let packages = package_views(db, ws);
+    let by_packages = packages.calls.get(&name).map_or(&[][..], |c| c.as_slice());
     let mut merged: BTreeMap<SmolStr, (Vec<Ty>, usize, bool)> = BTreeMap::new();
     let mut calls = 0usize;
     let from_project = sources
@@ -1852,6 +1914,11 @@ pub fn view_data(db: &dyn Db, ws: Workspace, file: SourceFile) -> ViewData {
     if calls == 0 {
         return ViewData::opened(OpenReason::NoSource);
     }
+    let shared = packages
+        .shared
+        .iter()
+        .map(|name| (name.clone(), (vec![Ty::untyped()], 0, true)));
+    merged.extend(shared);
     let vars = merged
         .into_iter()
         .map(|(var, (types, count, optional))| {

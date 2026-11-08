@@ -181,7 +181,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             && !template.variable_variables
             && self.dynamic_vars_fn != Some(self.fns.len())
             // a component's, what Laravel's factory shares with all templates, and its own
-            && !matches!(name, "this" | "errors" | "slot" | "app")
+            && !matches!(name, "this" | "errors" | "slot" | "app" | "component")
             && !name.starts_with("__")
     }
 
