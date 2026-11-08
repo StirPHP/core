@@ -1,7 +1,7 @@
 //! Hover: declarations and expression types.
 
 use stir_checker::model_api;
-use stir_checker::{Ctx, Def, MemberKind, typed_file};
+use stir_checker::{Ctx, Def, LocalKind, MemberKind, typed_file};
 use stir_db::{Db, SourceFile, Workspace};
 use stir_hir::{ClassKind, Visibility, file_items};
 use stir_syntax::{TextRange, TextSize};
@@ -84,6 +84,22 @@ fn with_notes(
     out
 }
 
+/// What a variable a template gets without declaring it is.
+fn implicit_note(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "loop" => "The loop around this point, kept by `@foreach` and `@forelse`.",
+        "message" => "The first validation error of the field, in `@error`.",
+        "value" => "What's stored under the key, in `@session` and `@context`.",
+        "errors" => "The validation errors, shared with every template.",
+        "slot" => "What's between the tags of this component.",
+        "attributes" => "The attributes of this component that aren't among its `@props`.",
+        "component" => "The component being rendered.",
+        "exception" => "The exception this error page is for.",
+        "__env" => "The view factory rendering this template.",
+        _ => return None,
+    })
+}
+
 /// A local variable: `int $x`.
 pub fn local_label(name: &str, ty: &Ty) -> String {
     let name = name.trim_start_matches('$');
@@ -116,13 +132,31 @@ pub fn describe(
     match def {
         Def::Local { decl } => {
             let typed = typed_file(db, ws, file);
-            let (declared, _) = typed.locals.get(decl)?.clone();
-            let name = text_at(db, file, *decl);
+            let (declared, kind) = typed.locals.get(decl)?.clone();
+            let name = typed
+                .local_names
+                .get(decl)
+                .map_or_else(|| text_at(db, file, *decl), |n| n.to_string());
             let ty = narrowed
                 .filter(|t| !t.is_error())
                 .map(|t| stir_checker::widen_literals(&t))
                 .unwrap_or(declared);
-            Some(render::code(&local_label(&name, &ty)))
+            let bare = name.trim_start_matches('$');
+            if ty.is_untyped() && kind == LocalKind::Open {
+                return Some(format!(
+                    "{}\n\nNothing in this template declares it, so it's whatever is given to \
+                     the template: that isn't known here. A `/** @var Type ${bare} */` in a \
+                     `@php` block can say what it is.",
+                    render::code(&format!("${bare}"))
+                ));
+            }
+            let code = render::code(&local_label(&name, &ty));
+            Some(
+                match implicit_note(bare).filter(|_| kind == LocalKind::Implicit) {
+                    Some(note) => format!("{code}\n\n{note}"),
+                    None => code,
+                },
+            )
         }
         Def::Function(loc) => {
             let f = ctx.function_def(*loc);

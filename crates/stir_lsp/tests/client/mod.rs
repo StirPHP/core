@@ -175,6 +175,21 @@ impl Client {
         }
     }
 
+    /// The error a request is answered with, if it is.
+    pub async fn send_request_for_error(&mut self, method: &str, params: Value) -> Option<Value> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.send(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
+            .await;
+        loop {
+            let msg = self.next().await;
+            if msg.get("id") == Some(&json!(id)) && msg.get("method").is_none() {
+                return msg.get("error").cloned();
+            }
+            self.backlog.push(msg);
+        }
+    }
+
     /// The next message with this method, from what came in meanwhile first.
     pub async fn message(&mut self, method: &str) -> Value {
         if let Some(i) = self.backlog.iter().position(|m| m["method"] == method) {

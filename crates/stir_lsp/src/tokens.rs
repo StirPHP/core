@@ -80,7 +80,9 @@ fn lexical(kind: SyntaxKind, parent: Option<SyntaxKind>) -> Option<(TokenType, u
         return Some((TokenType::Keyword, 0));
     }
     Some(match kind {
-        COMMENT => (TokenType::Comment, 0),
+        BLADE_DIRECTIVE_NAME => (TokenType::Keyword, 0),
+        BLADE_RAW_ARGS => (TokenType::String, 0),
+        COMMENT | BLADE_COMMENT => (TokenType::Comment, 0),
         DOC_COMMENT => (TokenType::Comment, modifier::DOCUMENTATION),
         INT_NUMBER | FLOAT_NUMBER => (TokenType::Number, 0),
         STRING_SINGLE | STRING_DOUBLE | DQUOTE | BACKTICK | STRING_CONTENT | HEREDOC_START
@@ -221,6 +223,8 @@ pub fn semantic_tokens(db: &dyn Db, ws: Workspace, file: SourceFile) -> Vec<Toke
                 Some((TokenType::Type, modifier::DEFAULT_LIBRARY))
             }
             (VARIABLE, None) => Some((TokenType::Variable, 0)),
+            // `@unless`, which is the `!` of what it compiles to
+            (BANG, _) if token.text().starts_with('@') => Some((TokenType::Keyword, 0)),
             (k, _) => lexical(k, parent.as_ref().map(|p| p.kind())),
         };
         if let Some((ty, modifiers)) = class {

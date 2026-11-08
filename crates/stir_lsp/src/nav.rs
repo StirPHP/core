@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use smol_str::SmolStr;
-use stir_checker::{Def, MemberKind, typed_file};
+use stir_checker::{Def, LocalKind, MemberKind, typed_file};
 use stir_db::{Db, FileOrigin, SourceFile, Workspace};
 use stir_hir::name::{Fqn, UseKind};
 use stir_hir::{ClassDef, ItemLoc, NodePtr, file_items};
@@ -147,6 +147,10 @@ fn type_refs(
             use_refs(db, ws, &node, &mut out);
             continue;
         }
+        if node.kind() == BLADE_DIRECTIVE {
+            blade_use_ref(db, ws, &node, &mut out);
+            continue;
+        }
         if node.kind() != NAME_REF {
             continue;
         }
@@ -166,6 +170,38 @@ fn type_refs(
         }
     }
     out
+}
+
+/// The class in `@use('App\\Post', 'Alias')`. It's only text in the tree, but it's a name for
+/// going to and for renaming, so what's found here is its range in that text.
+fn blade_use_ref(db: &dyn Db, ws: Workspace, node: &SyntaxNode, out: &mut Vec<(TextRange, Def)>) {
+    let Some(args) = node
+        .children_with_tokens()
+        .filter_map(|e| e.into_token())
+        .find(|t| t.kind() == BLADE_RAW_ARGS)
+    else {
+        return;
+    };
+    let text = args.text();
+    let start = text
+        .find(|c: char| !matches!(c, '(' | ' ' | '\'' | '"' | '\\'))
+        .unwrap_or(text.len());
+    let rest = &text[start..];
+    let len = rest
+        .find([')', ' ', '\'', '"', ','])
+        .unwrap_or(rest.len());
+    let name = &rest[..len];
+    if name.contains('{') || name == "function" || name == "const" {
+        return;
+    }
+    let key = SmolStr::new(name.to_ascii_lowercase());
+    if stir_hir::def_index(db, ws).classes.contains_key(&key) {
+        let range = TextRange::at(
+            args.text_range().start() + TextSize::from(start as u32),
+            TextSize::of(name),
+        );
+        out.push((range, Def::Class(key)));
+    }
 }
 
 /// What the names of a `use` declaration import: classes, functions and constants, in groups too.
@@ -373,6 +409,62 @@ pub fn references(
         }
     }
     out
+}
+
+/// Why the variable `def` can't be renamed by what's in this file alone, if it's in a template:
+/// its name is also a key in what's passed to the template, or to the templates this one includes,
+/// which get all of its variables.
+pub fn why_not_rename_in_template(
+    db: &dyn Db,
+    ws: Workspace,
+    file: SourceFile,
+    def: &Def,
+) -> Option<&'static str> {
+    if !stir_syntax::is_blade_path(file.path(db)) {
+        return None;
+    }
+    let Def::Local { decl } = def else {
+        return None;
+    };
+    let (_, kind) = typed_file(db, ws, file).locals.get(decl)?;
+    if matches!(kind, LocalKind::Open | LocalKind::Implicit) {
+        return Some(
+            "this variable is given to the template from outside, so its name isn't this file's to change",
+        );
+    }
+    let root = stir_db::parse(db, file).syntax();
+    let local_to_a_function = root
+        .covering_element(*decl)
+        .into_token()
+        .and_then(|t| t.parent())
+        .and_then(|n| enclosing_function(&n))
+        .is_some();
+    let passes_variables_on = || {
+        root.descendants()
+            .filter(|n| n.kind() == BLADE_DIRECTIVE)
+            .filter_map(|n| {
+                n.children_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .find(|t| t.kind() == BLADE_DIRECTIVE_NAME)
+            })
+            .any(|t| {
+                matches!(
+                    t.text()
+                        .trim_start_matches('@')
+                        .to_ascii_lowercase()
+                        .as_str(),
+                    "include"
+                        | "includeif"
+                        | "includewhen"
+                        | "includeunless"
+                        | "includefirst"
+                        | "extends"
+                        | "extendsfirst"
+                )
+            })
+    };
+    (!local_to_a_function && passes_variables_on())
+        .then_some("the templates this one includes get this variable by its name")
 }
 
 /// The innermost function-like node around `node`.

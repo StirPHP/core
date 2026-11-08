@@ -93,7 +93,16 @@ pub fn capabilities(utf8: bool) -> ServerCapabilities {
             work_done_progress_options: Default::default(),
         })),
         completion_provider: Some(CompletionOptions {
-            trigger_characters: Some(vec![">".into(), ":".into(), "$".into(), "\\".into()]),
+            // `@` for a directive, and the quotes for the template in `@include('...')`
+            trigger_characters: Some(vec![
+                ">".into(),
+                ":".into(),
+                "$".into(),
+                "\\".into(),
+                "@".into(),
+                "'".into(),
+                "\"".into(),
+            ]),
             ..Default::default()
         }),
         signature_help_provider: Some(SignatureHelpOptions {
@@ -245,6 +254,7 @@ fn completion_kind(kind: complete::ItemKind) -> CompletionItemKind {
         K::Interface => CompletionItemKind::INTERFACE,
         K::Enum => CompletionItemKind::ENUM,
         K::Keyword => CompletionItemKind::KEYWORD,
+        K::File => CompletionItemKind::FILE,
     }
 }
 
@@ -571,6 +581,9 @@ pub fn prepare_rename(
             "can't rename a declaration outside the project".into(),
         ));
     }
+    if let Some(why) = nav::why_not_rename_in_template(s.db, s.ws, file, &def) {
+        return Err(Failure::InvalidParams(why.into()));
+    }
     // the name token itself (not `\Qualified\Name`)
     let text = &file.text(s.db)[usize::from(range.start())..usize::from(range.end())];
     let short = text.rsplit('\\').next().unwrap_or(text);
@@ -609,6 +622,9 @@ pub fn rename(
             "can't rename a declaration outside the project".into(),
         ));
     }
+    if let Some(why) = nav::why_not_rename_in_template(s.db, s.ws, file, &def) {
+        return Err(Failure::InvalidParams(why.into()));
+    }
     let mut changes: HashMap<Uri, Vec<TextEdit>> = Default::default();
     for (f, range) in nav::references(s.db, s.ws, file, &def) {
         let text = f.text(s.db);
@@ -638,6 +654,13 @@ pub fn completion(
     params: CompletionParams,
 ) -> Option<CompletionResponse> {
     let pos = params.text_document_position.position;
+    // these only start something in a template: elsewhere, they're the end of a string and an
+    // error suppression
+    let trigger = params.context.as_ref();
+    let trigger = trigger.and_then(|c| c.trigger_character.as_deref());
+    if matches!(trigger, Some("@" | "'" | "\"")) && !stir_syntax::is_blade_path(file.path(s.db)) {
+        return None;
+    }
     let c = complete::complete(s.db, s.ws, file, map.offset(pos));
     let range = map.range(c.replace);
     let items = c
@@ -683,6 +706,9 @@ pub fn formatting(
     params: DocumentFormattingParams,
     indent: Option<stir_neon::phpstan::FormatIndent>,
 ) -> Option<Vec<TextEdit>> {
+    if !stir_fmt::formats_path(file.path(s.db)) {
+        return Some(Vec::new());
+    }
     let options = format_options(indent, &params.options);
     // a file that doesn't parse isn't touched: it's probably being typed
     let edits = stir_fmt::edits(file.text(s.db), &options).ok()?;
@@ -696,6 +722,9 @@ pub fn range_formatting(
     params: DocumentRangeFormattingParams,
     indent: Option<stir_neon::phpstan::FormatIndent>,
 ) -> Option<Vec<TextEdit>> {
+    if !stir_fmt::formats_path(file.path(s.db)) {
+        return Some(Vec::new());
+    }
     let options = format_options(indent, &params.options);
     let edits = stir_fmt::range_edits(file.text(s.db), map.text_range(params.range), &options);
     Some(text_edits(map, edits.ok()?))

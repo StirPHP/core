@@ -28,6 +28,8 @@ pub enum ItemKind {
     Interface,
     Enum,
     Keyword,
+    /// A template, by its name.
+    File,
 }
 
 #[derive(Debug, Clone)]
@@ -312,7 +314,15 @@ fn in_text(root: &SyntaxNode, offset: TextSize) -> bool {
     root.token_at_offset(offset).left_biased().is_some_and(|t| {
         matches!(
             t.kind(),
-            COMMENT | DOC_COMMENT | STRING_SINGLE | STRING_DOUBLE | STRING_CONTENT | INLINE_HTML
+            COMMENT
+                | DOC_COMMENT
+                | STRING_SINGLE
+                | STRING_DOUBLE
+                | STRING_CONTENT
+                | INLINE_HTML
+                | BLADE_COMMENT
+                | BLADE_RAW_ARGS
+                | BLADE_IGNORED_ARGS
         ) && t.text_range().end() > offset
     })
 }
@@ -334,6 +344,11 @@ pub fn complete(db: &dyn Db, ws: Workspace, file: SourceFile, offset: TextSize) 
         ..Completions::default()
     };
     let before = &text[..replace_start];
+    if stir_syntax::is_blade_path(file.path(db))
+        && let Some(found) = template_items(db, ws, file, offset, word_start, prefix)
+    {
+        return found;
+    }
     let ctx = Ctx::new(db, ws);
     let enclosing = enclosing_class(db, file, offset);
     if before.ends_with("->") {
@@ -378,6 +393,15 @@ pub fn complete(db: &dyn Db, ws: Workspace, file: SourceFile, offset: TextSize) 
     if in_text(&root, offset) {
         return out;
     }
+    // right after `}}` or some HTML, a template is in its HTML
+    if stir_syntax::is_blade_path(file.path(db))
+        && root
+            .token_at_offset(offset)
+            .left_biased()
+            .is_none_or(|t| matches!(t.kind(), CLOSE_TAG | INLINE_HTML))
+    {
+        return out;
+    }
     // what's written of a name so far, and the place it's in
     let name_start = text[..word_start]
         .char_indices()
@@ -393,6 +417,9 @@ pub fn complete(db: &dyn Db, ws: Workspace, file: SourceFile, offset: TextSize) 
     };
     if matches!(place, Place::Anywhere) {
         local_items(db, ws, file, offset, &mut out.items);
+        if stir_syntax::is_blade_path(file.path(db)) {
+            implicit_items(&root, offset, &mut out.items);
+        }
     }
     if dollar {
         return out;
@@ -420,6 +447,121 @@ pub fn complete(db: &dyn Db, ws: Workspace, file: SourceFile, offset: TextSize) 
         out.replace = TextRange::new((name_start as u32).into(), offset);
     }
     out
+}
+
+/// What Blade has to offer where the cursor is: a directive after an `@` in the HTML, and the name
+/// of a template in a string of a directive that takes one.
+fn template_items(
+    db: &dyn Db,
+    ws: Workspace,
+    file: SourceFile,
+    offset: TextSize,
+    word_start: usize,
+    prefix: &str,
+) -> Option<Completions> {
+    let root = stir_db::parse(db, file).syntax();
+    let text = file.text(db);
+    if let Some((inner, written)) = stir_checker::script::links::view_string_at(&root, offset) {
+        let query = written.to_ascii_lowercase();
+        let mut names: Vec<&String> = stir_checker::script::links::view_names(db, ws)
+            .iter()
+            .filter(|n| n.to_ascii_lowercase().contains(query.as_str()))
+            .collect();
+        names.sort();
+        let items = names
+            .into_iter()
+            .map(|n| Item::new(n.clone(), ItemKind::File, n.clone()))
+            .collect();
+        return Some(Completions {
+            items,
+            replace: inner,
+            incomplete: false,
+        });
+    }
+    if !text[..word_start].ends_with('@') {
+        return None;
+    }
+    // in PHP, that's `@` keeping quiet about an error
+    let at = TextSize::from(word_start as u32 - 1);
+    let token = root.token_at_offset(at).right_biased()?;
+    if !(token.kind() == INLINE_HTML || token.text().starts_with('@')) {
+        return None;
+    }
+    let query = prefix.to_ascii_lowercase();
+    let mut names: Vec<&'static str> = stir_syntax::blade_directive_names()
+        .filter(|n| n.starts_with(query.as_str()))
+        .collect();
+    names.sort();
+    let items = names
+        .into_iter()
+        .map(|name| {
+            let name = spelled_directive(name);
+            let label = format!("@{name}");
+            Item::new(label.clone(), ItemKind::Keyword, label)
+        })
+        .collect();
+    Some(Completions {
+        items,
+        replace: TextRange::new(at, offset),
+        incomplete: false,
+    })
+}
+
+/// A directive as Laravel's documentation writes it: its name is known in lower case.
+fn spelled_directive(lower: &str) -> &str {
+    const SPELLED: &[&str] = &[
+        "componentFirst",
+        "elsePush",
+        "elsePushIf",
+        "endComponentClass",
+        "endComponentFirst",
+        "endPrependOnce",
+        "endPushIf",
+        "endPushOnce",
+        "extendsFirst",
+        "hasSection",
+        "hasStack",
+        "includeFirst",
+        "includeIf",
+        "includeIsolated",
+        "includeUnless",
+        "includeWhen",
+        "prependOnce",
+        "pushIf",
+        "pushOnce",
+        "sectionMissing",
+        "viteReactRefresh",
+    ];
+    SPELLED
+        .iter()
+        .find(|s| s.eq_ignore_ascii_case(lower))
+        .copied()
+        .unwrap_or(lower)
+}
+
+/// The variables a template can count on here, whether it's used them yet or not.
+fn implicit_items(root: &SyntaxNode, offset: TextSize, out: &mut Vec<Item>) {
+    let mut add = |name: &str| {
+        let label = format!("${name}");
+        if !out.iter().any(|i| i.label == label) {
+            out.push(Item::new(label.clone(), ItemKind::Local, label));
+        }
+    };
+    add("errors");
+    let in_loop = root
+        .token_at_offset(offset)
+        .left_biased()
+        .into_iter()
+        .flat_map(|t| t.parent_ancestors())
+        .filter(|n| n.kind() == FOREACH_STMT)
+        .any(|n| {
+            n.children_with_tokens().any(|e| {
+                e.kind() == FOREACH_KW && e.as_token().is_some_and(|t| t.text().starts_with('@'))
+            })
+        });
+    if in_loop {
+        add("loop");
+    }
 }
 
 /// The lowercase FQN of the class whose body contains `offset`.
@@ -537,9 +679,20 @@ fn local_items(
     let mut seen = FxHashSet::default();
     for (range, (ty, kind)) in locals {
         let Some(token) = root.covering_element(*range).into_token() else {
+            // what `@props` declares is a whole string
+            if let Some(name) = typed.local_names.get(range) {
+                let label = format!("${name}");
+                if seen.insert(name.to_string()) {
+                    out.push(Item::new(label.clone(), ItemKind::Local, label));
+                }
+            }
             continue;
         };
         let Some(node) = token.parent() else { continue };
+        // the `$loop` of a `@foreach` is only there inside it
+        if token.kind() == FOREACH_KW && !node.text_range().contains(offset) {
+            continue;
+        }
         let decl_fn = nav::enclosing_function(&node);
         if decl_fn.as_ref().map(|n| n.text_range()) != here_fn.as_ref().map(|n| n.text_range())
             && !decl_fn
@@ -553,7 +706,10 @@ fn local_items(
         {
             continue;
         }
-        let name = token.text().trim_start_matches('$').to_owned();
+        let name = typed.local_names.get(range).map_or_else(
+            || token.text().trim_start_matches('$').to_owned(),
+            |n| n.to_string(),
+        );
         if !seen.insert(name.clone()) {
             continue;
         }
