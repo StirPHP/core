@@ -370,6 +370,12 @@ async fn templates_of_a_project() {
             None => {
                 closed += 1;
                 println!("closed {shown}: {} variables", data.vars.len());
+                if std::env::var_os("VIEWS_TYPES").is_some() {
+                    for (name, var) in &data.vars {
+                        let optional = if var.optional { "optional " } else { "" };
+                        println!("    ${name}: {optional}{}", var.ty);
+                    }
+                }
             }
             Some(why) => {
                 open += 1;
@@ -430,7 +436,6 @@ async fn templates_of_a_project() {
     println!("after an edit that changes nothing: {again:?}");
     // a variable's type changes
     let changed = original.replacen("return view(", "$given = 1; return view(", 1);
-    let changed = changed.replacen("view('", "view('", 1);
     let _ = file.set_text(&mut db).to(changed);
     let (again, _) = check_all(&db);
     println!("after an edit to the body: {again:?}");

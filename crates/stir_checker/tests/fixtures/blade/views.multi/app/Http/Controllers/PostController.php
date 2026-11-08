@@ -69,6 +69,9 @@ class PostController
             $view = view('open.kept', ['a' => $post]);
             return $view;
         }
+        if ($which === 'f') {
+            return view('admin::panel', ['a' => $post]);
+        }
         return view('open.keyed', [$which => $post]);
     }
 }

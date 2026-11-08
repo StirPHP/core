@@ -305,7 +305,7 @@ fn read_targets(expr: &SyntaxNode, out: &mut Vec<Target>, consumed: &mut Vec<Tex
                     // a package's, or a namespace the project adds for its own: going by the rest
                     // of the name, as there's no telling where that one is
                     Some((_, rest)) => {
-                        out.push(Target::Pattern(format!("*{}", normal_view_name(rest))));
+                        out.push(Target::Pattern(format!("*.{}", normal_view_name(rest))));
                     }
                     None => out.push(Target::Name(normal_view_name(&name))),
                 }
@@ -817,9 +817,10 @@ impl Reader<'_> {
             }
             "share" => {
                 self.add_opens(vec![Target::Pattern("*".into())], OpenReason::Shared);
-                match args_by_param(call, &["key", "value"]).map(|mut a| a.remove(0)) {
-                    Some(Some(key)) => read_shared(&key, &mut self.out.shared),
-                    _ => {}
+                if let Some(Some(key)) =
+                    args_by_param(call, &["key", "value"]).map(|mut a| a.remove(0))
+                {
+                    read_shared(&key, &mut self.out.shared);
                 }
             }
             "composer" | "creator" => {
@@ -986,10 +987,12 @@ impl Reader<'_> {
             self.directive_declared(call, false);
             return;
         }
-        if looks_like_factory(&spelled) {
-            if lower != "composer" && lower != "creator" && self.factory_method(call, &method) {
-                return;
-            }
+        if looks_like_factory(&spelled)
+            && lower != "composer"
+            && lower != "creator"
+            && self.factory_method(call, &method)
+        {
+            return;
         }
         match lower.as_str() {
             // `->creator()` is a likely name for a relation: with two arguments it's this
@@ -1423,6 +1426,10 @@ pub fn view_index(db: &dyn Db, ws: Workspace) -> ViewIndex {
         if file.origin(db) != FileOrigin::Source {
             continue;
         }
+        // the templates, compiled: what they do is known from the templates themselves
+        if (file.path(db).to_string_lossy().replace('\\', "/")).contains("/storage/framework/") {
+            continue;
+        }
         let sites = view_sites(db, ws, file);
         index.opens.extend(sites.opens.iter().cloned());
         index
@@ -1555,9 +1562,10 @@ pub(crate) fn given_type(ty: &Ty) -> Ty {
         TyKind::SelfType { class, .. } => class.clone(),
         _ => ty,
     };
-    let mut usable = !matches!(ty.kind(), TyKind::Error | TyKind::Mixed);
+    let mut usable = !matches!(ty.kind(), TyKind::Error | TyKind::Mixed)
+        && !ty.members().iter().any(is_unreliable);
     ty.walk(&mut |t| {
-        if matches!(t.kind(), TyKind::Param { .. } | TyKind::SelfType { .. }) || is_unreliable(t) {
+        if matches!(t.kind(), TyKind::Param { .. } | TyKind::SelfType { .. }) {
             usable = false;
         }
         usable
@@ -1567,7 +1575,8 @@ pub(crate) fn given_type(ty: &Ty) -> Ty {
 
 /// What's known to come out wrong of relations and `optional()`, for which reading anything of it
 /// in a template would be a false alarm: Eloquent's `Model` where a relation's class was meant, and
-/// `Optional`, which forwards everything.
+/// `Optional`, which forwards everything. A variable that's one of these isn't typed at all, and
+/// what's read through it elsewhere, out of a collection of them, is taken on trust.
 pub(crate) fn is_unreliable(ty: &Ty) -> bool {
     matches!(ty.kind(), TyKind::Class { name, .. } if
         name.eq_ignore_ascii_case("Illuminate\\Database\\Eloquent\\Model")
@@ -1893,7 +1902,7 @@ pub fn view_data(db: &dyn Db, ws: Workspace, file: SourceFile) -> ViewData {
         .iter()
         .flat_map(|&source| view_calls(db, ws, source));
     for call in from_project.chain(by_packages) {
-        if !call.names.iter().any(|n| *n == name) {
+        if !call.names.contains(&name) {
             continue;
         }
         if let Some(why) = call.open {

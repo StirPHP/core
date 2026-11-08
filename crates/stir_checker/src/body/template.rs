@@ -79,6 +79,15 @@ impl Template {
                 }
             }
         }
+        let (db, ws) = (checker.ctx.db, checker.ctx.ws);
+        let view = crate::views::view_data(db, ws, checker.file).clone();
+        // which only matters where something's made of what's defined here
+        let directive_variables =
+            if view.is_closed() || view.open == Some(crate::views::OpenReason::ErrorPage) {
+                crate::views::directive_variables(db, ws)
+            } else {
+                FxHashMap::default()
+            };
         Some(Template {
             is_component,
             is_error_page: path.contains("/errors/"),
@@ -86,10 +95,10 @@ impl Template {
             flats: Vec::new(),
             custom_blocks,
             last_doc: None,
-            view: crate::views::view_data(checker.ctx.db, checker.ctx.ws, checker.file).clone(),
+            view,
             variable_variables: root.descendants_with_tokens().any(|e| e.kind() == DOLLAR),
             extends: Vec::new(),
-            directive_variables: crate::views::directive_variables(checker.ctx.db, checker.ctx.ws),
+            directive_variables,
         })
     }
 }

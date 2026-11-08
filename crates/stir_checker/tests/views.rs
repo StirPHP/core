@@ -257,3 +257,66 @@ fn templates_that_include_each_other_are_open_whichever_is_checked_first() {
         }
     }
 }
+
+#[test]
+fn includes_that_fan_out_stay_small() {
+    // each includes the next two: 2^40 ways through, with a type for each place
+    const DEPTH: usize = 40;
+    let mut sources: Vec<(String, String)> = vec![(
+        "app/Show.php".to_owned(),
+        "<?php\nnamespace App;\nclass Show { public function f() { return view('t0', ['from_show' => 1]); } }\n"
+            .to_owned(),
+    )];
+    for i in 0..DEPTH {
+        let text = format!(
+            "@php $v{i} = {i}; $both = {i}; @endphp\n@include('t{}')\n@include('t{}', ['extra{i}' => 'a'])\n",
+            i + 1,
+            i + 2,
+        );
+        sources.push((format!("resources/views/t{i}.blade.php"), text));
+    }
+    for i in DEPTH..DEPTH + 2 {
+        sources.push((
+            format!("resources/views/t{i}.blade.php"),
+            "{{ $both }}\n".to_owned(),
+        ));
+    }
+    let refs: Vec<(&str, &str)> = sources
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    let p = Project::new(&refs);
+    let start = std::time::Instant::now();
+    p.check_all();
+    assert!(start.elapsed().as_secs() < 30, "{:?}", start.elapsed());
+    let last = view_data(&p.db, p.ws, p.files[DEPTH + 2]);
+    assert_eq!(last.open, None);
+    assert!(last.vars.len() < 100, "{}", last.vars.len());
+    assert_eq!(last.vars["both"].ty.to_string(), "int");
+}
+
+#[test]
+fn past_a_limit_a_union_of_what_is_given_says_nothing() {
+    let mut sources: Vec<(String, String)> = Vec::new();
+    for i in 0..40 {
+        sources.push((
+            format!("app/C{i}.php"),
+            format!(
+                "<?php\nnamespace App;\nclass C{i} {{ public function f() {{ return view('many', ['given' => $this]); }} }}\n"
+            ),
+        ));
+    }
+    sources.push((
+        "resources/views/many.blade.php".to_owned(),
+        "{{ $given->anything() }}\n{{ $not_given }}\n".to_owned(),
+    ));
+    let refs: Vec<(&str, &str)> = sources
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    let p = Project::new(&refs);
+    p.check_all();
+    let many = view_data(&p.db, p.ws, p.files[40]);
+    assert!(many.vars["given"].ty.is_untyped(), "{many:?}");
+    assert_eq!(p.codes(40), ["variable.undefined"]);
+}
