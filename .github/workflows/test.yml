@@ -21,7 +21,43 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Test
         run: cargo test --workspace --locked
-      - name: The WebAssembly build
+
+  # The language server for the browser (`editors/web`), built as the docs use it and spoken to in Node
+  web:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Fetch the PHP stubs
+        run: git submodule update --init --depth 1 crates/stir_stubs/phpstorm-stubs
+      - name: Rust toolchain
         run: |
+          rustup show active-toolchain || rustup toolchain install
           rustup target add wasm32-unknown-unknown
-          cargo check --locked -p stir_wasm -p stir_composer --target wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.15.0,just
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Build and test
+        run: just web
+      - name: Sizes
+        working-directory: editors/web/pkg
+        run: |
+          wasm=stir_wasm_bg.wasm
+          echo "raw $(stat -c %s $wasm), gzip $(gzip -9c $wasm | wc -c), brotli $( (brotli -q 11 -c $wasm || true) | wc -c)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stirphp-web
+          path: |
+            editors/web/*.js
+            editors/web/*.d.ts
+            editors/web/package.json
+            editors/web/README.md
+            editors/web/pkg/stir_wasm.js
+            editors/web/pkg/stir_wasm.d.ts
+            editors/web/pkg/stir_wasm_bg.wasm
+          if-no-files-found: error

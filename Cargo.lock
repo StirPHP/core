@@ -1662,14 +1662,8 @@ dependencies = [
 name = "stir_wasm"
 version = "0.1.21"
 dependencies = [
- "salsa",
- "serde",
- "serde_json",
- "stir_checker",
- "stir_db",
+ "js-sys",
  "stir_lsp",
- "stir_stubs",
- "stir_syntax",
  "wasm-bindgen",
 ]
 

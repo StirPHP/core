@@ -1,0 +1,33 @@
+{
+  "name": "stirphp-web",
+  "description": "StirPHP's language server for plain PHP in the browser: WebAssembly in a Web Worker, speaking the Language Server Protocol.",
+  "version": "0.1.21",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./worker.js": "./worker.js",
+    "./serve.js": "./serve.js"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "serve.js",
+    "worker.js",
+    "pkg/stir_wasm.js",
+    "pkg/stir_wasm.d.ts",
+    "pkg/stir_wasm_bg.wasm"
+  ],
+  "sideEffects": [
+    "./worker.js"
+  ],
+  "scripts": {
+    "test": "node --test 'test/*.test.mjs'"
+  }
+}

@@ -34,12 +34,18 @@ impl Links for Virtual {
         let path = file.path(db);
         let s = path.to_string_lossy();
         if let Some(real) = s.strip_prefix(stir_db::OVERLAY_PREFIX) {
-            return Uri::from_file_path(real);
+            return file_uri(Path::new(real));
         }
         if let Some(rest) = s.strip_prefix("stubs://") {
-            return format!("{STUB_SCHEME}:///stubs/{rest}").parse().ok();
+            return format!("{STUB_SCHEME}:///stubs/{}", encode(rest))
+                .parse()
+                .ok();
         }
-        Uri::from_file_path(path)
+        file_uri(path)
+    }
+
+    fn path_uri(&self, path: &Path) -> Option<Uri> {
+        file_uri(path)
     }
 
     fn path(&self, uri: &Uri) -> Option<PathBuf> {
@@ -53,6 +59,30 @@ impl Links for Virtual {
         }
         Some(stir_vfs::normalize(&uri.to_file_path()?))
     }
+}
+
+/// The `file://` URI of `path`, which must start at the root. Not `Uri::from_file_path`: with no
+/// disk (WebAssembly), no path counts as absolute to the standard library, and it would look for
+/// the file.
+fn file_uri(path: &Path) -> Option<Uri> {
+    let text = path.to_str()?;
+    if !text.starts_with('/') {
+        return None;
+    }
+    format!("file://{}", encode(text)).parse().ok()
+}
+
+/// `text` percent-encoded as `Uri::from_file_path` does it, for the same URIs as on a disk.
+fn encode(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for b in text.bytes() {
+        if b.is_ascii_alphanumeric() || b"/-._~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 fn percent_decode(text: &str) -> String {

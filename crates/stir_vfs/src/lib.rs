@@ -287,7 +287,7 @@ impl Fs for Memory {
 
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         let path = normalize(path);
-        if !path.is_absolute() || !self.exists(&path) {
+        if !path.has_root() || !self.exists(&path) {
             return Err(not_found(&path));
         }
         Ok(path)

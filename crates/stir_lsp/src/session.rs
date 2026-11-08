@@ -830,7 +830,7 @@ fn files_of(files: &Value) -> Vec<(PathBuf, Option<String>)> {
             } else {
                 stir_vfs::normalize(Path::new(key))
             };
-            path.is_absolute()
+            path.has_root()
                 .then(|| (path, text.as_str().map(str::to_owned)))
         })
         .collect()
