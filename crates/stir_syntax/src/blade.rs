@@ -258,6 +258,31 @@ pub fn directive_names() -> impl Iterator<Item = &'static str> {
     DIRECTIVES.iter().map(|d| d.name)
 }
 
+/// Is `name`, without the `@`, one of Blade's own directives?
+pub fn is_directive(name: &str) -> bool {
+    directive(name).is_some()
+}
+
+/// What a directive that compiles to part of an `if` does, for those that stay flat in the tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlatPart {
+    Opens,
+    Else,
+    Closes,
+}
+
+/// The part of a flat condition the directive `name` is, without the `@`.
+pub fn flat_part(name: &str) -> Option<FlatPart> {
+    let d = directive(name)?;
+    match d.condition {
+        Condition::Opens | Condition::OpensUntilEndif => Some(FlatPart::Opens),
+        Condition::Closes => Some(FlatPart::Closes),
+        Condition::None if d.kind == ENDIF_KW => Some(FlatPart::Closes),
+        Condition::None if d.name.starts_with("else") => Some(FlatPart::Else),
+        Condition::None => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

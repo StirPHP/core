@@ -29,6 +29,8 @@ pub struct TypeParamDef {
     pub name: SmolStr,
     pub variance: Variance,
     pub bound: Option<TypeRef>,
+    /// `@template T of A = B`: what it is when nothing says.
+    pub default: Option<TypeRef>,
     pub range: TextRange,
 }
 
@@ -213,6 +215,7 @@ pub fn magic_members(
                         name: t.name.name.clone(),
                         variance: Variance::Invariant,
                         bound: t.bound.as_ref().map(|b| dcx.lower(b)),
+                        default: None,
                         range: t.range,
                     });
                 }
@@ -628,6 +631,14 @@ impl Lowerer {
                 self.use_decl(node);
                 self.push_scope(node.text_range().end());
             }
+            BLADE_DIRECTIVE => {
+                if let Some(args) = node.token(BLADE_RAW_ARGS) {
+                    self.blade_use(args.text());
+                    self.push_scope(node.text_range().end());
+                }
+                self.anonymous_classes(node);
+                return;
+            }
             DECLARE_STMT => {
                 for item in node.children_of(DECLARE_ITEM) {
                     if item
@@ -715,6 +726,44 @@ impl Lowerer {
             deprecated,
             range: node.text_range(),
         });
+    }
+
+    /// `@use('App\\Post', 'Alias')`, read the way Blade's `compileUse` reads it: the quotes are
+    /// optional, a `{` means a group, and `function ` or `const ` a kind.
+    fn blade_use(&mut self, args: &str) {
+        let args = args.replace(['(', ')'], "");
+        let args = args.trim_matches([' ', '\'', '"']);
+        let quotes: &[char] = &[' ', '\'', '"'];
+        let (path, alias) = match args.split_once(',') {
+            Some((path, alias)) if !args.contains('{') => {
+                (path.trim_matches(quotes), Some(alias.trim_matches(quotes)))
+            }
+            _ => (args, None),
+        };
+        let (kind, path) = if let Some(rest) = path.strip_prefix("function ") {
+            (UseKind::Function, rest)
+        } else if let Some(rest) = path.strip_prefix("const ") {
+            (UseKind::Const, rest)
+        } else {
+            (UseKind::Class, path)
+        };
+        let path = path.trim().trim_start_matches('\\');
+        if let Some((prefix, group)) = path.split_once('{') {
+            let prefix = prefix.trim_end_matches('\\');
+            for item in group.trim_end_matches('}').split(',') {
+                let (name, alias) = match item.split_once(" as ") {
+                    Some((name, alias)) => (name.trim(), Some(alias.trim())),
+                    None => (item.trim(), None),
+                };
+                if !name.is_empty() {
+                    self.scope
+                        .add_use(kind, &format!("{prefix}\\{name}"), alias);
+                }
+            }
+        } else if !path.is_empty() {
+            self.scope
+                .add_use(kind, path, alias.filter(|a| !a.is_empty()));
+        }
     }
 
     fn use_decl(&mut self, node: &SyntaxNode) {

@@ -6,7 +6,10 @@ mod lexer;
 mod parser;
 mod syntax_kind;
 
-pub use blade::directive_names as blade_directive_names;
+pub use blade::{
+    FlatPart as BladeFlatPart, directive_names as blade_directive_names,
+    flat_part as blade_flat_part, is_directive as is_blade_directive,
+};
 pub use lexer::{LexError, Lexed, Token, lex, lex_blade};
 pub use parser::SyntaxError;
 pub use rowan::{GreenNode, NodeOrToken, TextRange, TextSize, WalkEvent};
@@ -86,6 +89,15 @@ fn dump(node: &SyntaxNode, depth: usize, out: &mut String) {
 /// Parses a whole file.
 pub fn parse(src: &str) -> Parse {
     parse_lexed(src, &lex(src))
+}
+
+/// Parses a whole file, as what its path says it is.
+pub fn parse_path(path: &std::path::Path, src: &str) -> Parse {
+    if is_blade_path(path) {
+        parse_blade(src)
+    } else {
+        parse(src)
+    }
 }
 
 /// Parses a whole Blade template.

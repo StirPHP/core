@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 mod checks;
+mod template;
 
 use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
@@ -31,6 +32,11 @@ pub enum LocalKind {
     Variable,
     /// A `foreach` / `catch` binding.
     Loop,
+    /// In a template, a variable nothing here declares: it comes from whoever renders the
+    /// template, and holds whatever they give it, unless `@var` says.
+    Open,
+    /// In a template, what a directive or Laravel itself provides: `$loop`, `$errors`.
+    Implicit,
 }
 
 impl LocalKind {
@@ -86,6 +92,9 @@ struct FnCx {
     /// Infer the return type from `return` statements instead of checking it.
     infer_ret: bool,
     returns: Vec<Ty>,
+    /// A variable nothing declares isn't an error here: at the top of a template, and in the
+    /// arrow functions there, which see all of its variables.
+    open_vars: bool,
 }
 
 /// Narrowings learned from a condition.
@@ -137,6 +146,10 @@ pub struct Checker<'a, 'db> {
     pub defs: FxHashMap<TextRange, Def>,
     /// Local bindings by declaring-name range: declared type and kind.
     pub locals: FxHashMap<TextRange, (Ty, LocalKind)>,
+    /// The names of the locals whose declaring range doesn't spell them.
+    pub local_names: FxHashMap<TextRange, SmolStr>,
+    /// What's particular to checking a template. `None` for any other file.
+    template: Option<template::Template>,
     /// What went wrong with the project's scripts on this file.
     pub script_failures: Vec<crate::ScriptFailure>,
     /// Hooks that failed on this file, which it doesn't call again.
@@ -177,6 +190,7 @@ fn is_stmt_kind(k: SyntaxKind) -> bool {
             | USE_DECL
             | CONST_DECL
             | HALT_COMPILER_STMT
+            | BLADE_DIRECTIVE
     )
 }
 
@@ -273,6 +287,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             types: FxHashMap::default(),
             defs: FxHashMap::default(),
             locals: FxHashMap::default(),
+            local_names: FxHashMap::default(),
+            template: None,
             script_failures: Vec::new(),
             scripts_off: rustc_hash::FxHashSet::default(),
         }
@@ -568,6 +584,12 @@ impl<'a, 'db> Checker<'a, 'db> {
                 );
             }
             let level = self.mismatch_level(from, to, crate::levels::level_of(code));
+            // what a template is given isn't known, and that's not for it to fix: not as an
+            // argument at any level, or what comes back from a call with it, which may be
+            // either of what the function returns
+            if matches!(level, 7 | 10) && self.template.is_some() {
+                return;
+            }
             self.error(range, code, msg);
             self.tag_level(level);
         }
@@ -755,13 +777,16 @@ impl<'a, 'db> Checker<'a, 'db> {
 
     pub fn check_root(&mut self, root: &SyntaxNode) {
         self.check_declarations();
+        self.template = template::Template::of(self, root);
         self.fns.push(FnCx {
             ret: Ty::void(),
             infer_ret: true,
             returns: Vec::new(),
+            open_vars: self.template.is_some(),
         });
         self.stmt_list(root);
         self.fns.pop();
+        self.forget_unknown_names_without_laravel();
     }
 
     /// Declaration-level rules (types written on signatures).
@@ -798,8 +823,16 @@ impl<'a, 'db> Checker<'a, 'db> {
         let Some(token) = node.doc_comment() else {
             return Vec::new();
         };
+        self.var_tags_of(&token)
+    }
+
+    /// The `@var` tags of a doc comment.
+    fn var_tags_of(&mut self, token: &SyntaxToken) -> Vec<(Option<SmolStr>, Ty)> {
         if !token.text().contains("@var") && !token.text().contains("-var") {
             return Vec::new();
+        }
+        if let Some(template) = &mut self.template {
+            template.last_doc = Some(token.clone());
         }
         let doc = stir_hir::doc::parse(token.text(), token.text_range().start());
         let names: Vec<SmolStr> = self
@@ -808,7 +841,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             .iter()
             .map(|(n, _)| n.clone())
             .collect();
-        let scope = self.scope(node);
+        let scope = self.items.scope_at(token.text_range().start()).clone();
         let aliases = self
             .class
             .as_ref()
@@ -852,6 +885,8 @@ impl<'a, 'db> Checker<'a, 'db> {
                 l.ty = ty.clone();
                 l.declared = ty.clone();
                 l.maybe_undefined = false;
+            } else if self.template.is_some() {
+                self.stated_variable(target, ty.clone());
             } else {
                 self.declare(
                     target,
@@ -919,6 +954,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             // `goto` can land here, whatever came before
             LABEL_STMT => self.dead = false,
             EMPTY_STMT | INLINE_HTML_STMT | USE_DECL | HALT_COMPILER_STMT => {}
+            BLADE_DIRECTIVE => self.blade_directive(node),
             TRY_STMT => self.try_stmt(node),
             GLOBAL_STMT => {
                 for v in node.descendants().filter(|d| d.kind() == VARIABLE_EXPR) {
@@ -938,29 +974,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     }
                 }
             }
-            UNSET_STMT => {
-                self.probing += 1;
-                let targets = exprs_of(node);
-                for e in &targets {
-                    self.expr(e, None);
-                }
-                self.probing -= 1;
-                for e in &targets {
-                    let Some(key) = self.place_key(e) else {
-                        continue;
-                    };
-                    self.forget_properties_of(&key);
-                    if e.kind() == VARIABLE_EXPR {
-                        for frame in &mut self.frames {
-                            frame.remove(key.as_str());
-                        }
-                    } else if e.kind() == INDEX_EXPR
-                        && let Some(base) = exprs_of(e).first().and_then(|b| self.place_key(b))
-                    {
-                        self.forget_properties_of(&base);
-                    }
-                }
-            }
+            UNSET_STMT => self.unset(&exprs_of(node)),
             DECLARE_STMT => {
                 if let Some(b) = node.child(BLOCK) {
                     self.stmt(&b);
@@ -984,11 +998,37 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
+    fn unset(&mut self, targets: &[SyntaxNode]) {
+        self.probing += 1;
+        for e in targets {
+            self.expr(e, None);
+        }
+        self.probing -= 1;
+        for e in targets {
+            let Some(key) = self.place_key(e) else {
+                continue;
+            };
+            self.forget_properties_of(&key);
+            if e.kind() == VARIABLE_EXPR {
+                for frame in &mut self.frames {
+                    frame.remove(key.as_str());
+                }
+            } else if e.kind() == INDEX_EXPR
+                && let Some(base) = exprs_of(e).first().and_then(|b| self.place_key(b))
+            {
+                self.forget_properties_of(&base);
+            }
+        }
+    }
+
     fn block_stmts(&mut self, block: &SyntaxNode) {
         self.run_stmts(block);
     }
 
     fn run_stmts(&mut self, parent: &SyntaxNode) {
+        if self.template.is_some() {
+            return self.run_template_stmts(parent);
+        }
         self.run_list(parent.children().filter(|c| is_stmt_kind(c.kind())));
     }
 
@@ -1146,10 +1186,15 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
         let es = exprs_of(node);
         let tags = std::mem::take(&mut self.pending_var_tags);
+        let blade_loop = self.blade_loop(node);
+        let outer_loop = self.lookup("loop").cloned();
         let bindings = |this: &mut Self| {
             let Some((key_ty, val_ty)) = subject.clone() else {
                 return;
             };
+            if let Some((ty, at)) = &blade_loop {
+                this.declare_implicit("loop", ty.clone(), *at);
+            }
             let targets = &es[1..];
             match targets {
                 [k, v] => {
@@ -1248,6 +1293,9 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
         self.continue_from(exits);
         self.dead |= entry_dead;
+        if blade_loop.is_some() {
+            self.leave_blade_loop(outer_loop);
+        }
     }
 
     /// The step of a `for` runs after each round.
@@ -1743,6 +1791,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             ret: self.ctx.decide_conditionals(&sig.ret),
             infer_ret: false,
             returns: Vec::new(),
+            open_vars: false,
         });
         if let Some(block) = node.child(BLOCK) {
             self.block_stmts(&block);
@@ -2696,6 +2745,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         } else {
             ty
         };
+        let ty = self.assumed_in_template(node, ty);
         self.types.insert(node.text_range(), ty.clone());
         ty
     }
@@ -3019,6 +3069,10 @@ impl<'a, 'db> Checker<'a, 'db> {
             {
                 return l.ty.clone();
             }
+            // what a template is run by, and in Livewire, its component
+            if self.template.is_some() {
+                return Ty::untyped();
+            }
             self.error(
                 node.text_range(),
                 codes::VARIABLE_UNDEFINED,
@@ -3032,6 +3086,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 if l.maybe_undefined
                     && self.probing == 0
                     && self.fns.len() > 1
+                    && !self.open_vars()
                     && self.dynamic_vars_fn != Some(self.fns.len())
                 {
                     self.error(
@@ -3046,6 +3101,9 @@ impl<'a, 'db> Checker<'a, 'db> {
             None => {
                 if is_superglobal(name) {
                     return Ty::untyped();
+                }
+                if self.open_vars() {
+                    return self.open_variable(name, node.text_range());
                 }
                 if self.dynamic_vars_fn == Some(self.fns.len()) {
                     self.declare(name, Ty::untyped(), LocalKind::Variable, node.text_range());
@@ -3281,7 +3339,8 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
         let name = text_of(left);
         let name = name.trim_start_matches('$');
-        if self.lookup(name).is_none_or(|l| l.maybe_undefined) {
+        // what a template is given isn't known, and may well not be given at all
+        if self.lookup(name).is_none_or(|l| l.maybe_undefined) || self.template.is_some() {
             return;
         }
         self.diags.push(
@@ -4092,6 +4151,9 @@ impl<'a, 'db> Checker<'a, 'db> {
             {
                 let map = self.ctx.subst_map(&c, args);
                 for (p, a) in c.params.iter().zip(args) {
+                    if self.ctx.has_default(p.id) {
+                        continue;
+                    }
                     if let Some(b) = stir_types::TypeEnv::param_bound(self.ctx, p.id) {
                         let b = stir_types::subst(&b, &map);
                         if !a.is_error() && !stir_types::is_assignable(self.ctx, a, &b) {
@@ -4419,7 +4481,8 @@ impl<'a, 'db> Checker<'a, 'db> {
                     } else {
                         None
                     };
-                    if idx.is_none() {
+                    // a method of Laravel's often reads `func_get_args()`, and PHP doesn't mind
+                    if idx.is_none() && (self.template.is_none() || call.kind() == CALL_EXPR) {
                         self.error(
                             a.text_range(),
                             codes::ARGUMENTS_COUNT,
@@ -4537,6 +4600,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                     continue;
                 }
                 if rest.len() < t.members().len() {
+                    // what comes back from a call with something unknown may be either
+                    if self.template.is_some() {
+                        continue;
+                    }
                     let before = self.diags.len();
                     self.check_assign(
                         range,
@@ -5068,12 +5135,15 @@ impl<'a, 'db> Checker<'a, 'db> {
                         // PHPStan's `reportMagicProperties`: fine at level 0, but from level 1
                         // a property only `__get` knows of has to be declared with `@property`
                         if self.has_magic(&cls, "__get") {
-                            self.error(
-                                range,
-                                codes::PROPERTY_NOT_FOUND,
-                                format!("`{recv}` has no property `{name}`, only `__get`"),
-                            );
-                            self.tag_level(1);
+                            // a template's `$errors->login`: there, that's how these are used
+                            if self.template.is_none() {
+                                self.error(
+                                    range,
+                                    codes::PROPERTY_NOT_FOUND,
+                                    format!("`{recv}` has no property `{name}`, only `__get`"),
+                                );
+                                self.tag_level(1);
+                            }
                             return Ty::untyped();
                         }
                         if self.limited_member(
@@ -5379,12 +5449,14 @@ impl<'a, 'db> Checker<'a, 'db> {
         // PHPStan's `reportMagicMethods`: fine at level 0, but from level 1 a method only
         // `__call` knows of has to be declared with `@method`
         if matches!(cls.kind(), TyKind::Class { .. }) && self.has_magic(&cls, "__call") {
-            self.error(
-                range,
-                codes::METHOD_NOT_FOUND,
-                format!("`{recv}` has no method `{name}`, only `__call`"),
-            );
-            self.tag_level(1);
+            if self.template.is_none() {
+                self.error(
+                    range,
+                    codes::METHOD_NOT_FOUND,
+                    format!("`{recv}` has no method `{name}`, only `__call`"),
+                );
+                self.tag_level(1);
+            }
             self.check_args_untyped(node);
             return Ty::untyped();
         }
@@ -5728,12 +5800,14 @@ impl<'a, 'db> Checker<'a, 'db> {
                     return t;
                 }
                 if self.has_magic(&cls, "__callStatic") {
-                    self.error(
-                        name_node.text_range(),
-                        codes::STATIC_METHOD_NOT_FOUND,
-                        format!("`{cls}` has no method `{name}`, only `__callStatic`"),
-                    );
-                    self.tag_level(1);
+                    if self.template.is_none() {
+                        self.error(
+                            name_node.text_range(),
+                            codes::STATIC_METHOD_NOT_FOUND,
+                            format!("`{cls}` has no method `{name}`, only `__callStatic`"),
+                        );
+                        self.tag_level(1);
+                    }
                     self.check_args_untyped(node);
                     return Ty::untyped();
                 }
@@ -6046,6 +6120,17 @@ impl<'a, 'db> Checker<'a, 'db> {
                                 if let Some(f) = self.frames.first_mut() {
                                     f.insert(SmolStr::new(n), local);
                                 }
+                            } else if self.open_vars() {
+                                let ty = self.open_variable(n, t.text_range());
+                                let local = self.lookup(n).cloned();
+                                let local = local.unwrap_or(Local {
+                                    ty: ty.clone(),
+                                    declared: ty,
+                                    kind: LocalKind::Open,
+                                    range: t.text_range(),
+                                    maybe_undefined: false,
+                                });
+                                frame.insert(SmolStr::new(n), local);
                             } else {
                                 self.error(
                                     t.text_range(),
@@ -6081,6 +6166,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             .as_ref()
             .and_then(|b| b.class.clone())
             .map(|c| self.class.replace(c));
+        let outer_open = self.open_vars();
         let saved = std::mem::replace(&mut self.frames, vec![frame]);
         let saved_dead = std::mem::replace(&mut self.dead, false);
         let saved_loops = std::mem::take(&mut self.loops);
@@ -6155,6 +6241,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 ret: ret.clone(),
                 infer_ret: infer,
                 returns: Vec::new(),
+                open_vars: arrow && outer_open,
             });
             if let Some(b) = node.child(BLOCK) {
                 self.block_stmts(&b);

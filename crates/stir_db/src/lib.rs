@@ -140,6 +140,9 @@ pub struct Settings {
     pub php_paths: Vec<PathBuf>,
     /// PHPStan `excludePaths` (may contain fnmatch globs): `.php` files not reported.
     pub php_excludes: Vec<PathBuf>,
+    /// The project's `include` or `exclude` leave out some of its files: what isn't here may still
+    /// be there.
+    pub files_left_out: bool,
     /// Composer's packages aren't installed as declared, so a name they might declare isn't
     /// known to be wrong: the namespaces of the project's own code (lowercase), where it is.
     pub pending_install: Option<Vec<String>>,
@@ -162,6 +165,7 @@ impl Default for Settings {
             ignore_errors: IgnoreRules::default(),
             baseline: IgnoreRules::default(),
             php_paths: Vec::new(),
+            files_left_out: false,
             php_excludes: Vec::new(),
             pending_install: None,
             declared_extensions: None,
@@ -276,11 +280,7 @@ pub fn php_versions(db: &dyn Db) -> PhpVersions {
 
 #[salsa::tracked(returns(ref), no_eq)]
 pub fn parse(db: &dyn Db, file: SourceFile) -> Parse {
-    if stir_syntax::is_blade_path(file.path(db)) {
-        stir_syntax::parse_blade(file.text(db))
-    } else {
-        stir_syntax::parse(file.text(db))
-    }
+    stir_syntax::parse_path(file.path(db), file.text(db))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

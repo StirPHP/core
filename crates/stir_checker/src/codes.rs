@@ -75,6 +75,7 @@ pub const STATIC_PROPERTY_PROTECTED: &str = "staticProperty.protected";
 pub const THROW_NOT_THROWABLE: &str = "throw.notThrowable";
 pub const TRAIT_NOT_FOUND: &str = "trait.notFound";
 pub const TYPE_ALIAS_NOT_FOUND: &str = "typeAlias.notFound";
+pub const VIEW_NOT_FOUND: &str = "view.notFound";
 pub const VARIABLE_UNDEFINED: &str = "variable.undefined";
 
 // Syntax newer than the project's PHP version, where PHPStan has a rule for that piece of syntax.

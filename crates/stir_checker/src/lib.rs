@@ -61,11 +61,8 @@ pub fn checked_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> FileCheck {
     }
     let mut diags = stir_db::syntax_diagnostics(db, file).as_ref().clone();
     let mut script_failures = Vec::new();
-    // A template's variables come from elsewhere, which isn't followed yet: as PHP, every one
-    // would be undefined. For now it's only checked for its syntax.
-    let is_template = stir_syntax::is_blade_path(file.path(db));
     // Semantic errors on a broken tree are mostly noise: fix syntax first.
-    if file.origin(db) == FileOrigin::Source && diags.is_empty() && !is_template {
+    if file.origin(db) == FileOrigin::Source && diags.is_empty() {
         diags.extend(
             php_version::syntax_version_diagnostics(db, ws, file)
                 .iter()

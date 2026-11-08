@@ -433,6 +433,7 @@ pub fn templates(
                 TemplateVariance::Contravariant => Variance::In,
             },
             bound: t.param.bound.as_ref().map(|b| cx.lower(b)),
+            default: t.param.default.as_ref().map(|d| cx.lower(d)),
             range: t.param.range,
         });
     }

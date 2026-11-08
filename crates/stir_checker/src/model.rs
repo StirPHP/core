@@ -184,6 +184,7 @@ pub struct Ctx<'db> {
 struct ParamTable {
     ids: FxHashMap<(SmolStr, SmolStr), ParamId>,
     bounds: FxHashMap<ParamId, Ty>,
+    defaulted: rustc_hash::FxHashSet<ParamId>,
     next: u32,
 }
 
@@ -235,6 +236,11 @@ impl<'db> Ctx<'db> {
         id
     }
 
+    /// Is what's known of this template its default rather than what it has to be?
+    pub fn has_default(&self, id: ParamId) -> bool {
+        self.params.borrow().defaulted.contains(&id)
+    }
+
     pub fn set_bound(&self, id: ParamId, bound: Ty) {
         self.params.borrow_mut().bounds.insert(id, bound);
     }
@@ -284,7 +290,7 @@ impl<'db> Ctx<'db> {
         sink: &mut Vec<LowerError>,
     ) -> Vec<GenericParam> {
         let params = self.declare_params(owner, defs);
-        self.lower_bounds(&params, defs, outer, sink);
+        self.lower_bounds(&params, defs, outer, false, sink);
         params
     }
 
@@ -311,13 +317,20 @@ impl<'db> Ctx<'db> {
         params: &[GenericParam],
         defs: &[TypeParamDef],
         outer: &LowerCx,
+        take_defaults: bool,
         sink: &mut Vec<LowerError>,
     ) {
         let mut cx = outer.clone();
         cx.generics
             .extend(params.iter().map(|p| (p.name.clone(), p.ty.clone())));
         for (p, d) in params.iter().zip(defs) {
-            if let Some(bound) = &d.bound {
+            // `@template T of A = B` is a `B` when nothing has said, which for a trait is nearly
+            // always, as hardly anyone writes `@use` for it
+            if let Some(default) = d.default.as_ref().filter(|_| take_defaults) {
+                let b = self.lower(default, &cx, sink);
+                self.set_bound(p.id, b);
+                self.params.borrow_mut().defaulted.insert(p.id);
+            } else if let Some(bound) = &d.bound {
                 let b = self.lower(bound, &cx, sink);
                 self.set_bound(p.id, b);
             }
@@ -339,6 +352,7 @@ impl<'db> Ctx<'db> {
                 &c.params,
                 &c.def.type_params,
                 &LowerCx::default(),
+                c.kind() == ClassKind::Trait,
                 &mut Vec::new(),
             );
         }

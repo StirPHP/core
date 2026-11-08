@@ -136,6 +136,8 @@ impl<'a, 'db> Checker<'a, 'db> {
         // ones, gets none of these
         !self.dead
             && !self.in_trait_member
+            // conditions a template has of its own can't all be seen, nor what it's given
+            && self.template.is_none()
             && self
                 .ctx
                 .ws

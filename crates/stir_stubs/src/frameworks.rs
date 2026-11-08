@@ -31,6 +31,10 @@ pub const FRAMEWORKS: &[Framework] = &[
                 include_str!("../frameworks/laravel/aliases.php"),
             ),
             (
+                "frameworks/laravel/blade.php",
+                include_str!("../frameworks/laravel/blade.php"),
+            ),
+            (
                 "override/frameworks/laravel/EloquentBuilder.stub",
                 include_str!("../frameworks/laravel/EloquentBuilder.stub"),
             ),

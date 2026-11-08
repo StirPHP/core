@@ -558,6 +558,9 @@ fn settings_from(
         php.extend(files);
     }
     settings.deprecations = project.config.deprecations;
+    let defaults = crate::config::Config::default();
+    settings.files_left_out =
+        project.config.exclude != defaults.exclude || project.config.include != defaults.include;
     let Some(config) = config else {
         return (settings, ignore_notice(skipped, &php));
     };
