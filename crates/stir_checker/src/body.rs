@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 mod checks;
-mod template;
+pub(crate) mod template;
 
 use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
@@ -148,6 +148,9 @@ pub struct Checker<'a, 'db> {
     pub locals: FxHashMap<TextRange, (Ty, LocalKind)>,
     /// The names of the locals whose declaring range doesn't spell them.
     pub local_names: FxHashMap<TextRange, SmolStr>,
+    /// See [`crate::TypedFile`].
+    pub view_flows: FxHashMap<TextRange, crate::typed::ViewFlow>,
+    pub compact_vars: FxHashMap<TextRange, (Ty, bool)>,
     /// What's particular to checking a template. `None` for any other file.
     template: Option<template::Template>,
     /// What went wrong with the project's scripts on this file.
@@ -288,6 +291,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             defs: FxHashMap::default(),
             locals: FxHashMap::default(),
             local_names: FxHashMap::default(),
+            view_flows: FxHashMap::default(),
+            compact_vars: FxHashMap::default(),
             template: None,
             script_failures: Vec::new(),
             scripts_off: rustc_hash::FxHashSet::default(),
@@ -577,6 +582,9 @@ impl<'a, 'db> Checker<'a, 'db> {
             return;
         }
         if let Err(m) = stir_types::check_assignable(self.ctx, from, to) {
+            if self.unreliable_in_template(from) {
+                return;
+            }
             let mut msg = format!("type mismatch in {what}: {m}");
             if from.is_untyped() {
                 msg.push_str(
@@ -785,6 +793,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             open_vars: self.template.is_some(),
         });
         self.stmt_list(root);
+        self.finish_template_flows();
         self.fns.pop();
         self.forget_unknown_names_without_laravel();
     }
@@ -3096,6 +3105,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                     );
                     self.tag_level(1);
                 }
+                if self.probing > 0 && self.given_if_at_all(name) {
+                    return l.ty.nullable();
+                }
                 l.ty
             }
             None => {
@@ -4768,14 +4780,11 @@ impl<'a, 'db> Checker<'a, 'db> {
                 }
             }
             let sig = self.ctx.function_sig(loc);
-            if self
-                .ctx
-                .function_def(loc)
-                .name
-                .as_str()
-                .eq_ignore_ascii_case("extract")
-            {
+            let function = self.ctx.function_def(loc).name.as_str();
+            if function.eq_ignore_ascii_case("extract") {
                 self.dynamic_vars_fn = Some(self.fns.len());
+            } else if function.eq_ignore_ascii_case("compact") {
+                self.note_compact(node);
             }
             let ret = self.check_args(node, &sig, &FxHashMap::default(), expected, &[]);
             let ret = self.function_hook(node, fqn.as_str(), ret);
@@ -5450,6 +5459,10 @@ impl<'a, 'db> Checker<'a, 'db> {
         // PHPStan's `reportMagicMethods`: fine at level 0, but from level 1 a method only
         // `__call` knows of has to be declared with `@method`
         if matches!(cls.kind(), TyKind::Class { .. }) && self.has_magic(&cls, "__call") {
+            if self.unreliable_in_template(&cls) {
+                self.check_args_untyped(node);
+                return Ty::untyped();
+            }
             self.error(
                 range,
                 codes::METHOD_NOT_FOUND,
@@ -5504,6 +5517,10 @@ impl<'a, 'db> Checker<'a, 'db> {
         } else {
             codes::METHOD_NON_OBJECT
         };
+        if self.unreliable_in_template(recv) {
+            self.check_args_untyped(node);
+            return Ty::untyped();
+        }
         if has.is_empty() {
             self.check_args_untyped(node);
             self.error(range, code, format!("`{recv}` has no method `{name}`"));

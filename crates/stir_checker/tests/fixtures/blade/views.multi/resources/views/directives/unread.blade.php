@@ -1,0 +1,2 @@
+@unread('text')
+{{ $anything }}

@@ -1,0 +1,1 @@
+{{ $anything }} {{ $slot }}

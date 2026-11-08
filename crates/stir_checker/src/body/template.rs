@@ -13,6 +13,8 @@ use rustc_hash::FxHashSet;
 use stir_syntax::{BladeFlatPart, NodeOrToken, SyntaxElement, TextSize};
 
 use super::*;
+use crate::typed::ViewFlow;
+use crate::views::{ViewData, given_type};
 
 /// A flat condition that's open at the current point.
 struct Flat {
@@ -41,6 +43,14 @@ pub(super) struct Template {
     custom_blocks: FxHashSet<String>,
     /// The comment `@var` tags were last read from.
     pub(super) last_doc: Option<SyntaxToken>,
+    /// What it's given by what renders it.
+    view: ViewData,
+    /// `$$name`, which can define anything.
+    variable_variables: bool,
+    /// What custom directives declare, by their names in lower case.
+    directive_variables: FxHashMap<String, Vec<SmolStr>>,
+    /// The `@extends` seen so far: what they pass on is what's defined at the end of the file.
+    extends: Vec<TextRange>,
 }
 
 impl Template {
@@ -76,6 +86,10 @@ impl Template {
             flats: Vec::new(),
             custom_blocks,
             last_doc: None,
+            view: crate::views::view_data(checker.ctx.db, checker.ctx.ws, checker.file).clone(),
+            variable_variables: root.descendants_with_tokens().any(|e| e.kind() == DOLLAR),
+            extends: Vec::new(),
+            directive_variables: crate::views::directive_variables(checker.ctx.db, checker.ctx.ws),
         })
     }
 }
@@ -87,7 +101,7 @@ pub(crate) fn directive_name(node: &SyntaxNode) -> Option<String> {
 }
 
 /// Every `@name` that could be a directive in `html`, in lower case.
-fn at_names(html: &str) -> Vec<(usize, String)> {
+pub(crate) fn at_names(html: &str) -> Vec<(usize, String)> {
     let bytes = html.as_bytes();
     let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
     let mut out = Vec::new();
@@ -142,15 +156,63 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
+    /// Is this in a template, where one of these types says nothing of what it holds? Relations
+    /// often come out as Eloquent's `Model`, with the class meant being lost.
+    pub(super) fn unreliable_in_template(&self, ty: &Ty) -> bool {
+        self.template.is_some() && ty.members().iter().any(crate::views::is_unreliable)
+    }
+
+    /// Is `name` one that some of what renders this template gives, and not all? Then to ask if
+    /// it's there may well be answered no.
+    pub(super) fn given_if_at_all(&self, name: &str) -> bool {
+        let Some(template) = &self.template else {
+            return false;
+        };
+        template.view.vars.get(name).is_some_and(|v| v.optional)
+    }
+
+    /// Would reading `name`, which nothing here declares and nothing gives, be an error? All that
+    /// renders the template has to be known, and nothing here can have defined it another way.
+    fn undefined_in_template(&self, name: &str) -> bool {
+        let Some(template) = &self.template else {
+            return false;
+        };
+        template.view.is_closed()
+            && !template.variable_variables
+            && self.dynamic_vars_fn != Some(self.fns.len())
+            // a component's, what Laravel's factory shares with all templates, and its own
+            && !matches!(name, "this" | "errors" | "slot" | "app")
+            && !name.starts_with("__")
+    }
+
     /// A variable read at `range` that nothing here has declared.
     pub(super) fn open_variable(&mut self, name: &str, range: TextRange) -> Ty {
         let implicit = self.implicit_variable(name);
+        let given = self
+            .template
+            .as_ref()
+            .and_then(|t| t.view.vars.get(name))
+            .cloned();
+        if implicit.is_none() && given.is_none() && self.undefined_in_template(name) {
+            // `isset($x)` and `$x ?? ''` are how to read what may not be there
+            if self.probing == 0 {
+                self.error(
+                    range,
+                    codes::VARIABLE_UNDEFINED,
+                    format!(
+                        "undefined variable `${name}`: what renders this template doesn't give it"
+                    ),
+                );
+                return Ty::error();
+            }
+        }
+        let optional = given.as_ref().is_some_and(|g| g.optional);
         let kind = if implicit.is_some() {
             LocalKind::Implicit
         } else {
             LocalKind::Open
         };
-        let ty = implicit.unwrap_or_else(Ty::untyped);
+        let ty = implicit.or(given.map(|g| g.ty)).unwrap_or_else(Ty::untyped);
         let Some(template) = &mut self.template else {
             return ty;
         };
@@ -170,7 +232,121 @@ impl<'a, 'db> Checker<'a, 'db> {
                 maybe_undefined: false,
             },
         );
+        if optional && self.probing > 0 {
+            return ty.nullable();
+        }
         ty
+    }
+
+    /// `compact('a', ['b'])`: what's in those variables here, for what it's passed to.
+    pub(super) fn note_compact(&mut self, call: &SyntaxNode) {
+        fn strings(node: &SyntaxNode, out: &mut Vec<SyntaxNode>) {
+            for arg in node.children() {
+                if !matches!(arg.kind(), ARG | ARRAY_ELEM) {
+                    continue;
+                }
+                for value in exprs_of(&arg) {
+                    match value.kind() {
+                        STRING_LITERAL => out.push(value),
+                        ARRAY_EXPR => strings(&value, out),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let Some(args) = call.child(ARG_LIST) else {
+            return;
+        };
+        let mut found = Vec::new();
+        strings(&args, &mut found);
+        for literal in found {
+            let Some(name) = plain_string(&literal) else {
+                continue;
+            };
+            if let Some(local) = self.lookup(&name) {
+                let seen = (local.ty.clone(), local.maybe_undefined);
+                self.compact_vars.insert(literal.text_range(), seen);
+            }
+        }
+    }
+
+    /// What `@include` or `@extends` would pass on from here, by `get_defined_vars()`.
+    fn flow_here(&self) -> ViewFlow {
+        let mut scope: Vec<(SmolStr, Ty, bool)> = self
+            .frames
+            .last()
+            .into_iter()
+            .flatten()
+            .filter(|(name, _)| {
+                !matches!(name.as_str(), "this" | "errors" | "app") && !name.starts_with("__")
+            })
+            .map(|(name, local)| {
+                let ty = match local.ty.kind() {
+                    // no further back than that: it would only go on growing
+                    TyKind::Class { name: class, .. } if name == "loop" => {
+                        Ty::class(class.clone(), vec![Ty::untyped()])
+                    }
+                    _ => given_type(&local.ty),
+                };
+                (name.clone(), ty, local.maybe_undefined)
+            })
+            .collect();
+        scope.sort_by(|a, b| a.0.cmp(&b.0));
+        ViewFlow {
+            scope,
+            dynamic: self.dynamic_vars_fn == Some(self.fns.len()),
+            each: None,
+        }
+    }
+
+    /// Takes note of what a directive that renders a template passes on.
+    fn note_view_flow(&mut self, node: &SyntaxNode, name: &str, values: &[SyntaxNode]) {
+        let closed = self.template.as_ref().is_some_and(|t| {
+            t.view.is_closed() || t.view.open == Some(crate::views::OpenReason::ErrorPage)
+        });
+        match name {
+            "include" | "includeif" | "includefirst" | "includewhen" | "includeunless"
+                if closed =>
+            {
+                let flow = self.flow_here();
+                self.view_flows.insert(node.text_range(), flow);
+            }
+            "extends" | "extendsfirst" if closed => {
+                if let Some(template) = &mut self.template {
+                    template.extends.push(node.text_range());
+                }
+            }
+            "each" => {
+                let Some(items) = values.get(1) else { return };
+                let Some(ty) = self.types.get(&items.text_range()).cloned() else {
+                    return;
+                };
+                let before = self.diags.len();
+                let (key, value) = self.iter_types(items.text_range(), &ty);
+                self.diags.truncate(before);
+                let flow = ViewFlow {
+                    each: Some((key, value)),
+                    ..ViewFlow::default()
+                };
+                self.view_flows.insert(node.text_range(), flow);
+            }
+            _ => {}
+        }
+    }
+
+    /// `@extends` runs at the end of a file, with what's defined by then.
+    pub(super) fn finish_template_flows(&mut self) {
+        let Some(template) = &mut self.template else {
+            return;
+        };
+        let extends = std::mem::take(&mut template.extends);
+        if extends.is_empty() {
+            return;
+        }
+        let flow = self.flow_here();
+        for range in extends {
+            self.view_flows.insert(range, flow.clone());
+        }
     }
 
     /// `/** @var Post $post */` about a variable nothing has declared.
@@ -232,6 +408,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                 NodeOrToken::Node(n) if is_stmt_kind(n.kind()) => {
                     if n.kind() == INLINE_HTML_STMT {
                         self.custom_conditions(&n);
+                        self.custom_directive_variables(&n);
                     }
                     self.stmt(&n);
                 }
@@ -251,6 +428,33 @@ impl<'a, 'db> Checker<'a, 'db> {
             .is_some_and(|t| t.flats.len() > depth)
         {
             self.close_flat();
+        }
+    }
+
+    /// What the directives of the project's own declare, such as `@title('..')` being
+    /// `<?php $title = '..' ?>`, for what comes after. What they're given isn't read.
+    fn custom_directive_variables(&mut self, html: &SyntaxNode) {
+        let Some(token) = html.token(INLINE_HTML) else {
+            return;
+        };
+        let Some(template) = &self.template else {
+            return;
+        };
+        if template.directive_variables.is_empty() {
+            return;
+        }
+        let mut found = Vec::new();
+        for (at, name) in at_names(token.text()) {
+            if let Some(vars) = template.directive_variables.get(&name) {
+                let range = TextRange::at(
+                    token.text_range().start() + TextSize::from(at as u32),
+                    TextSize::from(1 + name.len() as u32),
+                );
+                found.extend(vars.iter().map(|v| (v.clone(), range)));
+            }
+        }
+        for (variable, at) in found {
+            self.declare_implicit(&variable, Ty::untyped(), at);
         }
     }
 
@@ -354,6 +558,7 @@ impl<'a, 'db> Checker<'a, 'db> {
                     self.expr(value, None);
                 }
                 self.check_view_names(&name, &args);
+                self.note_view_flow(node, &name, &values);
             }
         }
         if part == Some(BladeFlatPart::Opens) {

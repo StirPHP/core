@@ -38,6 +38,17 @@ pub enum MemberKind {
     Case,
 }
 
+/// What's passed on from a place in a template that renders another.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ViewFlow {
+    /// What's defined there, which `@include` and `@extends` pass on: whether it may not be.
+    pub scope: Vec<(SmolStr, Ty, bool)>,
+    /// `extract()` or the like came before: anything may be defined.
+    pub dynamic: bool,
+    /// The key and value of each item of an `@each`.
+    pub each: Option<(Ty, Ty)>,
+}
+
 /// What the checker learned about a file's expressions.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct TypedFile {
@@ -50,6 +61,11 @@ pub struct TypedFile {
     /// The names of the locals whose declaring range doesn't spell them: what a template's
     /// directives declare (`$loop`, by `@foreach`).
     pub local_names: FxHashMap<TextRange, SmolStr>,
+    /// By the range of a template's directive, what it passes on to the template it renders.
+    pub view_flows: FxHashMap<TextRange, ViewFlow>,
+    /// By the range of a string in `compact(..)`, what the variable it names holds there, and
+    /// whether it may not be defined.
+    pub compact_vars: FxHashMap<TextRange, (Ty, bool)>,
     /// Semantic diagnostics (unfiltered).
     pub diags: Vec<Diagnostic>,
     /// What went wrong with the project's scripts while checking.
@@ -71,6 +87,8 @@ pub fn typed_file(db: &dyn Db, ws: Workspace, file: SourceFile) -> Arc<TypedFile
             defs: checker.defs,
             locals: checker.locals,
             local_names: checker.local_names,
+            view_flows: checker.view_flows,
+            compact_vars: checker.compact_vars,
             diags: checker.diags,
             script_failures,
         })

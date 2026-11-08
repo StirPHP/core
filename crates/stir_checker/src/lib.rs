@@ -23,6 +23,7 @@ pub mod model_api;
 pub mod php_version;
 pub mod script;
 mod typed;
+pub mod views;
 
 pub use body::{Checker, LocalKind};
 pub use infer::widen_literals;
