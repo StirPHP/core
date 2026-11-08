@@ -1174,7 +1174,7 @@ impl Lowerer {
                     && let TagKind::Generic(g) = &tag.kind
                     && let Some(text) = &g.description
                 {
-                    let first = text.text.split_whitespace().next().unwrap_or("");
+                    let first = leading_type(&text.text);
                     let t = stir_phpdoc::parse_type(first, text.range.start());
                     class.mixins.push(dcx.lower(&t));
                 }
@@ -1454,4 +1454,21 @@ fn member_mods(m: &SyntaxNode) -> MemberMods {
         i += 1;
     }
     mods
+}
+
+/// The type at the start of a tag's text, before its description: up to the first space that
+/// isn't inside `<>`, `{}`, `()` or `[]`, so that `\ArrayObject<int, string> rows` gives the
+/// whole type.
+fn leading_type(text: &str) -> &str {
+    let text = text.trim_start();
+    let mut depth = 0usize;
+    for (i, c) in text.char_indices() {
+        match c {
+            '<' | '{' | '(' | '[' => depth += 1,
+            '>' | '}' | ')' | ']' => depth = depth.saturating_sub(1),
+            c if c.is_whitespace() && depth == 0 => return &text[..i],
+            _ => {}
+        }
+    }
+    text
 }

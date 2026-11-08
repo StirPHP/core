@@ -203,3 +203,18 @@ fn phpdoc_types_templates_and_aliases() {
         matches!(&map.sig.doc_ret.as_ref().unwrap().kind, K::Named(n, args) if n.as_str() == "App\\Box" && matches!(args[0].kind, K::Param(_)))
     );
 }
+
+#[test]
+fn a_mixin_with_type_arguments_keeps_them() {
+    use type_ref::TypeRefKind as K;
+    let db = RootDatabase::default();
+    let f = file(
+        &db,
+        "/p/a.php",
+        "<?php\n/** @mixin \\ArrayObject<int, string> its rows */\nclass Rows {}\n",
+    );
+    let items = file_items(&db, f);
+    assert!(
+        matches!(&items.classes[0].mixins[0].kind, K::Named(n, args) if n.as_str() == "ArrayObject" && args.len() == 2)
+    );
+}
