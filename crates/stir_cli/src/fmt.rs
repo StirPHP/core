@@ -42,6 +42,9 @@ enum Outcome {
 }
 
 fn format_file(path: &Path, options: &Options, check: bool) -> Outcome {
+    if !stir_fmt::formats_path(path) {
+        return Outcome::Same;
+    }
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) => return Outcome::Failed(error.to_string()),

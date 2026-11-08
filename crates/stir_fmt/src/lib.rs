@@ -78,7 +78,14 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// `source`, formatted.
+/// Is the file at `path` one to format? A Blade template isn't: what's in `{{ }}` and between
+/// directives is laid out as part of its HTML, which this knows nothing about, and it'd be left in
+/// a state only the template's author can judge.
+pub fn formats_path(path: &std::path::Path) -> bool {
+    !stir_syntax::is_blade_path(path)
+}
+
+/// `source`, formatted, read as PHP: see [`formats_path`].
 pub fn format(source: &str, options: &Options) -> Result<String, Error> {
     let edits = edits(source, options)?;
     Ok(apply(source, &edits))

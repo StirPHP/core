@@ -1146,3 +1146,106 @@ fn deprecations_are_reported_when_asked_for() {
         .stdout(contains("function.deprecated"))
         .stdout(contains("\"severity\": \"warning\""));
 }
+
+/// A template that has something wrong with it whatever its variables hold.
+const BAD_TEMPLATE: &str = "<h1>{{ $title->anything }}</h1>\n{{ strlen('a', 'b') }}\n";
+
+#[test]
+fn templates_of_a_project_are_checked_but_not_those_of_its_packages() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    write(&root.join("composer.json"), "{}");
+    write(
+        &root.join("resources/views/posts/show.blade.php"),
+        BAD_TEMPLATE,
+    );
+    write(
+        &root.join("vendor/acme/pkg/resources/views/card.blade.php"),
+        BAD_TEMPLATE,
+    );
+    stirphp()
+        .current_dir(root)
+        .arg("check")
+        .assert()
+        .code(1)
+        .stdout(contains("resources/views/posts/show.blade.php"))
+        .stdout(contains("error[arguments.count]"))
+        .stdout(contains("vendor/acme").not())
+        .stdout(contains("1 error, 0 warnings in 1 file"));
+}
+
+#[test]
+fn a_projects_exclude_applies_to_templates() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    write(
+        &root.join("stirphp.neon"),
+        "parameters:\n    stirphp:\n        exclude:\n            - vendor/**\n            - resources/views/skip/**\n        frameworks:\n            laravel: true\n",
+    );
+    write(&root.join("bootstrap/app.php"), "<?php\n");
+    write(
+        &root.join("resources/views/skip/bad.blade.php"),
+        BAD_TEMPLATE,
+    );
+    // what's left out may be what this includes
+    write(
+        &root.join("resources/views/page.blade.php"),
+        "@include('skip.bad')\n@include('skip.gone')\n",
+    );
+    stirphp()
+        .current_dir(root)
+        .arg("check")
+        .assert()
+        .success()
+        .stdout(contains("No problems found in 2 files"));
+}
+
+#[test]
+fn a_missing_template_is_reported_in_an_application() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    write(
+        &root.join("stirphp.neon"),
+        "parameters:\n    stirphp:\n        frameworks:\n            laravel: true\n",
+    );
+    write(
+        &root.join("resources/views/card.blade.php"),
+        "{{ $card }}\n",
+    );
+    let page = "@include('card')\n@include('gone')\n@include('mail::message')\n";
+    write(&root.join("resources/views/page.blade.php"), page);
+
+    // without `bootstrap/app.php` it may be a package, whose templates include an application's
+    stirphp().current_dir(root).arg("check").assert().success();
+
+    write(&root.join("bootstrap/app.php"), "<?php\n");
+    stirphp()
+        .current_dir(root)
+        .arg("check")
+        .assert()
+        .code(1)
+        .stdout(contains("error[view.notFound]"))
+        .stdout(contains("`gone`"))
+        .stdout(contains("1 error, 0 warnings in 1 file"));
+}
+
+#[test]
+fn fmt_leaves_a_template_alone() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    write(&root.join("composer.json"), "{}");
+    let text = "<p>héllo</p>\n@php\n$a    =   1;\n@endphp\n{{    $a   }}\n<?php   $b=1;   ?>\n";
+    let template = root.join("resources/views/page.blade.php");
+    write(&template, text);
+    let php = root.join("main.php");
+    write(&php, "<?php\n$a=1;\n");
+    stirphp().current_dir(root).arg("fmt").assert().success();
+    assert_eq!(fs::read_to_string(&template).unwrap(), text);
+    assert_eq!(fs::read_to_string(&php).unwrap(), "<?php\n$a = 1;\n");
+    stirphp()
+        .current_dir(root)
+        .args(["fmt", "resources/views/page.blade.php"])
+        .assert()
+        .success();
+    assert_eq!(fs::read_to_string(&template).unwrap(), text);
+}
