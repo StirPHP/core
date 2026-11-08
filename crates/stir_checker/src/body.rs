@@ -6058,10 +6058,12 @@ impl<'a, 'db> Checker<'a, 'db> {
                 }
             }
         }
-        // `Closure::bind()` and `@param-closure-this` say what `$this` and the class are in it
+        // `Closure::bind()` and `@param-closure-this` say what `$this` and the class are in it,
+        // though a static closure can't be bound to an object
         let bound = self.closure_bind.take();
         let is_static = node.has_token(STATIC_KW);
         let this = match &bound {
+            Some(_) if is_static => None,
             Some(b) => b.this.clone().map(|t| Local {
                 ty: t.clone(),
                 declared: t,

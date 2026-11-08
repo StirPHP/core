@@ -34,6 +34,10 @@ pub const FRAMEWORKS: &[Framework] = &[
                 "override/frameworks/laravel/EloquentBuilder.stub",
                 include_str!("../frameworks/laravel/EloquentBuilder.stub"),
             ),
+            (
+                "override/frameworks/laravel/ConsoleKernel.stub",
+                include_str!("../frameworks/laravel/ConsoleKernel.stub"),
+            ),
         ],
     },
     Framework {

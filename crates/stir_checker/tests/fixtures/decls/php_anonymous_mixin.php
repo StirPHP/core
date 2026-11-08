@@ -68,7 +68,11 @@ function aliased(Aliases $a): string {
     return $a->greet();
 }
 
-class Secret { private int $hidden = 1; private function peek(): int { return 1; } }
+class Secret {
+    private int $hidden = 1;
+    private function peek(): int { return 1; }
+    public function open(): int { return 1; }
+}
 
 function bound(Secret $s): void {
     $f = Closure::bind(function () {
@@ -91,6 +95,11 @@ class Router {
 function closure_this(Router $r): void {
     $r->group(function () {
         $this->nope(); // error: method.notFound
+    });
+    $r->group(fn () => $this->open());
+    // a static closure can't be bound to an object
+    $r->group(static function () {
+        $this->open(); // error: variable.undefined
     });
 }
 

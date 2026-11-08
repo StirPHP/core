@@ -1009,7 +1009,7 @@ async fn framework_magic_reaches_completion_hover_and_definition() {
         "<?php\nfunction plugin_boot(): void { do_action('plugin_ready', 1); }\n",
     );
     let main = root.join("main.php");
-    let text = "<?php\nuse App\\Models\\Post;\nfunction run(Post $post): void {\n    $post->views;\n    $post->author;\n    Post::published(2024);\n    route('posts.show');\n    view('posts.show');\n    add_action('plugin_ready', 'run');\n    Post::\n}\n";
+    let text = "<?php\nuse App\\Models\\Post;\nuse Illuminate\\Support\\Facades\\Artisan;\nfunction run(Post $post): void {\n    $post->views;\n    $post->author;\n    Post::published(2024);\n    route('posts.show');\n    view('posts.show');\n    add_action('plugin_ready', 'run');\n    Post::\n}\nArtisan::command('inspire', function () {\n    $this->comment('quote');\n    $this->\n});\n";
     write(&main, text);
     let main_uri = uri(&main);
     let mut c = Client::start_with(trust_options(&tmp.path().join("trust.json")));
@@ -1086,4 +1086,22 @@ async fn framework_magic_reaches_completion_hover_and_definition() {
     let labels: Vec<&str> = items.iter().map(|i| i["label"].as_str().unwrap()).collect();
     assert!(labels.contains(&"published"), "{labels:?}");
     assert!(labels.contains(&"where"), "{labels:?}");
+
+    // `$this` in a closure command is the command, by the stub's `@param-closure-this`
+    let got = c
+        .request("textDocument/hover", at("$this->comment", 1))
+        .await;
+    let shown = got["contents"]["value"].as_str().unwrap_or_default();
+    assert!(shown.contains("ClosureCommand"), "{shown}");
+    let got = c
+        .request("textDocument/completion", at("$this->\n", 7))
+        .await;
+    let items = got["items"]
+        .as_array()
+        .cloned()
+        .or(got.as_array().cloned())
+        .unwrap();
+    let labels: Vec<&str> = items.iter().map(|i| i["label"].as_str().unwrap()).collect();
+    assert!(labels.contains(&"comment"), "{labels:?}");
+    assert!(labels.contains(&"purpose"), "{labels:?}");
 }

@@ -446,6 +446,8 @@ a plugin's `Plugin Name:` header. `parameters.stirphp.frameworks` turns one off 
   such as `Illuminate\Contracts\Auth\Factory` to the class Laravel binds them to. `auth()->user()`, `Auth::user()` and
   `$request->user()` give the user model `config/auth.php` names. Laravel's class aliases, such as `\DB`, are there.
 - Macros the project adds with `Foo::macro('name', ..)` aren't reported, though what they return isn't known.
+- In a closure given to `Artisan::command()` or the console kernel's `command()`, `$this` is the `ClosureCommand` Laravel
+  binds it to, so `$this->comment()` and `$this->argument()` resolve; not in a static closure, which PHP can't bind.
 - In an editor, these complete, hover and lead to where they're declared: a relation's property to its method, a scope to its
   `scopeX` method. Going to the definition of `route('name')` finds `->name('name')` in `routes/`, and of `view('a.b')`
   the template in `resources/views`.
@@ -470,10 +472,9 @@ What's measured, with PHPStan and the extension at the same level:
 - [BookStack](https://github.com/BookStackApp/BookStack), an MIT-licensed Laravel application, at its own level 5: 149 before,
   36 now. PHPStan with larastan reports none. What's left isn't about Laravel's magic: argument types the checker gets wrong,
   such as Collection where an array is taken.
-- A new Laravel application with models, relations, scopes, casts and a controller: 20 before, 4 now. Larastan reports 6.
+- A new Laravel application with models, relations, scopes, casts and a controller: 20 before, 3 now. Larastan reports 6.
   Both find the 3 mistakes written in on purpose. Larastan also reports an `Attribute` accessor without type arguments, a
-  property of a relation without them, and a macro added outside a service provider, which are all fine. StirPHP also
-  reports `$this` in `routes/console.php`, which Laravel binds to a command: a false alarm.
+  property of a relation without them, and a macro added outside a service provider, which are all fine.
 - A new Symfony application with an entity, its repository and a controller, and a container: 5 before, 1 now, the same as
   PHPStan's.
 - A WordPress plugin with hooks: none of its 3 mistakes before, all of them now, plus a hook's arguments PHPStan doesn't check.

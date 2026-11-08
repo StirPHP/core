@@ -1,0 +1,29 @@
+<?php
+
+// A closure given to `command()` runs bound to the `ClosureCommand` Laravel makes of it, so `$this`
+// in it is that command, as larastan's stubs have it. The facade declares `command()` itself, with
+// `@method`, so it's said there too.
+
+namespace Illuminate\Foundation\Console {
+    class Kernel
+    {
+        /**
+         * @param string $signature
+         * @param \Closure $callback
+         * @param-closure-this \Illuminate\Foundation\Console\ClosureCommand $callback
+         * @return \Illuminate\Foundation\Console\ClosureCommand
+         */
+        public function command($signature, \Closure $callback) {}
+    }
+}
+
+namespace Illuminate\Support\Facades {
+    class Artisan
+    {
+        /**
+         * @param-closure-this \Illuminate\Foundation\Console\ClosureCommand $callback
+         * @return \Illuminate\Foundation\Console\ClosureCommand
+         */
+        public static function command(string $signature, \Closure $callback) {}
+    }
+}

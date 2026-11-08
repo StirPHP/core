@@ -20,6 +20,53 @@ namespace Illuminate\Support\Facades {
     {
         protected static function getFacadeAccessor() { return \App\ThemeService::class; }
     }
+
+    /**
+     * @method static \Illuminate\Foundation\Console\ClosureCommand command(string $signature, \Closure $callback)
+     * @method static int call(string $command, array $parameters = [])
+     */
+    class Artisan extends Facade
+    {
+        protected static function getFacadeAccessor() { return \Illuminate\Contracts\Console\Kernel::class; }
+    }
+}
+
+namespace Illuminate\Contracts\Console {
+    interface Kernel
+    {
+        public function call(string $command, array $parameters = []): int;
+    }
+}
+
+namespace Illuminate\Console {
+    class Command
+    {
+        public function info(string $string): void {}
+        public function comment(string $string): void {}
+        /** @return array<string, mixed>|string|bool|null */
+        public function argument(?string $key = null) { return null; }
+    }
+}
+
+namespace Illuminate\Foundation\Console {
+    class Kernel implements \Illuminate\Contracts\Console\Kernel
+    {
+        public function call(string $command, array $parameters = []): int { return 0; }
+
+        /**
+         * @param string $signature
+         * @param \Closure $callback
+         * @return \Illuminate\Foundation\Console\ClosureCommand
+         */
+        public function command($signature, \Closure $callback) { return new ClosureCommand(); }
+
+        protected function commands(): void {}
+    }
+
+    class ClosureCommand extends \Illuminate\Console\Command
+    {
+        public function purpose(string $description): static { return $this; }
+    }
 }
 
 namespace Illuminate\Database\Schema {
