@@ -1,4 +1,4 @@
-//! Editor features with the cursor in a plain PHP file. `<|>` marks the cursor;
+//! Editor features with the cursor in a PHP file. `<|>` marks the cursor;
 //! `//- /path` starts another file.
 
 use stir_db::{FileOrigin, RootDatabase, Settings, SourceFile, Workspace};

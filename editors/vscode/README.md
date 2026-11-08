@@ -1,6 +1,6 @@
 # StirPHP for VS Code
 
-Type checking and code navigation for plain PHP files, from the StirPHP language server. It starts when you open a PHP
+Type checking and code navigation for PHP files, from the StirPHP language server. It starts when you open a PHP
 file, and a Composer project needs no configuration.
 
 - diagnostics, updated as you type, and PHPStan's on save for a project that has it

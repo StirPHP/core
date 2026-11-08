@@ -1,5 +1,5 @@
 <?php declare(strict_types=1);
-// Control-flow narrowing in plain PHP.
+// Control-flow narrowing.
 
 abstract class Shape {}
 final class Circle extends Shape

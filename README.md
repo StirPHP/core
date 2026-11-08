@@ -1,6 +1,6 @@
 # StirPHP
 
-StirPHP is a type checker and language server for plain PHP. It reads your `.php` files, their PHPDoc and your Composer
+StirPHP is a type checker and language server for PHP. It reads your `.php` files, their PHPDoc and your Composer
 setup as they are. There's nothing to migrate to and no required configuration.
 
 The goal is the best open source language server for PHP, as good as PhpStorm's engine. Type safety shouldn't depend on

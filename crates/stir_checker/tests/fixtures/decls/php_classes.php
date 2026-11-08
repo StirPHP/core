@@ -1,5 +1,5 @@
 <?php declare(strict_types=1);
-// Class declarations and member checks in plain PHP.
+// Class declarations and member checks.
 
 interface Named
 {

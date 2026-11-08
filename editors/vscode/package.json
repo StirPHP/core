@@ -1,7 +1,7 @@
 {
   "name": "stirphp",
   "displayName": "StirPHP",
-  "description": "Type checking, completion and navigation for plain PHP, from the StirPHP language server.",
+  "description": "Type checking, completion and navigation for PHP, from the StirPHP language server.",
   "version": "0.1.21",
   "publisher": "stirphp",
   "license": "MIT",
