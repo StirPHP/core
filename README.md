@@ -518,6 +518,10 @@ server shows it in the editor.
 The [VS Code extension](editors/vscode) is the only client this has been tested with. Any editor that can start an LSP
 server for PHP files should work with the command `stirphp lsp`, but that's untested.
 
+The same server runs in the browser, compiled to WebAssembly in a Web Worker: see [editors/web](editors/web). It answers
+the same, from files the page hands it instead of a disk, but without PHPStan. It's been tried with Monaco and
+`monaco-languageclient` in Firefox.
+
 ## Code actions
 
 Quick fixes are offered on a diagnostic, and marked as preferred where one of them is clearly the fix:
@@ -638,9 +642,10 @@ Not there yet: wrapping long lines when formatting, and the rest of what [framew
 | `stir_composer` | reads Composer's files |
 | `stir_phpstan` | runs a project's PHPStan and merges what it reports with ours (not in the browser) |
 | `stir_fmt` | the formatter |
+| `stir_vfs` | where a project's files are read from: the disk, or files in memory |
 | `stir_project` | configuration, discovery, baselines, `init` and workspace loading |
-| `stir_lsp` | the language server, and its code actions |
-| `stir_wasm` | the checker, hover and completion for the browser (WebAssembly) |
+| `stir_lsp` | the language server and its code actions, over stdio or one message at a time (the browser's) |
+| `stir_wasm` | the language server for the browser (WebAssembly); [editors/web](editors/web) runs it in a Web Worker |
 | `stir_cli` | the `stirphp` binary |
 
 ## Tests
@@ -651,6 +656,7 @@ scripts/parse-corpus.sh                 # parse Laravel, Symfony and PHPStan (gi
 scripts/check-corpus.sh <label>         # check them and write a summary to .corpus-results/<label>
 scripts/diff-corpus.py <label> <label>  # compare two summaries
 cargo test --release -p stir_fmt --test corpus -- --ignored --nocapture  # format all of them, in memory
+just web                                # build the browser's language server and test it in Node
 ```
 
 Checker fixtures live in `crates/stir_checker/tests/fixtures/` and mark expected diagnostics inline:

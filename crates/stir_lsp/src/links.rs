@@ -50,9 +50,12 @@ impl Links for Virtual {
 
     fn path(&self, uri: &Uri) -> Option<PathBuf> {
         let text = uri.as_str();
+        // `stirphp:///stubs/...`, or `stirphp:/stubs/...` as VS Code writes it back
         if let Some(rest) = text
             .strip_prefix(STUB_SCHEME)
-            .and_then(|r| r.strip_prefix(":///stubs/"))
+            .and_then(|r| r.strip_prefix(':'))
+            .map(|r| r.strip_prefix("//").unwrap_or(r))
+            .and_then(|r| r.strip_prefix("/stubs/"))
         {
             let rest = percent_decode(rest);
             return Some(PathBuf::from(format!("stubs://{rest}")));
@@ -102,4 +105,28 @@ fn percent_decode(text: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stub_uris_both_ways() {
+        for uri in [
+            "stirphp:///stubs/Core/Core.php",
+            "stirphp:/stubs/Core/Core.php",
+        ] {
+            let path = Virtual.path(&uri.parse().unwrap()).unwrap();
+            assert_eq!(path, Path::new("stubs://Core/Core.php"), "{uri}");
+        }
+        let path = Virtual
+            .path(&"file:///p/a%20b.php".parse().unwrap())
+            .unwrap();
+        assert_eq!(path, Path::new("/p/a b.php"));
+        assert_eq!(
+            Virtual.path_uri(&path).unwrap().as_str(),
+            "file:///p/a%20b.php"
+        );
+    }
 }

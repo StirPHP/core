@@ -87,7 +87,16 @@ export async function serve(port, options = {}) {
     }
   }
 
+  /** @type {{memory: WebAssembly.Memory} | null} */
+  let exports = null;
   port.addEventListener('message', (event) => {
+    const m = /** @type {any} */ (event.data);
+    // how much memory the server has, which only this side can say
+    if (m && m.method === 'stirphp/memory' && m.id !== undefined) {
+      const bytes = exports === null ? 0 : exports.memory.buffer.byteLength;
+      port.postMessage({ jsonrpc: '2.0', id: m.id, result: { bytes } });
+      return;
+    }
     queue.push(event.data);
     schedule(0);
   });
@@ -96,7 +105,7 @@ export async function serve(port, options = {}) {
     /** @type {any} */ (port).start();
   }
 
-  await init(options.wasm === undefined ? undefined : { module_or_path: options.wasm });
+  exports = await init(options.wasm === undefined ? undefined : { module_or_path: options.wasm });
   server = new LanguageServer((/** @type {unknown} */ message) => port.postMessage(message));
   schedule(0);
 }
