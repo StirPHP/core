@@ -14,3 +14,7 @@
 	path = crates/stir_stubs/phpstorm-stubs
 	url = https://github.com/JetBrains/phpstorm-stubs
 	shallow = true
+[submodule "corpus/laravel-io"]
+	path = corpus/laravel-io
+	url = https://github.com/laravelio/laravel.io
+	shallow = true

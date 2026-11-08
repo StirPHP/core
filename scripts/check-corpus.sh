@@ -10,7 +10,7 @@ label="${1:?usage: check-corpus.sh <label> [project...]}"
 shift
 projects=("$@")
 if [ "${#projects[@]}" -eq 0 ]; then
-  projects=(framework phpstan-src symfony)
+  projects=(framework phpstan-src symfony laravel-io)
 fi
 
 (cd "$root" && cargo build -q --release -p stir_cli)
