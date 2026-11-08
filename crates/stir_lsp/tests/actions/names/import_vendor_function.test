@@ -1,0 +1,17 @@
+=== action: Import function `Acme\Support\collect`
+=== fixes: function.notFound
+=== file: /vendor/acme/support/src/helpers.php
+<?php
+namespace Acme\Support;
+function collect(array $items): array { return $items; }
+=== input
+<?php
+namespace App;
+$x = coll‸ect([]);
+=== output
+<?php
+namespace App;
+
+use function Acme\Support\collect;
+
+$x = collect([]);

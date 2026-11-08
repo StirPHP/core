@@ -1,0 +1,21 @@
+=== action: Change to `Acme\Db\Connection`
+=== fixes: class.notFound
+=== file: /vendor/acme/db/src/Connection.php
+<?php
+namespace Acme\Db;
+class Connection {}
+=== file: /vendor/acme/net/src/Connection.php
+<?php
+namespace Acme\Net;
+class Connection {}
+=== input
+<?php
+namespace App;
+new Conection‸();
+=== output
+<?php
+namespace App;
+
+use Acme\Db\Connection;
+
+new Connection();

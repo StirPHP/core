@@ -7,7 +7,9 @@
 //! === crlf                      (optional: the files have CRLF line endings)
 //! === fixes: class.notFound     (optional: this is gone afterwards)
 //! === new: a.b                  (optional: this may be new afterwards)
-//! === file: /src/Other.php      (any number of other files)
+//! === extensions: redis, amqp   (optional: the extensions Composer's files declare)
+//! === file: /src/Other.php      (any number of other files; under /vendor/ a dependency's, and
+//!                               stubs://redis/Redis.php a stub of PHP's or an extension's)
 //! <?php ...
 //! === input
 //! <?php ...  ‸ the cursor, or ⟦a selection⟧
@@ -35,6 +37,7 @@ struct Fixture {
     php: Option<String>,
     level: Option<u8>,
     crlf: bool,
+    extensions: Option<Vec<String>>,
     fixes: Vec<String>,
     new: Vec<String>,
     others: Vec<(String, String)>,
@@ -83,6 +86,9 @@ fn parse_fixture(text: &str) -> Fixture {
             "php" => f.php = Some(rest.to_owned()),
             "level" => f.level = rest.parse().ok(),
             "crlf" => f.crlf = true,
+            "extensions" => {
+                f.extensions = Some(rest.split(',').map(|e| e.trim().to_owned()).collect());
+            }
             "fixes" => f.fixes.push(rest.to_owned()),
             "new" => f.new.push(rest.to_owned()),
             "file" => part = Part::File(rest.to_owned()),
@@ -159,6 +165,7 @@ struct Bench {
 fn settings(f: &Fixture) -> Settings {
     let mut settings = Settings {
         php_level: f.level.unwrap_or(5),
+        declared_extensions: f.extensions.clone(),
         ..Settings::default()
     };
     if let Some(php) = &f.php {
@@ -193,12 +200,16 @@ fn run(bench: &mut Bench, f: &Fixture) -> Result<(), String> {
     );
     let mut others = Vec::new();
     for (path, text) in &f.others {
-        others.push(SourceFile::new(
-            db,
-            path.into(),
-            crlf(text, f.crlf),
-            FileOrigin::Source,
-        ));
+        // a file under `/vendor/` is a dependency's, as the server has them, and a `stubs://`
+        // one a stub of PHP's or an extension's
+        let origin = if path.starts_with("/vendor/") {
+            FileOrigin::Vendor
+        } else if path.starts_with("stubs://") {
+            FileOrigin::Stub
+        } else {
+            FileOrigin::Source
+        };
+        others.push(SourceFile::new(db, path.into(), crlf(text, f.crlf), origin));
     }
     let mut files = bench.stubs.clone();
     files.push(file);

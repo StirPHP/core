@@ -1,0 +1,17 @@
+=== action: Import `DB`
+=== fixes: class.notFound
+=== extensions: mbstring
+=== file: stubs://frameworks/laravel/aliases.php
+<?php
+class DB { public static function table(string $name): array { return []; } }
+=== input
+<?php
+namespace App\Http;
+$rows = D‸B::table('users');
+=== output
+<?php
+namespace App\Http;
+
+use DB;
+
+$rows = DB::table('users');

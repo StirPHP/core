@@ -1,0 +1,17 @@
+=== action: Import `Redis`
+=== fixes: class.notFound
+=== extensions: redis
+=== file: stubs://redis/Redis.php
+<?php
+class Redis {}
+=== input
+<?php
+namespace App;
+$r = new Re‸dis();
+=== output
+<?php
+namespace App;
+
+use Redis;
+
+$r = new Redis();

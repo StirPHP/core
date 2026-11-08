@@ -1,0 +1,21 @@
+=== action: Import `Illuminate\Support\Collection`
+=== fixes: class.notFound
+=== file: /vendor/laravel/framework/src/Illuminate/Support/Collection.php
+<?php
+namespace Illuminate\Support;
+class Collection {}
+=== file: /src/Support/Collection.php
+<?php
+namespace App\Support;
+class Collection {}
+=== input
+<?php
+namespace App\Http;
+new Coll‸ection([]);
+=== output
+<?php
+namespace App\Http;
+
+use Illuminate\Support\Collection;
+
+new Collection([]);

@@ -474,3 +474,50 @@ async fn an_unused_import_is_greyed_out_only_in_the_editor() {
     assert_eq!(diags[0]["tags"][0], 1);
     assert_eq!(diags[0]["range"]["start"]["line"], 1);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_class_of_a_package_is_imported_after_the_projects() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    write(
+        &root.join("composer.json"),
+        r#"{"require": {"acme/lib": "^1.0"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+    );
+    write(
+        &root.join("vendor/composer/installed.json"),
+        r#"{"packages": [{"name": "acme/lib", "version": "1.0.0", "install-path": "../acme/lib",
+            "autoload": {"psr-4": {"Acme\\": "src/"}}}], "dev": true}"#,
+    );
+    write(
+        &root.join("vendor/acme/lib/src/Carbon.php"),
+        "<?php\nnamespace Acme;\nclass Carbon {}\n",
+    );
+    write(
+        &root.join("src/Support/Carbon.php"),
+        "<?php\nnamespace App\\Support;\nclass Carbon {}\n",
+    );
+    let main = root.join("src/main.php");
+    let text = "<?php\nnamespace App;\n\nnew Carbon();\n";
+    write(&main, text);
+    let doc = uri(&main);
+    let mut c = start(&root, full_capabilities(), json!({})).await;
+    open(&mut c, &main, 1, text).await;
+    let diags = settled(&mut c, &doc, "class.notFound", 1).await;
+
+    let actions = actions_at(&mut c, &doc, range_at(3, 4, 10), json!(diags)).await;
+    let titles: Vec<&str> = actions.iter().filter_map(|a| a["title"].as_str()).collect();
+    let at = |t: &str| {
+        titles
+            .iter()
+            .position(|x| *x == t)
+            .unwrap_or_else(|| panic!("no `{t}` among {titles:?}"))
+    };
+    assert!(at("Import `App\\Support\\Carbon`") < at("Import `Acme\\Carbon`"));
+    let import = titled(&actions, "Import `Acme\\Carbon`");
+    let resolved = c.request("codeAction/resolve", import.clone()).await;
+    let (edits, _) = edits_for(&resolved["edit"], &doc);
+    assert_eq!(
+        apply_edits(text, &edits),
+        "<?php\nnamespace App;\n\nuse Acme\\Carbon;\n\nnew Carbon();\n"
+    );
+}

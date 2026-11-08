@@ -1,0 +1,17 @@
+=== action: Change to `Collection`
+=== fixes: class.notFound
+=== file: /vendor/laravel/framework/src/Illuminate/Support/Collection.php
+<?php
+namespace Illuminate\Support;
+class Collection {}
+=== input
+<?php
+namespace App;
+new Colection‸([]);
+=== output
+<?php
+namespace App;
+
+use Illuminate\Support\Collection;
+
+new Collection([]);

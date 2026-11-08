@@ -1,0 +1,10 @@
+=== action: Import `Redis`
+=== extensions: mbstring
+=== file: stubs://redis/Redis.php
+<?php
+class Redis {}
+=== input
+<?php
+namespace App;
+$r = new Re‸dis();
+=== no-offer

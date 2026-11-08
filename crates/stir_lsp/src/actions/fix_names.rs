@@ -4,7 +4,7 @@ use rustc_hash::FxHashSet;
 use smol_str::SmolStr;
 use stir_checker::model_api::{self, MemberTy};
 use stir_checker::{Def, codes};
-use stir_db::{FileOrigin, SourceFile};
+use stir_db::SourceFile;
 use stir_hir::name::Fqn;
 use stir_hir::{ClassKind, Visibility, file_items};
 use stir_syntax::{SyntaxKind::*, SyntaxNode, TextRange};
@@ -93,6 +93,16 @@ fn namespace_distance(fqn: &Fqn, namespace: &str) -> usize {
     theirs.len() + ours.len() - 2 * shared
 }
 
+/// What puts one candidate before another: the project's own, then its dependencies', then PHP's
+/// and its extensions'; among those, the nearest namespace, then the shortest name.
+fn rank(db: &dyn stir_db::Db, file: SourceFile, name: &Fqn, namespace: &str) -> (u8, usize, usize) {
+    (
+        stir_hir::DefIndex::rank(file.origin(db)),
+        namespace_distance(name, namespace),
+        name.as_str().len(),
+    )
+}
+
 /// Which classes fit where the name is written.
 fn fits(node: Option<&SyntaxNode>, kind: ClassKind, is_abstract: bool, code: &str) -> bool {
     match code {
@@ -114,6 +124,24 @@ fn fits(node: Option<&SyntaxNode>, kind: ClassKind, is_abstract: bool, code: &st
         Some(TRAIT_USE) => kind == ClassKind::Trait,
         _ => true,
     }
+}
+
+/// The titles of the corrections to `names`: the short name, or the whole where two corrections
+/// share a short name, so that they can be told apart.
+fn typo_titles(names: &[&Fqn]) -> Vec<String> {
+    names
+        .iter()
+        .map(|fqn| {
+            let short = fqn.short();
+            let shared = names
+                .iter()
+                .filter(|other| other.short().eq_ignore_ascii_case(short))
+                .count()
+                > 1;
+            let shown = if shared { fqn.as_str() } else { short };
+            format!("Change to `{shown}`")
+        })
+        .collect()
 }
 
 /// One way of writing an unknown name right: what it comes to, with the import that takes.
@@ -179,15 +207,7 @@ fn class_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
         if !fits(node.as_ref(), def.kind, def.mods.is_abstract, &d.code) {
             continue;
         }
-        let rank = (
-            match loc.file.origin(db) {
-                FileOrigin::Source => 0,
-                FileOrigin::Vendor => 1,
-                FileOrigin::Stub => 2,
-            },
-            namespace_distance(&def.name, &namespace),
-            def.name.as_str().len(),
-        );
+        let rank = rank(db, loc.file, &def.name, &namespace);
         if same {
             exact.push((rank, def.name.clone()));
         } else if let Some(typo) = typo {
@@ -240,13 +260,14 @@ fn class_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
             .then_with(|| a.2.as_str().cmp(b.2.as_str()))
     });
     close.truncate(MAX_TYPOS);
-    for (_, _, fqn) in close {
+    let titles = typo_titles(&close.iter().map(|(_, _, fqn)| fqn).collect::<Vec<_>>());
+    for ((_, _, fqn), title) in close.into_iter().zip(titles) {
         let name = imports.class(db, cx.ws, &fqn);
         let range = d.range;
         out.push(
             Offer::new(
                 format!("typo.class:{}", fqn.key()),
-                format!("Change to `{}`", fqn.short()),
+                title,
                 Kind::QuickFix,
                 {
                     let text = name.text.clone();
@@ -292,10 +313,7 @@ fn function_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
             continue;
         }
         let def = &file_items(db, loc.file).functions[loc.index as usize];
-        let rank = (
-            namespace_distance(&def.name, &namespace),
-            def.name.as_str().len(),
-        );
+        let rank = rank(db, loc.file, &def.name, &namespace);
         if same {
             exact.push((rank, def.name.clone()));
         } else if let Some(typo) = typo {
@@ -331,13 +349,14 @@ fn function_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
             .then_with(|| a.2.as_str().cmp(b.2.as_str()))
     });
     close.truncate(MAX_TYPOS);
-    for (_, _, fqn) in close {
+    let titles = typo_titles(&close.iter().map(|(_, _, fqn)| fqn).collect::<Vec<_>>());
+    for ((_, _, fqn), title) in close.into_iter().zip(titles) {
         let name = imports.function(db, cx.ws, &fqn);
         let range = d.range;
         out.push(
             Offer::new(
                 format!("typo.function:{}", fqn.key()),
-                format!("Change to `{}`", fqn.short()),
+                title,
                 Kind::QuickFix,
                 move || Ok(import_change(cx, range, name.text, name.import)),
             )
@@ -355,9 +374,13 @@ fn constant_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
     let Some(imports) = Imports::new(db, cx.file, d.range.start()) else {
         return;
     };
+    let namespace = file_items(db, cx.file)
+        .scope_at(d.range.start())
+        .namespace
+        .clone();
     let bare = written.trim_start_matches('\\');
     let short = bare.rsplit('\\').next().unwrap_or(bare);
-    let mut exact: Vec<Fqn> = Vec::new();
+    let mut exact = Vec::new();
     let mut close = Vec::new();
     for (key, locs) in &index.consts {
         let Some(loc) = locs.first() else { continue };
@@ -375,16 +398,17 @@ fn constant_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
             continue;
         }
         let def = &file_items(db, loc.file).consts[loc.index as usize];
+        let rank = rank(db, loc.file, &def.name, &namespace);
         if same {
-            exact.push(def.name.clone());
+            exact.push((rank, def.name.clone()));
         } else if let Some(typo) = typo {
-            close.push((typo, def.name.clone()));
+            close.push((typo, rank, def.name.clone()));
         }
     }
-    exact.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    exact.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.as_str().cmp(b.1.as_str())));
     exact.truncate(MAX_IMPORTS);
     let single = exact.len() == 1;
-    for fqn in exact {
+    for (_, fqn) in exact {
         let name = imports.constant(db, cx.ws, &fqn);
         let title = if name.import.is_some() {
             format!("Import constant `{}`", fqn.as_str())
@@ -404,15 +428,20 @@ fn constant_name<'c>(cx: &'c Cx<'c>, d: &Found, out: &mut Vec<Offer<'c>>) {
         }
         out.push(offer);
     }
-    close.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.as_str().cmp(b.1.as_str())));
+    close.sort_by(|a, b| {
+        (a.0, a.1)
+            .cmp(&(b.0, b.1))
+            .then_with(|| a.2.as_str().cmp(b.2.as_str()))
+    });
     close.truncate(MAX_TYPOS);
-    for (_, fqn) in close {
+    let titles = typo_titles(&close.iter().map(|(_, _, fqn)| fqn).collect::<Vec<_>>());
+    for ((_, _, fqn), title) in close.into_iter().zip(titles) {
         let name = imports.constant(db, cx.ws, &fqn);
         let range = d.range;
         out.push(
             Offer::new(
                 format!("typo.const:{}", fqn.as_str()),
-                format!("Change to `{}`", fqn.short()),
+                title,
                 Kind::QuickFix,
                 move || Ok(import_change(cx, range, name.text, name.import)),
             )

@@ -386,7 +386,8 @@ pub fn enclosing_function(node: &SyntaxNode) -> Option<SyntaxNode> {
 }
 
 /// A stub of an extension that isn't PHP's own is only offered if Composer's files mention the
-/// extension, or there aren't any. It's still known to the checker: code can test for it.
+/// extension, or there aren't any. It's still known to the checker: code can test for it. Every
+/// other stub is offered: PHP's own, a framework's, PHPStan's and a project's own stub files.
 pub fn extension_is_offered(db: &dyn Db, ws: Workspace, file: SourceFile) -> bool {
     let Some(declared) = &ws.settings(db).declared_extensions else {
         return true;
@@ -395,9 +396,11 @@ pub fn extension_is_offered(db: &dyn Db, ws: Workspace, file: SourceFile) -> boo
         return true;
     }
     let path = file.path(db).to_string_lossy();
-    let path = path.strip_prefix("stubs://").unwrap_or(&path);
+    let Some(path) = path.strip_prefix("stubs://") else {
+        return true;
+    };
     let extension = path.split('/').next().unwrap_or_default();
-    stir_stubs::ships_with_php(extension)
-        || extension == "override"
+    !stir_stubs::extensions().contains(&extension)
+        || stir_stubs::ships_with_php(extension)
         || declared.iter().any(|d| d.eq_ignore_ascii_case(extension))
 }

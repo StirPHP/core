@@ -1,0 +1,13 @@
+=== action: Import `DateTimeImmutable`
+=== fixes: class.notFound
+=== input
+<?php
+namespace App;
+$d = new DateTime‸Immutable();
+=== output
+<?php
+namespace App;
+
+use DateTimeImmutable;
+
+$d = new DateTimeImmutable();

@@ -1,0 +1,17 @@
+=== action: Import `Carbon\Carbon`
+=== fixes: class.notFound
+=== file: /vendor/nesbot/carbon/src/Carbon/Carbon.php
+<?php
+namespace Carbon;
+class Carbon { public static function now(): static { return new static(); } }
+=== input
+<?php
+namespace App\Http;
+$now = Car‸bon::now();
+=== output
+<?php
+namespace App\Http;
+
+use Carbon\Carbon;
+
+$now = Carbon::now();
