@@ -1,0 +1,12 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"a @use(function A\\\\b, C) b\")"
+---
+SOURCE_FILE
+  INLINE_HTML_STMT
+    INLINE_HTML "a "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@use"
+    BLADE_RAW_ARGS "(function A\\b, C)"
+  INLINE_HTML_STMT
+    INLINE_HTML " b"

@@ -1,0 +1,14 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"👋 {{ 'سلام' }} 👋\")"
+---
+SOURCE_FILE
+  INLINE_HTML_STMT
+    INLINE_HTML "👋 "
+  ECHO_TAG_STMT
+    OPEN_TAG_WITH_ECHO "{{"
+    STRING_LITERAL
+      STRING_SINGLE "'سلام'"
+  CLOSE_TAG "}}"
+  INLINE_HTML_STMT
+    INLINE_HTML " 👋"

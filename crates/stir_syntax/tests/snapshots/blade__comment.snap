@@ -1,0 +1,10 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"a{{-- {{ $a }} @if <?php --}}b\")"
+---
+SOURCE_FILE
+  INLINE_HTML_STMT
+    INLINE_HTML "a"
+  BLADE_COMMENT "{{-- {{ $a }} @if <?php --}}"
+  INLINE_HTML_STMT
+    INLINE_HTML "b"

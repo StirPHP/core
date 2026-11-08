@@ -1,0 +1,41 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@for ($i = 0; $i < 3; $i++) {{ $i }} @endfor\")"
+---
+SOURCE_FILE
+  FOR_STMT
+    FOR_KW "@for"
+    L_PAREN "("
+    FOR_INIT
+      ASSIGN_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$i"
+        EQ "="
+        LITERAL
+          INT_NUMBER "0"
+    SEMI ";"
+    FOR_COND
+      BIN_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$i"
+        L_ANGLE "<"
+        LITERAL
+          INT_NUMBER "3"
+    SEMI ";"
+    FOR_STEP
+      POSTFIX_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$i"
+        INC "++"
+    R_PAREN ")"
+    BLOCK
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+      ECHO_TAG_STMT
+        OPEN_TAG_WITH_ECHO "{{"
+        VARIABLE_EXPR
+          VARIABLE "$i"
+      CLOSE_TAG "}}"
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+    ENDFOR_KW "@endfor"

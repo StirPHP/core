@@ -1,0 +1,39 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@forelse ($a as $b)@forelse ($b as $c)@empty x @endforelse @empty y @endforelse\")"
+---
+SOURCE_FILE
+  FOREACH_STMT
+    FOREACH_KW "@forelse"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$a"
+    AS_KW "as"
+    VARIABLE_EXPR
+      VARIABLE "$b"
+    R_PAREN ")"
+    BLOCK
+      FOREACH_STMT
+        FOREACH_KW "@forelse"
+        L_PAREN "("
+        VARIABLE_EXPR
+          VARIABLE "$b"
+        AS_KW "as"
+        VARIABLE_EXPR
+          VARIABLE "$c"
+        R_PAREN ")"
+        BLOCK
+        ENDFOREACH_KW "@empty"
+      IF_STMT
+        BLOCK
+          INLINE_HTML_STMT
+            INLINE_HTML " x "
+        ENDIF_KW "@endforelse"
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+    ENDFOREACH_KW "@empty"
+  IF_STMT
+    BLOCK
+      INLINE_HTML_STMT
+        INLINE_HTML " y "
+    ENDIF_KW "@endforelse"

@@ -1,0 +1,22 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_err(\"{{ $a + }}<p>{{ $b }}</p>\")"
+---
+SOURCE_FILE
+  ECHO_TAG_STMT
+    OPEN_TAG_WITH_ECHO "{{"
+    BIN_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$a"
+      PLUS "+"
+  CLOSE_TAG "}}"
+  INLINE_HTML_STMT
+    INLINE_HTML "<p>"
+  ECHO_TAG_STMT
+    OPEN_TAG_WITH_ECHO "{{"
+    VARIABLE_EXPR
+      VARIABLE "$b"
+  CLOSE_TAG "}}"
+  INLINE_HTML_STMT
+    INLINE_HTML "</p>"
+error 8..10: expected an expression

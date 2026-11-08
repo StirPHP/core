@@ -1,0 +1,56 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@lang(foo('a)')) @include('b', ['c))' => '(d))'])) @each('e', 'f)g')\")"
+---
+SOURCE_FILE
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@lang"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        CALL_EXPR
+          NAME_EXPR
+            NAME_REF
+              IDENT "foo"
+          ARG_LIST
+            L_PAREN "("
+            ARG
+              STRING_LITERAL
+                STRING_SINGLE "'a)'"
+            R_PAREN ")"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@include"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'b'"
+      COMMA ","
+      ARG
+        ARRAY_EXPR
+          L_BRACK "["
+          ARRAY_ELEM
+            STRING_LITERAL
+              STRING_SINGLE "'c))'"
+            FAT_ARROW "=>"
+            STRING_LITERAL
+              STRING_SINGLE "'(d))'"
+          R_BRACK "]"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML ") "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@each"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'e'"
+      COMMA ","
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'f)g'"
+      R_PAREN ")"

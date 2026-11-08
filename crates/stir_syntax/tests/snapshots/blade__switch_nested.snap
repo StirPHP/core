@@ -1,0 +1,31 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@switch($a)@case(1)@switch($b)@default @endswitch @endswitch\")"
+---
+SOURCE_FILE
+  SWITCH_STMT
+    SWITCH_KW "@switch"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$a"
+    R_PAREN ")"
+    SWITCH_CASE
+      CASE_KW "@case"
+      L_PAREN "("
+      LITERAL
+        INT_NUMBER "1"
+      R_PAREN ")"
+      SWITCH_STMT
+        SWITCH_KW "@switch"
+        L_PAREN "("
+        VARIABLE_EXPR
+          VARIABLE "$b"
+        R_PAREN ")"
+        SWITCH_CASE
+          DEFAULT_KW "@default"
+          INLINE_HTML_STMT
+            INLINE_HTML " "
+        ENDSWITCH_KW "@endswitch"
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+    ENDSWITCH_KW "@endswitch"

@@ -1,0 +1,12 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_err(\"@if a @endif\")"
+---
+SOURCE_FILE
+  IF_STMT
+    IF_KW "@if"
+    BLOCK
+      INLINE_HTML_STMT
+        INLINE_HTML " a "
+    ENDIF_KW "@endif"
+error 3..6: expected a condition in `(...)`

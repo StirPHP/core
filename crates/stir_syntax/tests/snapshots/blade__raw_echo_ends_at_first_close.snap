@@ -1,0 +1,13 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_err(\"{!! '!!}' !!}\")"
+---
+SOURCE_FILE
+  ECHO_TAG_STMT
+    OPEN_TAG_WITH_ECHO "{!!"
+    STRING_LITERAL
+      STRING_SINGLE "'"
+  CLOSE_TAG "!!}"
+  INLINE_HTML_STMT
+    INLINE_HTML "' !!}"
+error 4..4: unterminated string

@@ -1,0 +1,18 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_err(\"@foreach ($a as $b) c\")"
+---
+SOURCE_FILE
+  FOREACH_STMT
+    FOREACH_KW "@foreach"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$a"
+    AS_KW "as"
+    VARIABLE_EXPR
+      VARIABLE "$b"
+    R_PAREN ")"
+    BLOCK
+      INLINE_HTML_STMT
+        INLINE_HTML " c"
+error 21..21: expected `@endforeach`

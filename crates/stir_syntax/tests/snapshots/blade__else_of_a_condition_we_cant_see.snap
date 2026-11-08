@@ -1,0 +1,11 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@feature('a') b @else c @endfeature\")"
+---
+SOURCE_FILE
+  INLINE_HTML_STMT
+    INLINE_HTML "@feature('a') b "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@else"
+  INLINE_HTML_STMT
+    INLINE_HTML " c @endfeature"

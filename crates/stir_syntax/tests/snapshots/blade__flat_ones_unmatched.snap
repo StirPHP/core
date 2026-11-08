@@ -1,0 +1,41 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@endsection @endpush @stop @show @endauth @endcan @endslot @section('a')\")"
+---
+SOURCE_FILE
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@endsection"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@endpush"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@stop"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@show"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@endauth"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@endcan"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@endslot"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@section"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'a'"
+      R_PAREN ")"

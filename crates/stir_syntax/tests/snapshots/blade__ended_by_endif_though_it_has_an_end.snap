@@ -1,0 +1,11 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@auth a @endif\")"
+---
+SOURCE_FILE
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@auth"
+  INLINE_HTML_STMT
+    INLINE_HTML " a "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@endif"

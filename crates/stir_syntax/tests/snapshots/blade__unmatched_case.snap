@@ -1,0 +1,21 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_err(\"@case(1) a @default b\")"
+---
+SOURCE_FILE
+  ERROR
+    CASE_KW "@case"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        LITERAL
+          INT_NUMBER "1"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML " a "
+  ERROR
+    DEFAULT_KW "@default"
+  INLINE_HTML_STMT
+    INLINE_HTML " b"
+error 0..5: unmatched `@case`
+error 11..19: unmatched `@default`

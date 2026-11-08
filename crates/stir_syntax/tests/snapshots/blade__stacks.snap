@@ -1,0 +1,45 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@push('a') b @endpush @pushOnce('c', 'd') e @endPushOnce @stack('f')\")"
+---
+SOURCE_FILE
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@push"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'a'"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML " b "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@endpush"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@pushOnce"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'c'"
+      COMMA ","
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'d'"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML " e "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@endPushOnce"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@stack"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'f'"
+      R_PAREN ")"

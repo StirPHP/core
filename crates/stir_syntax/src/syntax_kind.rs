@@ -12,6 +12,10 @@ pub enum SyntaxKind {
     WHITESPACE = 0,
     COMMENT,
     DOC_COMMENT,
+    /// `{{-- ... --}}`
+    BLADE_COMMENT,
+    /// The parentheses of a Blade directive that doesn't take any, which it ignores.
+    BLADE_IGNORED_ARGS,
 
     // ---- file structure ----
     INLINE_HTML,
@@ -21,6 +25,12 @@ pub enum SyntaxKind {
     /// Raw data after `__halt_compiler();`.
     HALT_DATA,
     ERROR_TOKEN,
+
+    // ---- Blade ----
+    /// `@name` of a directive that has no statement of its own.
+    BLADE_DIRECTIVE_NAME,
+    /// The parentheses of a directive whose arguments aren't PHP, with what's in them.
+    BLADE_RAW_ARGS,
 
     // ---- literals and names ----
     INT_NUMBER,
@@ -267,6 +277,8 @@ pub enum SyntaxKind {
     LABEL_STMT,
     HALT_COMPILER_STMT,
     EMPTY_STMT,
+    /// A Blade directive that isn't control flow: its name and arguments, `@section('title')`.
+    BLADE_DIRECTIVE,
 
     // declarations: parts
     MODIFIERS,
@@ -366,7 +378,10 @@ use SyntaxKind::*;
 
 impl SyntaxKind {
     pub fn is_trivia(self) -> bool {
-        matches!(self, WHITESPACE | COMMENT | DOC_COMMENT)
+        matches!(
+            self,
+            WHITESPACE | COMMENT | DOC_COMMENT | BLADE_COMMENT | BLADE_IGNORED_ARGS
+        )
     }
 
     pub fn is_keyword(self) -> bool {

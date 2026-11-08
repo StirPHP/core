@@ -18,7 +18,13 @@ fn main() {
         };
         files += 1;
         bytes += src.len();
-        let parse = std::panic::catch_unwind(|| stir_syntax::parse(&src));
+        let parse = std::panic::catch_unwind(|| {
+            if stir_syntax::is_blade_path(path) {
+                stir_syntax::parse_blade(&src)
+            } else {
+                stir_syntax::parse(&src)
+            }
+        });
         let parse = match parse {
             Ok(p) => p,
             Err(_) => {

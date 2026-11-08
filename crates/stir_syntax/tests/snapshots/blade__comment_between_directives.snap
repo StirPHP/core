@@ -1,0 +1,14 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@if ($a){{-- b --}}@endif\")"
+---
+SOURCE_FILE
+  IF_STMT
+    IF_KW "@if"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$a"
+    R_PAREN ")"
+    BLADE_COMMENT "{{-- b --}}"
+    BLOCK
+    ENDIF_KW "@endif"

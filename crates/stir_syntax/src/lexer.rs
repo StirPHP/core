@@ -4,10 +4,18 @@
 //! mode (operators, names, numbers, casts) are recognised by a [`logos`]
 //! automaton; everything context-sensitive (inline HTML, comments ending at
 //! `?>`, strings with interpolation, heredocs) is scanned by hand.
+//!
+//! A Blade template differs only in what its HTML holds. [`lex_blade`] finds echos and directives
+//! there as Laravel's compiler does, and hands what they contain to the same code mode, stopped
+//! at their end. They use the tokens of what they compile to: `{{` is an `OPEN_TAG_WITH_ECHO` and
+//! `}}` a `CLOSE_TAG`, `@php` an `OPEN_TAG` and `@endphp` a `CLOSE_TAG`, `@foreach` a `FOREACH_KW`.
 
 use logos::Logos;
 
-use crate::{SyntaxKind, SyntaxKind::*};
+use crate::{
+    SyntaxKind::{self, *},
+    blade::{self, Args},
+};
 
 /// A lexed token: its kind and its length in bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -271,6 +279,8 @@ impl Raw {
 #[derive(Debug, Clone)]
 enum Mode {
     Html,
+    /// The HTML of a Blade template.
+    BladeHtml,
     Code,
     /// Code inside `{$ ... }` / `${ ... }` of a string; pops at the matching `}`.
     InterpCode {
@@ -289,17 +299,45 @@ struct Lexer<'a> {
     modes: Vec<Mode>,
     out: Lexed,
     halted: bool,
+    /// Where the input stops for now: the end of `src`, or that of the Blade region being lexed.
+    limit: usize,
+    blade: bool,
+    in_blade_region: bool,
+    /// The `{{ ... }}` of an `@{{ ... }}`, and the like: text up to here.
+    no_echo_until: usize,
+    /// The arguments of a directive that's left as text: what's in them isn't compiled.
+    no_directive_until: usize,
 }
 
-/// Tokenizes `src`. The token lengths always sum to `src.len()`.
+impl<'a> Lexer<'a> {
+    fn new(src: &'a str, mode: Mode) -> Lexer<'a> {
+        Lexer {
+            src,
+            pos: 0,
+            blade: matches!(mode, Mode::BladeHtml),
+            modes: vec![mode],
+            out: Lexed::default(),
+            halted: false,
+            limit: src.len(),
+            in_blade_region: false,
+            no_echo_until: 0,
+            no_directive_until: 0,
+        }
+    }
+}
+
+/// Tokenizes PHP source. The token lengths always sum to `src.len()`.
 pub fn lex(src: &str) -> Lexed {
-    let mut lexer = Lexer {
-        src,
-        pos: 0,
-        modes: vec![Mode::Html],
-        out: Lexed::default(),
-        halted: false,
-    };
+    run_lexer(src, Mode::Html)
+}
+
+/// Tokenizes a Blade template. The token lengths always sum to `src.len()`.
+pub fn lex_blade(src: &str) -> Lexed {
+    run_lexer(src, Mode::BladeHtml)
+}
+
+fn run_lexer(src: &str, mode: Mode) -> Lexed {
+    let mut lexer = Lexer::new(src, mode);
     lexer.run();
     debug_assert_eq!(
         lexer
@@ -321,6 +359,81 @@ fn is_ident_continue(b: u8) -> bool {
     is_ident_start(b) || b.is_ascii_digit()
 }
 
+/// `\w` of a regular expression without the `u` flag, which is what Blade's are.
+fn is_blade_word(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Where `needle` is in `hay`, looking from `from` on.
+fn find_from(hay: &str, needle: &str, from: usize) -> Option<usize> {
+    let from = (from..=hay.len()).find(|&i| hay.is_char_boundary(i))?;
+    hay[from..].find(needle).map(|i| from + i)
+}
+
+/// The open tag at the start of `rest`, if there's one: its length and kind.
+fn open_tag_at(rest: &str) -> Option<(usize, SyntaxKind)> {
+    let after = rest.strip_prefix("<?")?;
+    if after.starts_with('=') {
+        return Some((3, OPEN_TAG_WITH_ECHO));
+    }
+    if after.len() >= 3 && after.as_bytes()[..3].eq_ignore_ascii_case(b"php") {
+        match after.as_bytes().get(3) {
+            None => return Some((5, OPEN_TAG)),
+            Some(b' ' | b'\t' | b'\n') => return Some((6, OPEN_TAG)),
+            Some(b'\r') => {
+                let len = if after.as_bytes().get(4) == Some(&b'\n') {
+                    7
+                } else {
+                    6
+                };
+                return Some((len, OPEN_TAG));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// What's at the `(` of a directive.
+enum ArgsEnd {
+    /// The offset after its `)`.
+    Balanced(usize),
+    /// It has a `)` but no balanced one, which leaves the whole directive as text.
+    Unbalanced,
+    /// No `)` at all, which leaves the `(` as text after a directive without arguments.
+    Unclosed,
+}
+
+/// Finds the `)` that closes the `(` at `open`, by tokens, so not in a string or a comment. This
+/// is Blade's `hasEvenNumberOfParentheses`: it uses PHP's tokenizer for this too.
+fn args_end(src: &str, open: usize) -> ArgsEnd {
+    let start = open + 1;
+    let mut lexer = Lexer::new(&src[start..], Mode::Code);
+    let (mut depth, mut seen, mut offset) = (1u32, 0, start);
+    while lexer.pos < lexer.limit {
+        lexer.step();
+        for token in &lexer.out.tokens[seen..] {
+            offset += token.len as usize;
+            match token.kind {
+                L_PAREN => depth += 1,
+                R_PAREN => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return ArgsEnd::Balanced(offset);
+                    }
+                }
+                _ => {}
+            }
+        }
+        seen = lexer.out.tokens.len();
+    }
+    if src[start..].contains(')') {
+        ArgsEnd::Unbalanced
+    } else {
+        ArgsEnd::Unclosed
+    }
+}
+
 /// Does an interpolation start at the beginning of `b`?
 fn interpolation_at(b: &[u8]) -> Option<SyntaxKind> {
     match (b.first(), b.get(1)) {
@@ -333,7 +446,7 @@ fn interpolation_at(b: &[u8]) -> Option<SyntaxKind> {
 
 impl<'a> Lexer<'a> {
     fn rest(&self) -> &'a str {
-        &self.src[self.pos..]
+        &self.src[self.pos..self.limit]
     }
 
     fn bytes(&self) -> &'a [u8] {
@@ -362,23 +475,28 @@ impl<'a> Lexer<'a> {
 
     fn run(&mut self) {
         while self.pos < self.src.len() {
-            if self.halted {
-                let len = self.src.len() - self.pos;
-                self.push(HALT_DATA, len);
-                break;
-            }
-            match self
-                .modes
-                .last()
-                .cloned()
-                .expect("mode stack is never empty")
-            {
-                Mode::Html => self.lex_html(),
-                Mode::Code | Mode::InterpCode { .. } => self.lex_code(),
-                Mode::DoubleQuote => self.lex_string_part(b'"'),
-                Mode::Backtick => self.lex_string_part(b'`'),
-                Mode::Heredoc { label } => self.lex_heredoc_part(&label),
-            }
+            self.step();
+        }
+    }
+
+    fn step(&mut self) {
+        if self.halted {
+            let len = self.limit - self.pos;
+            self.push(HALT_DATA, len);
+            return;
+        }
+        match self
+            .modes
+            .last()
+            .cloned()
+            .expect("mode stack is never empty")
+        {
+            Mode::Html => self.lex_html(),
+            Mode::BladeHtml => self.lex_blade_html(),
+            Mode::Code | Mode::InterpCode { .. } => self.lex_code(),
+            Mode::DoubleQuote => self.lex_string_part(b'"'),
+            Mode::Backtick => self.lex_string_part(b'`'),
+            Mode::Heredoc { label } => self.lex_heredoc_part(&label),
         }
     }
 
@@ -390,26 +508,8 @@ impl<'a> Lexer<'a> {
                 None => break None,
                 Some(i) => {
                     let at = search + i;
-                    let after = &rest[at + 2..];
-                    if after.starts_with('=') {
-                        break Some((at, 3, OPEN_TAG_WITH_ECHO));
-                    }
-                    if after.len() >= 3 && after[..3].eq_ignore_ascii_case("php") {
-                        let tail = after.as_bytes().get(3).copied();
-                        match tail {
-                            None => break Some((at, 5, OPEN_TAG)),
-                            Some(b' ' | b'\t') => break Some((at, 6, OPEN_TAG)),
-                            Some(b'\n') => break Some((at, 6, OPEN_TAG)),
-                            Some(b'\r') => {
-                                let len = if after.as_bytes().get(4) == Some(&b'\n') {
-                                    7
-                                } else {
-                                    6
-                                };
-                                break Some((at, len, OPEN_TAG));
-                            }
-                            _ => {}
-                        }
+                    if let Some((len, kind)) = open_tag_at(&rest[at..]) {
+                        break Some((at, len, kind));
                     }
                     search = at + 2;
                 }
@@ -428,6 +528,211 @@ impl<'a> Lexer<'a> {
                 *self.modes.last_mut().unwrap() = Mode::Code;
             }
         }
+    }
+
+    /// Lexes `self.pos..end` as code, then goes back to the HTML of the template.
+    fn lex_blade_region(&mut self, end: usize) {
+        let depth = self.modes.len();
+        self.modes.push(Mode::Code);
+        let outer = self.limit;
+        self.limit = end;
+        self.in_blade_region = true;
+        while self.pos < end {
+            self.step();
+        }
+        self.in_blade_region = false;
+        self.limit = outer;
+        self.modes.truncate(depth);
+    }
+
+    /// Lexes HTML up to the next thing Blade compiles, and that thing.
+    fn lex_blade_html(&mut self) {
+        let rest = self.rest();
+        let bytes = rest.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'<' => {
+                    if let Some((len, kind)) = open_tag_at(&rest[i..]) {
+                        self.flush_html(i);
+                        self.push(kind, len);
+                        *self.modes.last_mut().unwrap() = Mode::Code;
+                        return;
+                    }
+                    i += 1;
+                }
+                b'{' => match self.lex_blade_brace(i) {
+                    Some(next) => i = next,
+                    None => return,
+                },
+                b'@' => match self.lex_blade_at(i) {
+                    Some(next) => i = next,
+                    None => return,
+                },
+                _ => i += 1,
+            }
+        }
+        self.flush_html(i);
+    }
+
+    fn flush_html(&mut self, len: usize) {
+        if len > 0 {
+            self.push(INLINE_HTML, len);
+        }
+    }
+
+    /// The echo that opens at `i`: its opening's length, its closing and where that is.
+    fn blade_echo_at(&self, i: usize) -> Option<(usize, &'static str, usize)> {
+        let rest = &self.rest()[i..];
+        // a regular expression's `.+?` wants a character, whatever it is
+        let close_of = |open: usize, close: &str| find_from(rest, close, open + 1);
+        if rest.starts_with("{!!") {
+            return close_of(3, "!!}").map(|at| (3, "!!}", at));
+        }
+        if rest.starts_with("{{{")
+            && let Some(at) = close_of(3, "}}}")
+        {
+            return Some((3, "}}}", at));
+        }
+        if rest.starts_with("{{") {
+            return close_of(2, "}}").map(|at| (2, "}}", at));
+        }
+        None
+    }
+
+    /// Lexes what opens with the `{` at `i` of the rest, after the HTML before it, and returns
+    /// `None`. If nothing does, returns where to go on looking.
+    fn lex_blade_brace(&mut self, i: usize) -> Option<usize> {
+        let rest = self.rest();
+        if rest[i..].starts_with("{{--")
+            && let Some(close) = find_from(rest, "--}}", i + 4)
+        {
+            self.flush_html(i);
+            self.push(BLADE_COMMENT, close + 4 - i);
+            return None;
+        }
+        if self.pos + i < self.no_echo_until {
+            return Some(i + 1);
+        }
+        let Some((open, close, at)) = self.blade_echo_at(i) else {
+            return Some(i + 1);
+        };
+        self.flush_html(i);
+        self.push(OPEN_TAG_WITH_ECHO, open);
+        let end = self.pos + at - open;
+        self.lex_blade_region(end);
+        self.push(CLOSE_TAG, close.len());
+        None
+    }
+
+    /// Lexes what starts with the `@` at `i` of the rest, after the HTML before it, and returns
+    /// `None`. If it's text, returns where to go on looking.
+    fn lex_blade_at(&mut self, i: usize) -> Option<usize> {
+        let rest = self.rest();
+        let at = self.pos + i;
+        let after = &rest[i + 1..];
+        // Comments go first in Blade, leaving the `@` of `@{{-- a --}}` by itself.
+        let comment = after.starts_with("{{--") && find_from(after, "--}}", 4).is_some();
+        if after.starts_with('{') && !comment {
+            if let Some((open, close, end)) = self.blade_echo_at(i + 1) {
+                self.no_echo_until = at + 1 + end + close.len();
+                return Some(i + 1 + open);
+            }
+            return Some(i + 1);
+        }
+        let previous = self.src.as_bytes()[..at].last().copied();
+        if previous != Some(b'@') {
+            if after.starts_with("verbatim")
+                && let Some(close) = find_from(after, "@endverbatim", 8)
+            {
+                self.flush_html(i);
+                self.push(BLADE_DIRECTIVE_NAME, 9);
+                self.flush_html(close - 8);
+                self.push(BLADE_DIRECTIVE_NAME, "@endverbatim".len());
+                return None;
+            }
+            if after.starts_with("php")
+                && !after.as_bytes().get(3).copied().is_some_and(is_blade_word)
+                && let Some(close) = find_from(after, "@endphp", 3)
+            {
+                self.flush_html(i);
+                self.push(OPEN_TAG, 4);
+                let end = self.pos + close - 3;
+                self.lex_blade_region(end);
+                self.push(CLOSE_TAG, "@endphp".len());
+                return None;
+            }
+        }
+        // `\B@(@?\w+(?:::\w+)?)`
+        if previous.is_some_and(is_blade_word) || at < self.no_directive_until {
+            return Some(i + 1);
+        }
+        let bytes = after.as_bytes();
+        let escaped = bytes.first() == Some(&b'@');
+        let name_start = usize::from(escaped);
+        let word = |from: usize| {
+            bytes[from..]
+                .iter()
+                .take_while(|b| is_blade_word(**b))
+                .count()
+        };
+        let mut name_end = name_start + word(name_start);
+        if name_end == name_start {
+            return Some(i + 1);
+        }
+        if after[name_end..].starts_with("::") && word(name_end + 2) > 0 {
+            name_end += 2 + word(name_end + 2);
+        }
+        let name = &after[name_start..name_end];
+        // what comes after the name: `[ \t]*`, and then maybe the arguments
+        let name_end_abs = at + 1 + name_end;
+        let spaces = bytes[name_end..]
+            .iter()
+            .take_while(|b| matches!(b, b' ' | b'\t'))
+            .count();
+        let open = name_end_abs + spaces;
+        let args = (bytes.get(name_end + spaces) == Some(&b'('))
+            .then(|| args_end(&self.src[..self.limit], open));
+        let text_from = i + 1 + name_end;
+        let directive = blade::directive(name).filter(|_| !escaped);
+        let Some(directive) = directive else {
+            // `@@if (...)`, and any `@name (...)` Blade doesn't know
+            if let Some(ArgsEnd::Balanced(end)) = args {
+                self.no_directive_until = end;
+            }
+            return Some(text_from);
+        };
+        if matches!(args, Some(ArgsEnd::Unbalanced)) {
+            return Some(text_from);
+        }
+        let args = match args {
+            Some(ArgsEnd::Balanced(end)) => Some(end),
+            _ => None,
+        };
+        // `@php` without arguments or an `@endphp` compiles to itself
+        if directive.name == "php" && args.is_none() {
+            return Some(text_from);
+        }
+        let kind = match directive.kind {
+            EMPTY_KW if args.is_none() => ENDFOREACH_KW,
+            kind => kind,
+        };
+        self.flush_html(i);
+        self.push(kind, 1 + name_end);
+        let end = args?;
+        if spaces > 0 {
+            self.push(WHITESPACE, spaces);
+        }
+        match directive.args {
+            Args::Php => {
+                // not left to the code mode, which reads `(string)` as a cast
+                self.push(L_PAREN, 1);
+                self.lex_blade_region(end);
+            }
+            Args::Ignored => self.push(BLADE_IGNORED_ARGS, end - open),
+            Args::Raw => self.push(BLADE_RAW_ARGS, end - open),
+        }
+        None
     }
 
     fn lex_code(&mut self) {
@@ -450,7 +755,11 @@ impl<'a> Lexer<'a> {
                 len = if b.get(3) == Some(&b'\n') { 4 } else { 3 };
             }
             self.push(CLOSE_TAG, len);
-            *self.modes.last_mut().unwrap() = Mode::Html;
+            *self.modes.last_mut().unwrap() = if self.blade && !self.in_blade_region {
+                Mode::BladeHtml
+            } else {
+                Mode::Html
+            };
             return;
         }
 
@@ -843,7 +1152,9 @@ impl<'a> Lexer<'a> {
                 None => {
                     self.error("unterminated nowdoc");
                     let len = b.len();
-                    self.push(STRING_CONTENT, len);
+                    if len > 0 {
+                        self.push(STRING_CONTENT, len);
+                    }
                     return;
                 }
             }

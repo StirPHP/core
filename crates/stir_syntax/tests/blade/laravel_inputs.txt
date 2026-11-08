@@ -1,0 +1,938 @@
+Inputs of the tests in Laravel's tests/View/Blade (MIT licensed), read from their sources, which parse without errors.
+%%% BladeAppendTest.php
+@append
+%%% BladeBoolTest.php
+@bool($someViewVarTruthy)
+%%% BladeBoolTest.php
+@bool($someViewVarFalsey)
+%%% BladeBoolTest.php
+@bool($anotherSomeViewVarTruthy)
+%%% BladeBoolTest.php
+@bool($anotherSomeViewVarFalsey)
+%%% BladeBoolTest.php
+{'isBool' : @bool(true)}
+%%% BladeBoolTest.php
+{'isBool' : @bool(false)}
+%%% BladeBoolTest.php
+<input type='text' x-show='@bool(true)' />
+%%% BladeBoolTest.php
+<input type='text' x-show='@bool(false)' />
+%%% BladeBreakStatementsTest.php
+@for ($i = 0; $i < 10; $i++)
+test
+@break
+@endfor
+%%% BladeBreakStatementsTest.php
+@for ($i = 0; $i < 10; $i++)
+test
+@break(TRUE)
+@endfor
+%%% BladeBreakStatementsTest.php
+@for ($i = 0; $i < 10; $i++)
+test
+@break(2)
+@endfor
+%%% BladeBreakStatementsTest.php
+@for ($i = 0; $i < 10; $i++)
+test
+@break( 2 )
+@endfor
+%%% BladeBreakStatementsTest.php
+@for ($i = 0; $i < 10; $i++)
+test
+@break(-2)
+@endfor
+%%% BladeCanStatementsTest.php
+@can ('update', [$post])
+breeze
+@elsecan('delete', [$post])
+sneeze
+@endcan
+%%% BladeCananyStatementsTest.php
+@canany (['create', 'update'], [$post])
+breeze
+@elsecanany(['delete', 'approve'], [$post])
+sneeze
+@endcan
+%%% BladeCannotStatementsTest.php
+@cannot ('update', [$post])
+breeze
+@elsecannot('delete', [$post])
+sneeze
+@endcannot
+%%% BladeCheckedStatementsTest.php
+<input @selected(name(foo(bar)))/>
+%%% BladeCheckedStatementsTest.php
+<input @checked(name(foo(bar)))/>
+%%% BladeCheckedStatementsTest.php
+<button @disabled(name(foo(bar)))>Foo</button>
+%%% BladeCheckedStatementsTest.php
+<input @required(name(foo(bar)))/>
+%%% BladeCheckedStatementsTest.php
+<input @readonly(name(foo(bar)))/>
+%%% BladeClassTest.php
+<span @class(['font-bold', 'mt-4', 'ml-2' => true, 'mr-2' => false])></span>
+%%% BladeCommentsTest.php
+{{--this is a comment--}}
+%%% BladeCommentsTest.php
+{{--
+this is a comment
+--}}
+%%% BladeCommentsTest.php
+{{-- @foreach() --}}
+%%% BladeComponentFirstTest.php
+@componentFirst(["one", "two"])
+%%% BladeComponentFirstTest.php
+@componentFirst(["one", "two"], ["foo" => "bar"])
+%%% BladeComponentTagCompilerTest.php
+<x-slot name="foo">
+</x-slot>
+%%% BladeComponentTagCompilerTest.php
+<x-slot:foo>
+</x-slot>
+%%% BladeComponentTagCompilerTest.php
+<x-slot :name="$foo">
+</x-slot>
+%%% BladeComponentTagCompilerTest.php
+<x-slot :name="$foo->name">
+</x-slot>
+%%% BladeComponentTagCompilerTest.php
+<x-slot name="foo" class="font-bold">
+</x-slot>
+%%% BladeComponentTagCompilerTest.php
+<x-slot:foo class="font-bold">
+</x-slot>
+%%% BladeComponentTagCompilerTest.php
+<x-slot name="foo" :class="$classes">
+</x-slot>
+%%% BladeComponentTagCompilerTest.php
+<x-slot name="foo" @class($classes)>
+</x-slot>
+%%% BladeComponentTagCompilerTest.php
+<x-slot name="foo" @style($styles)>
+</x-slot>
+%%% BladeComponentTagCompilerTest.php
+<div><x-alert type="foo" limit="5" @click="foo" wire:click="changePlan('{{ $plan }}')" required x-intersect.margin.-50%.0px="visibleSection = 'profile'" /><x-alert /></div>
+%%% BladeComponentTagCompilerTest.php
+<div><x-card /></div>
+%%% BladeComponentTagCompilerTest.php
+<div><x-nightshade::accordion /></div>
+%%% BladeComponentTagCompilerTest.php
+<div><x-alert type="" limit='' @click="" required /></div>
+%%% BladeComponentTagCompilerTest.php
+<x-profile user-id="1"></x-profile>
+%%% BladeComponentTagCompilerTest.php
+<x-profile :user-id="1"></x-profile>
+%%% BladeComponentTagCompilerTest.php
+<x-profile :$userId></x-profile>
+%%% BladeComponentTagCompilerTest.php
+<x-profile :userId="User::$id"></x-profile>
+%%% BladeComponentTagCompilerTest.php
+<x-input :label="Input::$label" :$name value="Joe"></x-input>
+%%% BladeComponentTagCompilerTest.php
+<x-input value="Joe" :$name :label="Input::$label"></x-input>
+%%% BladeComponentTagCompilerTest.php
+<x-profile :$userId/>
+%%% BladeComponentTagCompilerTest.php
+<x-profile :userId="User::$id"/>
+%%% BladeComponentTagCompilerTest.php
+<x-input :label="Input::$label" value="Joe" :$name />
+%%% BladeComponentTagCompilerTest.php
+<x-input :$name :label="Input::$label" value="Joe" />
+%%% BladeComponentTagCompilerTest.php
+<x-profile :user-id="1" ::title="user.name"></x-profile>
+%%% BladeComponentTagCompilerTest.php
+<x-profile :src="'foo'"></x-profile>
+%%% BladeComponentTagCompilerTest.php
+<x-profile @class(["bar"=>true])></x-profile>
+%%% BladeComponentTagCompilerTest.php
+<x-profile @style(["bar"=>true])></x-profile>
+%%% BladeComponentTagCompilerTest.php
+<x-foo:alert></x-foo:alert>
+%%% BladeComponentTagCompilerTest.php
+<x:foo:alert></x-foo:alert>
+%%% BladeComponentTagCompilerTest.php
+<div><x-alert/></div>
+%%% BladeComponentTagCompilerTest.php
+<x-alert class="bar" wire:model="foo" x-on:click="bar" @click="baz" />
+%%% BladeComponentTagCompilerTest.php
+<x-alert title="foo" class="bar" wire:model="foo" />
+%%% BladeComponentTagCompilerTest.php
+<x-profile class="bar" {{ $attributes }} wire:model="foo"></x-profile>
+%%% BladeComponentTagCompilerTest.php
+<div><x-alert title="foo" class="bar" {{ $attributes->merge(['class' => 'test']) }} wire:model="foo" /></div>
+%%% BladeComponentTagCompilerTest.php
+<x-profile></x-profile>Words
+%%% BladeComponentTagCompilerTest.php
+<x-alert/>Words
+%%% BladeComponentTagCompilerTest.php
+<x-alert :title="$title" class="bar" />
+%%% BladeComponentTagCompilerTest.php
+<x-alert>
+</x-alert>
+%%% BladeComponentTagCompilerTest.php
+<x-anonymous-component :name="'Taylor'" :age="31" wire:model="foo" />
+%%% BladeComponentTagCompilerTest.php
+<x-package::anonymous-component :name="'Taylor'" :age="31" wire:model="foo" />
+%%% BladeComponentTagCompilerTest.php
+<x-frontend::anonymous-component :name="'Taylor'" :age="31" wire:model="foo" />
+%%% BladeComponentTagCompilerTest.php
+<x-admin.auth::anonymous-component :name="'Taylor'" :age="31" wire:model="foo" />
+%%% BladeComponentTagCompilerTest.php
+<x-panel />
+%%% BladeComponentTagCompilerTest.php
+<x-alert />
+%%% BladeComponentTagCompilerTest.php
+<x-profile {{ $attributes }} />
+%%% BladeComponentTagCompilerTest.php
+<x-container><x-profile {{ $attributes }} /></x-container>
+%%% BladeComponentsTest.php
+@component('foo', ["foo" => "bar"])
+%%% BladeComponentsTest.php
+@component('foo')
+%%% BladeComponentsTest.php
+@component('Illuminate\Tests\View\Blade\ComponentStub::class', 'test', ["foo" => "bar"])
+%%% BladeComponentsTest.php
+@endcomponent
+%%% BladeComponentsTest.php
+@endcomponentClass
+%%% BladeComponentsTest.php
+@slot('foo', null, ["foo" => "bar"])
+%%% BladeComponentsTest.php
+@slot('foo')
+%%% BladeComponentsTest.php
+@endslot
+%%% BladeContextTest.php
+
+@context('foo')
+    <span>{{ $value }}</span>
+@endcontext
+%%% BladeContinueStatementsTest.php
+@for ($i = 0; $i < 10; $i++)
+test
+@continue
+@endfor
+%%% BladeContinueStatementsTest.php
+@for ($i = 0; $i < 10; $i++)
+test
+@continue(TRUE)
+@endfor
+%%% BladeContinueStatementsTest.php
+@for ($i = 0; $i < 10; $i++)
+test
+@continue(2)
+@endfor
+%%% BladeContinueStatementsTest.php
+@for ($i = 0; $i < 10; $i++)
+test
+@continue( 2 )
+@endfor
+%%% BladeContinueStatementsTest.php
+@for ($i = 0; $i < 10; $i++)
+test
+@continue(-2)
+@endfor
+%%% BladeCustomTest.php
+@if($test) <?php @show('test'); ?> @endif
+%%% BladeCustomTest.php
+@yield('title') - {{Config::get('site.title')}}
+%%% BladeCustomTest.php
+foo
+%%% BladeCustomTest.php
+@if($foo)
+@customControl(10, $foo, 'bar')
+@endif
+%%% BladeCustomTest.php
+@customControl
+%%% BladeCustomTest.php
+@custom($user)
+@endcustom
+%%% BladeCustomTest.php
+@custom($user)
+@elsecustom($product)
+@else
+@endcustom
+%%% BladeCustomTest.php
+@unlesscustom($user)
+@endcustom
+%%% BladeCustomTest.php
+@custom(0)
+@elsecustom(0)
+@endcustom
+%%% BladeCustomTest.php
+@alert
+@endalert
+%%% BladeCustomTest.php
+@alert(['type' => 'danger'])
+@endalert
+%%% BladeCustomTest.php
+@input
+%%% BladeCustomTest.php
+@input(['type' => 'email'])
+%%% BladeCustomTest.php
+@media only screen and (min-width:480px) {
+%%% BladeEchoHandlerTest.php
+{{$exampleObject}}
+%%% BladeEchoHandlerTest.php
+{!!$exampleObject!!}
+%%% BladeEchoHandlerTest.php
+{{{$exampleObject}}}
+%%% BladeEchoHandlerTest.php
+{{$exampleObject}}
+
+%%% BladeEchoHandlerTest.php
+{{$exampleObject;}}
+%%% BladeEchoHandlerTest.php
+{{{$exampleObject;}}}
+%%% BladeEchoHandlerTest.php
+{!!$exampleObject;!!}
+%%% BladeEchoTest.php
+{!!$name!!}
+%%% BladeEchoTest.php
+{!! $name !!}
+%%% BladeEchoTest.php
+{!!
+            $name
+        !!}
+%%% BladeEchoTest.php
+{{{$name}}}
+%%% BladeEchoTest.php
+{{$name}}
+%%% BladeEchoTest.php
+{{ $name }}
+%%% BladeEchoTest.php
+{{
+            $name
+        }}
+%%% BladeEchoTest.php
+{{ $name }}
+
+%%% BladeEchoTest.php
+{{ $name }}
+
+%%% BladeEchoTest.php
+{{ "Hello world or foo" }}
+%%% BladeEchoTest.php
+{{"Hello world or foo"}}
+%%% BladeEchoTest.php
+{{$foo + $or + $baz}}
+%%% BladeEchoTest.php
+{{
+            "Hello world or foo"
+        }}
+%%% BladeEchoTest.php
+{{ 'Hello world or foo' }}
+%%% BladeEchoTest.php
+{{'Hello world or foo'}}
+%%% BladeEchoTest.php
+{{
+            'Hello world or foo'
+        }}
+%%% BladeEchoTest.php
+{{ myfunc('foo or bar') }}
+%%% BladeEchoTest.php
+{{ myfunc("foo or bar") }}
+%%% BladeEchoTest.php
+{{ myfunc("$name or 'foo'") }}
+%%% BladeEchoTest.php
+@{{$name}}
+%%% BladeEchoTest.php
+@{{ $name }}
+%%% BladeEchoTest.php
+@{{
+            $name
+        }}
+%%% BladeEchoTest.php
+@{{ $name }}
+            
+%%% BladeElseAuthStatementsTest.php
+@auth("api")
+breeze
+@elseauth("standard")
+wheeze
+@endauth
+%%% BladeElseAuthStatementsTest.php
+@auth("api")
+breeze
+@elseauth
+wheeze
+@endauth
+%%% BladeElseGuestStatementsTest.php
+@guest("api")
+breeze
+@elseguest("standard")
+wheeze
+@endguest
+%%% BladeElseIfStatementsTest.php
+@if(name(foo(bar)))
+breeze
+@elseif(boom(breeze))
+boom
+@endif
+%%% BladeElseStatementsTest.php
+@if (name(foo(bar)))
+breeze
+@else
+boom
+@endif
+%%% BladeEndSectionsTest.php
+@endsection
+%%% BladeEnvironmentStatementsTest.php
+@env('staging')
+breeze
+@else
+boom
+@endenv
+%%% BladeEnvironmentStatementsTest.php
+@env('staging', 'production')
+breeze
+@else
+boom
+@endenv
+%%% BladeEnvironmentStatementsTest.php
+@env(['staging', 'production'])
+breeze
+@else
+boom
+@endenv
+%%% BladeEnvironmentStatementsTest.php
+@production
+breeze
+@else
+boom
+@endproduction
+%%% BladeErrorTest.php
+
+@error('email')
+    <span>{{ $message }}</span>
+@enderror
+%%% BladeErrorTest.php
+
+@error('email', 'customBag')
+    <span>{{ $message }}</span>
+@enderror
+%%% BladeEscapedTest.php
+@@foreach
+%%% BladeEscapedTest.php
+@@verbatim @@continue @@endverbatim
+%%% BladeEscapedTest.php
+@@foreach($i as $x)
+%%% BladeEscapedTest.php
+@@continue @@break
+%%% BladeEscapedTest.php
+@@foreach(
+            $i as $x
+        )
+%%% BladeEscapedTest.php
+
+@foreach($cols as $col)
+    @@foreach($issues as $issue_45915)
+        👋 سلام 👋
+    @@endforeach
+@endforeach
+%%% BladeExpressionTest.php
+@lang(foo(bar(baz(qux(breeze()))))) space () @lang(foo(bar))
+%%% BladeExpressionTest.php
+<html {{ $foo }}>
+%%% BladeExpressionTest.php
+<html{{ $foo }}>
+%%% BladeExpressionTest.php
+<html {{ $foo }} @lang('foo')>
+%%% BladeExtendsTest.php
+@extends('foo')
+test
+%%% BladeExtendsTest.php
+@extends(name(foo))
+test
+%%% BladeExtendsTest.php
+@extendsFirst(['foo', 'milwad'])
+test
+%%% BladeExtendsTest.php
+@extendsFirst([name(foo), name(milwad)])
+test
+%%% BladeForStatementsTest.php
+@for ($i = 0; $i < 10; $i++)
+test
+@endfor
+%%% BladeForStatementsTest.php
+@for ($i = 0; $i < 10; $i++)
+@for ($j = 0; $j < 20; $j++)
+test
+@endfor
+@endfor
+%%% BladeForeachStatementsTest.php
+@foreach ($this->getUsers() as $user)
+test
+@endforeach
+%%% BladeForeachStatementsTest.php
+@foreach ($this->getUsers() AS $user)
+test
+@endforeach
+%%% BladeForeachStatementsTest.php
+@foreach ([
+foo,
+bar,
+] as $label)
+test
+@endforeach
+%%% BladeForeachStatementsTest.php
+@foreach ($this->getUsers() as $user)
+user info
+@foreach ($user->tags as $tag)
+tag info
+@endforeach
+@endforeach
+%%% BladeForeachStatementsTest.php
+@foreach(resolve('App\\DataProviders\\'.$provider)->data() as $key => $value)
+    <input {{ $foo ? 'bar': 'baz' }}>
+@endforeach
+%%% BladeForelseStatementsTest.php
+@forelse ($this->getUsers() as $user)
+breeze
+@empty
+empty
+@endforelse
+%%% BladeForelseStatementsTest.php
+@forelse ($this->getUsers() AS $user)
+breeze
+@empty
+empty
+@endforelse
+%%% BladeForelseStatementsTest.php
+@forelse ([
+foo,
+bar,
+] as $label)
+breeze
+@empty
+empty
+@endforelse
+%%% BladeForelseStatementsTest.php
+@forelse ($this->getUsers() as $user)
+@forelse ($user->tags as $tag)
+breeze
+@empty
+tag empty
+@endforelse
+@empty
+empty
+@endforelse
+%%% BladeFragmentTest.php
+@fragment('foo')
+%%% BladeFragmentTest.php
+@fragment(name(foo))
+%%% BladeFragmentTest.php
+@endfragment
+%%% BladeHasSectionTest.php
+@hasSection("section")
+breeze
+@endif
+%%% BladeHasStackTest.php
+@hasStack("stack")
+breeze
+@endif
+%%% BladeHelpersTest.php
+@csrf
+%%% BladeHelpersTest.php
+@method('patch')
+%%% BladeHelpersTest.php
+@dd($var1)
+%%% BladeHelpersTest.php
+@dd($var1, $var2)
+%%% BladeHelpersTest.php
+@dump($var1, $var2)
+%%% BladeHelpersTest.php
+@vite
+%%% BladeHelpersTest.php
+@vite()
+%%% BladeHelpersTest.php
+@vite('resources/js/app.js')
+%%% BladeHelpersTest.php
+@vite(['resources/js/app.js'])
+%%% BladeHelpersTest.php
+@viteReactRefresh
+%%% BladeHelpersTest.php
+@fonts
+%%% BladeHelpersTest.php
+@fonts()
+%%% BladeHelpersTest.php
+@fonts(['Inter'])
+%%% BladeHelpersTest.php
+@fonts(['Inter', 'JetBrains Mono'])
+%%% BladeIfAuthStatementsTest.php
+@auth("api")
+breeze
+@endauth
+%%% BladeIfAuthStatementsTest.php
+@auth
+breeze
+@endauth
+%%% BladeIfEmptyStatementsTest.php
+@empty ($test)
+breeze
+@endempty
+%%% BladeIfGuestStatementsTest.php
+@guest("api")
+breeze
+@endguest
+%%% BladeIfIssetStatementsTest.php
+@isset ($test)
+breeze
+@endisset
+%%% BladeIfStatementsTest.php
+@if (name(foo(bar)))
+breeze
+@endif
+%%% BladeIfStatementsTest.php
+@switch(true)
+@case(1)
+foo
+
+@case(2)
+bar
+@endswitch
+
+foo
+
+@switch(true)
+@case(1)
+foo
+
+@case(2)
+bar
+@endswitch
+%%% BladeIncludesTest.php
+@each('foo', 'bar')
+%%% BladeIncludesTest.php
+@each('foo', '(bar))')
+%%% BladeIncludesTest.php
+@each(name(foo))
+%%% BladeIncludesTest.php
+@include('foo')
+%%% BladeIncludesTest.php
+@include('foo', ['(('])
+%%% BladeIncludesTest.php
+@include('foo', ['((a)' => '((a)'])
+%%% BladeIncludesTest.php
+@include(name(foo))
+%%% BladeIncludesTest.php
+@includeIf('foo')
+%%% BladeIncludesTest.php
+@includeIf(name(foo))
+%%% BladeIncludesTest.php
+@includeWhen(true, 'foo', ["foo" => "bar"])
+%%% BladeIncludesTest.php
+@includeWhen(true, 'foo')
+%%% BladeIncludesTest.php
+@includeUnless(true, 'foo', ["foo" => "bar"])
+%%% BladeIncludesTest.php
+@includeUnless(true, 'foo', ["foo" => "bar_))-))>"])
+%%% BladeIncludesTest.php
+@includeUnless($undefined ?? true, 'foo')
+%%% BladeIncludesTest.php
+@includeFirst(["one", "two"])
+%%% BladeIncludesTest.php
+@includeFirst(["one", "two"], ["foo" => "bar"])
+%%% BladeIncludesTest.php
+@includeFirst(["issue", "#45424)"], ["foo()" => "bar)-))"])
+%%% BladeIncludesTest.php
+@includeFirst(["issue", "#45424)"], ["foo" => "bar(-(("])
+%%% BladeIncludesTest.php
+@includeFirst(["issue", "#45424)"], [(string) "foo()" => "bar(-(("])
+%%% BladeIncludesTest.php
+@includeIsolated('foo')
+%%% BladeIncludesTest.php
+@includeIsolated('foo', ['(('])
+%%% BladeIncludesTest.php
+@includeIsolated('foo', ['((a)' => '((a)'])
+%%% BladeIncludesTest.php
+@includeIsolated(name(foo))
+%%% BladeInjectTest.php
+Foo @inject('baz', 'SomeNamespace\SomeClass') bar
+%%% BladeInjectTest.php
+Foo @inject("baz", "SomeNamespace\SomeClass") bar
+%%% BladeInjectTest.php
+Foo @inject('baz', SomeNamespace\SomeClass::class) bar
+%%% BladeInjectTest.php
+Foo @inject("baz", SomeNamespace\SomeClass::class) bar
+%%% BladeJsTest.php
+<div x-data="@js($data)"></div>
+%%% BladeJsTest.php
+<div x-data="@js($data, JSON_FORCE_OBJECT)"></div>
+%%% BladeJsTest.php
+<div x-data="@js($data, JSON_FORCE_OBJECT, 256)"></div>
+%%% BladeJsonTest.php
+var foo = @json($var);
+%%% BladeJsonTest.php
+var foo = @json($var, JSON_HEX_TAG);
+%%% BladeLangTest.php
+@lang('foo')
+%%% BladeLangTest.php
+@choice('foo', 1)
+%%% BladeLangTest.php
+Foo @lang(function_call('foo(blah)')) bar
+%%% BladeOverwriteSectionTest.php
+@overwrite
+%%% BladePhpStatementsTest.php
+@each('foo', 'b)a)r')
+%%% BladePhpStatementsTest.php
+@include('test_for', ['issue))' => '(issue#45424))'])
+%%% BladePhpStatementsTest.php
+( @include('test_for', ['not_too_much))' => '(issue#45424))'])))
+%%% BladePhpStatementsTest.php
+@php($set = true)
+%%% BladePhpStatementsTest.php
+@php
+%%% BladePhpStatementsTest.php
+{{ "Ignore: @php" }}
+%%% BladePhpStatementsTest.php
+@php echo "{{ This is a blade tag }}" @endphp
+%%% BladePhpStatementsTest.php
+@verbatim {{ Hello, I'm not blade! }}
+@php echo 'And I'm not PHP!' @endphp
+@endverbatim {{ 'I am Blade' }}
+@php echo 'I am PHP {{ not Blade }}' @endphp
+%%% BladePhpStatementsTest.php
+@php($data = ['single' => ':(('])
+%%% BladePhpStatementsTest.php
+@php($data = ['single' => (string)':(('])
+%%% BladePhpStatementsTest.php
+@php($data = ['single' => '(()(('])
+%%% BladePhpStatementsTest.php
+@php($data = ['single' => ')'])
+%%% BladePhpStatementsTest.php
+@php($data = ['(multiple)-))' => '((-))'])
+%%% BladePhpStatementsTest.php
+@php($data = [(int)'(multiple)-))' => (bool)'((casty))'])
+%%% BladePhpStatementsTest.php
+@php($data = ['test' => ''])
+%%% BladePhpStatementsTest.php
+@php($data = ['test' => ""])
+%%% BladePhpStatementsTest.php
+@php($data = ['test' => 'won\'t break'])
+%%% BladePhpStatementsTest.php
+@php($data = ['test' => "\"escaped\""])
+%%% BladePhpStatementsTest.php
+<span @class(['(']></span>
+%%% BladePhpStatementsTest.php
+<span @class(['']></span>
+%%% BladePhpStatementsTest.php
+<span @class([')']></span>
+%%% BladePhpStatementsTest.php
+<span @class(['))']></span>
+%%% BladePhpStatementsTest.php
+<span @class(['k' => @empty($v)])></span>
+%%% BladePhpStatementsTest.php
+<span @class(['k))' => @empty($v)])></span>
+%%% BladePhpStatementsTest.php
+<span @class(['k' => @empty($v), 't' => @empty($v1)])></span>
+%%% BladePhpStatementsTest.php
+<span @class(['k' => @empty($v), 't' => @empty($v1), 'r' => @empty($v2)])></span>
+%%% BladePhpStatementsTest.php
+<span @class(['k' => @empty($v), 't))' => @empty($v1), 'r' => @empty($v2)])></span>
+%%% BladePhpStatementsTest.php
+<span @class(['k' => @empty($v), 't' => @empty($v1), 'r' => @empty($v2), 'l' => 'l'])></span><span @class(['k' => @empty($v)])></span>
+%%% BladePhpStatementsTest.php
+<a @class(['k\' => ()])></a>
+%%% BladePrependTest.php
+@prepend('foo')
+bar
+@endprepend
+%%% BladePrependTest.php
+@prependOnce('foo', 'bar')
+test
+@endPrependOnce
+%%% BladePrependTest.php
+@prependOnce('foo')
+test
+@endPrependOnce
+%%% BladePropsTest.php
+@props(['one' => true, 'two' => 'string'])
+%%% BladePropsTest.php
+@props(['test1' => 'default', 'test2', 'test4' => 'default'])
+%%% BladePushTest.php
+@push('foo')
+test
+@endpush
+%%% BladePushTest.php
+@push('foo):))')
+test
+@endpush
+%%% BladePushTest.php
+@pushOnce('foo', 'bar')
+test
+@endPushOnce
+%%% BladePushTest.php
+@pushOnce('foo')
+test
+@endPushOnce
+%%% BladePushTest.php
+@pushIf(true, 'foo')
+test
+@endPushIf
+%%% BladePushTest.php
+@pushIf(Str::startsWith('abc', 'a'), 'body-end')
+test
+@endPushIf
+%%% BladePushTest.php
+@pushIf(Str::startsWith('abc,,,', 'a,,,'), 'body-end')
+test
+@endPushIf
+%%% BladePushTest.php
+@pushIf(true, 'stack')
+if
+@elsePushIf(false, 'stack')
+elseif
+@elsePush('stack')
+else
+@endPushIf
+%%% BladePushTest.php
+@pushIf(true, 'stack')
+if
+@elsePushIf(in_array($x, [3, 4]), 'scripts')
+elseif
+@endPushIf
+%%% BladePushTest.php
+@pushIf(true, 'stack')
+if
+@elsePushIf(Str::startsWith('abc,,,', 'a,,,'), 'body-end')
+elseif
+@endPushIf
+%%% BladeSectionMissingTest.php
+@sectionMissing("section")
+breeze
+@endif
+%%% BladeSectionTest.php
+@section('foo')
+%%% BladeSectionTest.php
+@section('issue#18317 :))')
+%%% BladeSectionTest.php
+@section(name(foo))
+%%% BladeSessionTest.php
+
+@session('status')
+    <span>{{ $value }}</span>
+@endsession
+%%% BladeShowTest.php
+@show
+%%% BladeStackTest.php
+@stack('foo')
+%%% BladeStackTest.php
+@stack('foo))')
+%%% BladeStopSectionTest.php
+@stop
+%%% BladeStyleTest.php
+<span @style(['font-weight: bold', 'text-decoration: underline', 'color: red' => true, 'margin-top: 10px' => false])></span>
+%%% BladeUnlessStatementsTest.php
+@unless (name(foo(bar)))
+breeze
+@endunless
+%%% BladeUnsetStatementsTest.php
+@unset ($unset)
+%%% BladeUnsetStatementsTest.php
+@unset ($unset)))
+%%% BladeUseTest.php
+Foo @use('SomeNamespace\SomeClass', 'Foo') bar
+%%% BladeUseTest.php
+Foo @use(SomeNamespace\SomeClass, Foo) bar
+%%% BladeUseTest.php
+Foo @use('SomeNamespace\SomeClass') bar
+%%% BladeUseTest.php
+Foo @use(SomeNamespace\SomeClass) bar
+%%% BladeUseTest.php
+Foo @use('\SomeNamespace\SomeClass') bar
+%%% BladeUseTest.php
+Foo @use(\SomeNamespace\SomeClass) bar
+%%% BladeUseTest.php
+Foo @use('\SomeNamespace\SomeClass', 'Foo') bar
+%%% BladeUseTest.php
+Foo @use(\SomeNamespace\SomeClass, Foo) bar
+%%% BladeUseTest.php
+Foo @use('SomeNamespace\{Foo, Bar}') bar
+%%% BladeUseTest.php
+Foo @use(SomeNamespace\{Foo, Bar}) bar
+%%% BladeUseTest.php
+Foo @use('\SomeNamespace\{Foo, Bar}') bar
+%%% BladeUseTest.php
+Foo @use(\SomeNamespace\{Foo, Bar}) bar
+%%% BladeUseTest.php
+Foo @use('function SomeNamespace\SomeFunction', 'Foo') bar
+%%% BladeUseTest.php
+Foo @use(function SomeNamespace\SomeFunction, Foo) bar
+%%% BladeUseTest.php
+Foo @use('const SomeNamespace\SOME_CONST') bar
+%%% BladeUseTest.php
+Foo @use(const SomeNamespace\SOME_CONST) bar
+%%% BladeUseTest.php
+Foo @use('function \SomeNamespace\SomeFunction') bar
+%%% BladeUseTest.php
+Foo @use(function \SomeNamespace\SomeFunction) bar
+%%% BladeUseTest.php
+Foo @use('const \SomeNamespace\SOME_CONST', 'Foo') bar
+%%% BladeUseTest.php
+Foo @use(const \SomeNamespace\SOME_CONST, Foo) bar
+%%% BladeUseTest.php
+Foo @use('function SomeNamespace\{Foo, Bar}') bar
+%%% BladeUseTest.php
+Foo @use(function SomeNamespace\{Foo, Bar}) bar
+%%% BladeUseTest.php
+Foo @use('const \SomeNamespace\{FOO, BAR}') bar
+%%% BladeUseTest.php
+Foo @use(const \SomeNamespace\{FOO, BAR}) bar
+%%% BladeVerbatimTest.php
+@verbatim {{ $a }} @if($b) {{ $b }} @endif @endverbatim
+%%% BladeVerbatimTest.php
+Some text
+@verbatim
+    {{ $a }}
+    @if($b)
+        {{ $b }}
+    @endif
+@endverbatim
+%%% BladeVerbatimTest.php
+@verbatim {{ $a }} @endverbatim {{ $b }} @verbatim {{ $c }} @endverbatim
+%%% BladeVerbatimTest.php
+@php echo "#1"; @endphp @verbatim {{ #2 }} @endverbatim @verbatim {{ #3 }} @endverbatim @php echo "#4"; @endphp
+%%% BladeVerbatimTest.php
+{{ $first }}
+@php
+    echo $second;
+@endphp
+@if ($conditional)
+    {{ $third }}
+@endif
+@include("users")
+@verbatim
+    {{ $fourth }} @include("test")
+@endverbatim
+@php echo $fifth; @endphp
+%%% BladeVerbatimTest.php
+{{-- @verbatim Block #1 @endverbatim --}} @php "Block #2" @endphp
+%%% BladeVerbatimTest.php
+test @verbatim
+hello world
+@endverbatim
+%%% BladeVerbatimTest.php
+{{ 1 }}
+hello world
+
+%%% BladeVerbatimTest.php
+{{ 1 }}@verbatim
+hello world
+@endverbatim
+%%% BladeWhileStatementsTest.php
+@while ($foo)
+test
+@endwhile
+%%% BladeWhileStatementsTest.php
+@while ($foo)
+@while ($bar)
+test
+@endwhile
+@endwhile
+%%% BladeYieldTest.php
+@yield('foo')
+%%% BladeYieldTest.php
+@yield('foo', 'bar')
+%%% BladeYieldTest.php
+@yield(name(foo))

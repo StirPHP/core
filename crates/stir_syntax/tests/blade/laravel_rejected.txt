@@ -1,0 +1,47 @@
+Inputs of the tests in Laravel's tests/View/Blade (MIT licensed), read from their sources, that do have syntax errors here:
+Laravel's compiler refuses them, or turns them into PHP that doesn't parse.
+%%% BladeCustomTest.php
+@foreach
+%%% BladeCustomTest.php
+@foreach
+@endforeach
+%%% BladeForeachStatementsTest.php
+@foreach ($some_uSers1 as $user)
+%%% BladeForeachStatementsTest.php
+@foreach ($users->get() as $user)
+%%% BladeForeachStatementsTest.php
+@foreach (range(1, 4) as $user)
+%%% BladeForeachStatementsTest.php
+@foreach (   $users as $user)
+%%% BladeForeachStatementsTest.php
+@foreach ($tasks as $task)
+%%% BladeForeachStatementsTest.php
+@foreach
+%%% BladeForeachStatementsTest.php
+@foreach()
+%%% BladeForeachStatementsTest.php
+@foreach ()
+%%% BladeForeachStatementsTest.php
+@foreach($test)
+%%% BladeForeachStatementsTest.php
+@foreach($test as)
+%%% BladeForeachStatementsTest.php
+@foreach(as)
+%%% BladeForeachStatementsTest.php
+@foreach ( as )
+%%% BladeForelseStatementsTest.php
+@forelse
+%%% BladeForelseStatementsTest.php
+@forelse()
+%%% BladeForelseStatementsTest.php
+@forelse ()
+%%% BladeForelseStatementsTest.php
+@forelse($test)
+%%% BladeForelseStatementsTest.php
+@forelse($test as)
+%%% BladeForelseStatementsTest.php
+@forelse(as)
+%%% BladeForelseStatementsTest.php
+@forelse ( as )
+%%% BladePhpStatementsTest.php
+@php($data = ['related_to' => 'issue#45388'];) {{ $data }} @endphp

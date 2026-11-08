@@ -1,0 +1,21 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_err(\"@include('a' 'b')\")"
+---
+SOURCE_FILE
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@include"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'a'"
+  EXPR_STMT
+    STRING_LITERAL
+      STRING_SINGLE "'b'"
+  ERROR
+    R_PAREN ")"
+error 13..16: expected `,`
+error 13..16: expected `)`
+error 16..17: expected `;`
+error 16..17: expected a statement

@@ -1,0 +1,8 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@verbatim@endverbatim\")"
+---
+SOURCE_FILE
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@verbatim"
+    BLADE_DIRECTIVE_NAME "@endverbatim"

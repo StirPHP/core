@@ -1,11 +1,13 @@
 //! Lexer and parser for PHP, producing a lossless rowan tree.
 
+mod blade;
 mod grammar;
 mod lexer;
 mod parser;
 mod syntax_kind;
 
-pub use lexer::{LexError, Lexed, Token, lex};
+pub use blade::directive_names as blade_directive_names;
+pub use lexer::{LexError, Lexed, Token, lex, lex_blade};
 pub use parser::SyntaxError;
 pub use rowan::{GreenNode, NodeOrToken, TextRange, TextSize, WalkEvent};
 pub use syntax_kind::{PhpLanguage, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
@@ -14,6 +16,13 @@ pub use syntax_kind::{PhpLanguage, SyntaxElement, SyntaxKind, SyntaxNode, Syntax
 pub fn is_php_path(path: &std::path::Path) -> bool {
     path.extension()
         .is_some_and(|e| e == "php" || e == "phtml" || e == "inc")
+}
+
+/// Whether `path` is a Blade template.
+pub fn is_blade_path(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".blade.php"))
 }
 
 /// The result of parsing a file: a lossless tree plus syntax errors.
@@ -76,11 +85,19 @@ fn dump(node: &SyntaxNode, depth: usize, out: &mut String) {
 
 /// Parses a whole file.
 pub fn parse(src: &str) -> Parse {
-    let lexed = lex(src);
-    let mut p = parser::Parser::new(src, &lexed);
+    parse_lexed(src, &lex(src))
+}
+
+/// Parses a whole Blade template.
+pub fn parse_blade(src: &str) -> Parse {
+    parse_lexed(src, &lex_blade(src))
+}
+
+fn parse_lexed(src: &str, lexed: &Lexed) -> Parse {
+    let mut p = parser::Parser::new(src, lexed);
     grammar::source_file(&mut p);
     let events = p.finish();
-    let (green, mut errors) = parser::build_tree(src, &lexed, events);
+    let (green, mut errors) = parser::build_tree(src, lexed, events);
     errors.extend(lexed.errors.iter().map(|e| SyntaxError {
         range: TextRange::empty(TextSize::new(e.offset)),
         message: e.message.clone(),

@@ -1,0 +1,53 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@json($a, JSON_PRETTY_PRINT) @js(['a' => 1]) @vite(['a.js']) @vite\")"
+---
+SOURCE_FILE
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@json"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        VARIABLE_EXPR
+          VARIABLE "$a"
+      COMMA ","
+      ARG
+        NAME_EXPR
+          NAME_REF
+            IDENT "JSON_PRETTY_PRINT"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@js"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        ARRAY_EXPR
+          L_BRACK "["
+          ARRAY_ELEM
+            STRING_LITERAL
+              STRING_SINGLE "'a'"
+            FAT_ARROW "=>"
+            LITERAL
+              INT_NUMBER "1"
+          R_BRACK "]"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@vite"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        ARRAY_EXPR
+          L_BRACK "["
+          ARRAY_ELEM
+            STRING_LITERAL
+              STRING_SINGLE "'a.js'"
+          R_BRACK "]"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@vite"

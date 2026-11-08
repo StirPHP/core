@@ -1,0 +1,35 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"<p>{{ $a }}</p>{!! $b->c !!}{{{ $d }}}{{$e}}\\n\")"
+---
+SOURCE_FILE
+  INLINE_HTML_STMT
+    INLINE_HTML "<p>"
+  ECHO_TAG_STMT
+    OPEN_TAG_WITH_ECHO "{{"
+    VARIABLE_EXPR
+      VARIABLE "$a"
+  CLOSE_TAG "}}"
+  INLINE_HTML_STMT
+    INLINE_HTML "</p>"
+  ECHO_TAG_STMT
+    OPEN_TAG_WITH_ECHO "{!!"
+    PROPERTY_FETCH_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$b"
+      ARROW "->"
+      NAME
+        IDENT "c"
+  CLOSE_TAG "!!}"
+  ECHO_TAG_STMT
+    OPEN_TAG_WITH_ECHO "{{{"
+    VARIABLE_EXPR
+      VARIABLE "$d"
+  CLOSE_TAG "}}}"
+  ECHO_TAG_STMT
+    OPEN_TAG_WITH_ECHO "{{"
+    VARIABLE_EXPR
+      VARIABLE "$e"
+  CLOSE_TAG "}}"
+  INLINE_HTML_STMT
+    INLINE_HTML "\n"

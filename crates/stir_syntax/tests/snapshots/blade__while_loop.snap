@@ -1,0 +1,15 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@while ($a) b @endwhile\")"
+---
+SOURCE_FILE
+  WHILE_STMT
+    WHILE_KW "@while"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$a"
+    R_PAREN ")"
+    BLOCK
+      INLINE_HTML_STMT
+        INLINE_HTML " b "
+    ENDWHILE_KW "@endwhile"

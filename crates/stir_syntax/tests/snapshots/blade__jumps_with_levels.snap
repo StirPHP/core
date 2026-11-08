@@ -1,0 +1,37 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@break(2) @break( 2 ) @break(-2) @continue(3)\")"
+---
+SOURCE_FILE
+  BREAK_STMT
+    BREAK_KW "@break"
+    L_PAREN "("
+    LITERAL
+      INT_NUMBER "2"
+    R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BREAK_STMT
+    BREAK_KW "@break"
+    L_PAREN "("
+    LITERAL
+      INT_NUMBER "2"
+    R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BREAK_STMT
+    BREAK_KW "@break"
+    L_PAREN "("
+    PREFIX_EXPR
+      MINUS "-"
+      LITERAL
+        INT_NUMBER "2"
+    R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  CONTINUE_STMT
+    CONTINUE_KW "@continue"
+    L_PAREN "("
+    LITERAL
+      INT_NUMBER "3"
+    R_PAREN ")"

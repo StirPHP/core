@@ -1,0 +1,53 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@switch($a)\\n    @case(1)\\n        a\\n        @break\\n    {{-- b --}}\\n    @case('c')\\n        @if ($d) e @endif\\n    @default\\n        f\\n@endswitch\")"
+---
+SOURCE_FILE
+  SWITCH_STMT
+    SWITCH_KW "@switch"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$a"
+    R_PAREN ")"
+    INLINE_HTML_STMT
+      INLINE_HTML "\n    "
+    SWITCH_CASE
+      CASE_KW "@case"
+      L_PAREN "("
+      LITERAL
+        INT_NUMBER "1"
+      R_PAREN ")"
+      INLINE_HTML_STMT
+        INLINE_HTML "\n        a\n        "
+      BREAK_STMT
+        BREAK_KW "@break"
+      INLINE_HTML_STMT
+        INLINE_HTML "\n    "
+      BLADE_COMMENT "{{-- b --}}"
+      INLINE_HTML_STMT
+        INLINE_HTML "\n    "
+    SWITCH_CASE
+      CASE_KW "@case"
+      L_PAREN "("
+      STRING_LITERAL
+        STRING_SINGLE "'c'"
+      R_PAREN ")"
+      INLINE_HTML_STMT
+        INLINE_HTML "\n        "
+      IF_STMT
+        IF_KW "@if"
+        L_PAREN "("
+        VARIABLE_EXPR
+          VARIABLE "$d"
+        R_PAREN ")"
+        BLOCK
+          INLINE_HTML_STMT
+            INLINE_HTML " e "
+        ENDIF_KW "@endif"
+      INLINE_HTML_STMT
+        INLINE_HTML "\n    "
+    SWITCH_CASE
+      DEFAULT_KW "@default"
+      INLINE_HTML_STMT
+        INLINE_HTML "\n        f\n"
+    ENDSWITCH_KW "@endswitch"

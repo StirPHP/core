@@ -1,0 +1,28 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@section(string) @if ((int) $a) @endif\")"
+---
+SOURCE_FILE
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@section"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        NAME_EXPR
+          NAME_REF
+            IDENT "string"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  IF_STMT
+    IF_KW "@if"
+    L_PAREN "("
+    CAST_EXPR
+      INT_CAST "(int)"
+      VARIABLE_EXPR
+        VARIABLE "$a"
+    R_PAREN ")"
+    BLOCK
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+    ENDIF_KW "@endif"

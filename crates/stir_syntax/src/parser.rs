@@ -65,6 +65,22 @@ pub(crate) struct Parser<'s> {
     pos: usize,
     events: Vec<Event>,
     fuel: std::cell::Cell<u32>,
+    pub(crate) blade_conditions: BladeConditions,
+}
+
+/// How many directives that compile to an `if` but stay flat are open at this point.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct BladeConditions {
+    /// Those with an end of their own, like `@auth`.
+    pub(crate) with_end: u32,
+    /// Those that `@endif` ends, like `@hasSection`.
+    pub(crate) until_endif: u32,
+}
+
+impl BladeConditions {
+    pub(crate) fn any_open(self) -> bool {
+        self.with_end > 0 || self.until_endif > 0
+    }
 }
 
 impl<'s> Parser<'s> {
@@ -87,6 +103,7 @@ impl<'s> Parser<'s> {
             pos: 0,
             events: Vec::new(),
             fuel: std::cell::Cell::new(256),
+            blade_conditions: BladeConditions::default(),
         }
     }
 
@@ -131,6 +148,13 @@ impl<'s> Parser<'s> {
 
     pub(crate) fn nth_at_contextual(&self, n: usize, kw: &str) -> bool {
         self.nth(n) == IDENT && self.nth_text(n) == kw
+    }
+
+    /// Is the current token a Blade directive that took a PHP token's kind (`@if`)?
+    pub(crate) fn at_directive(&self) -> bool {
+        self.raw(0).is_some_and(|t| {
+            (t.kind.is_keyword() || t.kind == BANG) && self.src.as_bytes()[t.start as usize] == b'@'
+        })
     }
 
     fn do_bump(&mut self, kind: SyntaxKind) {

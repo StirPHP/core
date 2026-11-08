@@ -26,7 +26,10 @@ pub(super) fn stmt_list(p: &mut Parser<'_>) {
 
 /// Statements until one of the alternative-syntax terminators.
 fn alt_stmt_list(p: &mut Parser<'_>, terminators: TokenSet) {
-    while !p.at_ts(terminators) && !p.at(EOF) {
+    loop {
+        if p.at(EOF) || (p.at_ts(terminators) && !blade::at_flat_condition_part(p)) {
+            break;
+        }
         if p.at(R_CURLY) {
             p.err_and_bump("unmatched `}`");
             continue;
@@ -45,7 +48,11 @@ pub(super) fn block(p: &mut Parser<'_>) {
 
 pub(super) fn stmt(p: &mut Parser<'_>, top_level: bool) {
     let _ = top_level;
+    if p.at_directive() && blade::stmt(p) {
+        return;
+    }
     match p.current() {
+        BLADE_DIRECTIVE_NAME => blade::directive(p),
         OPEN_TAG | CLOSE_TAG => {
             // Tags behave like statement separators.
             p.bump_any();
@@ -214,18 +221,30 @@ fn expr_list(p: &mut Parser<'_>) {
     }
 }
 
-fn paren_cond(p: &mut Parser<'_>) {
+pub(super) fn paren_cond(p: &mut Parser<'_>) {
     p.expect(L_PAREN);
     expr(p);
     p.expect(R_PAREN);
 }
 
-/// Body of a control structure: a statement, or (with `:`) an alternative-syntax list.
-fn control_body(p: &mut Parser<'_>, terminators: TokenSet) -> bool {
-    if p.at(COLON) {
+/// The parenthesized condition of a statement, which a directive may have left out.
+fn stmt_cond(p: &mut Parser<'_>, blade: bool) {
+    if blade && !p.at(L_PAREN) {
+        p.error("expected a condition in `(...)`");
+    } else {
+        paren_cond(p);
+    }
+}
+
+/// Body of a control structure: a statement, or (with `:` or after a directive) an
+/// alternative-syntax list.
+fn control_body(p: &mut Parser<'_>, terminators: TokenSet, blade: bool) -> bool {
+    if blade || p.at(COLON) {
         let m = p.start();
-        p.bump(COLON);
-        alt_stmt_list(p, terminators);
+        if !blade {
+            p.bump(COLON);
+        }
+        stmt_list_of_directive(p, terminators);
         m.complete(p, BLOCK);
         true
     } else {
@@ -234,12 +253,38 @@ fn control_body(p: &mut Parser<'_>, terminators: TokenSet) -> bool {
     }
 }
 
-fn if_stmt(p: &mut Parser<'_>) {
+/// An alternative-syntax list, which has no business with the `@auth` that's open around it.
+pub(super) fn stmt_list_of_directive(p: &mut Parser<'_>, terminators: TokenSet) {
+    let open = std::mem::take(&mut p.blade_conditions);
+    alt_stmt_list(p, terminators);
+    p.blade_conditions = open;
+}
+
+/// The end of an alternative-syntax list: `endif;` or `@endif`.
+pub(super) fn alt_end(p: &mut Parser<'_>, end: SyntaxKind, blade: bool) {
+    if p.at(end) && p.at_directive() {
+        p.bump(end);
+    } else if blade && !p.at(end) {
+        p.error(format!("expected {}", blade::describe_end(end)));
+    } else {
+        p.expect(end);
+        stmt_end(p);
+    }
+}
+
+pub(super) fn if_stmt(p: &mut Parser<'_>) {
     let m = p.start();
-    p.bump(IF_KW);
-    paren_cond(p);
-    let alt = control_body(p, TokenSet::new(&[ELSEIF_KW, ELSE_KW, ENDIF_KW]));
+    let blade = p.at_directive();
+    match p.current() {
+        BANG | ISSET_KW | EMPTY_KW => blade::condition_of_if(p),
+        _ => {
+            p.bump(IF_KW);
+            stmt_cond(p, blade);
+        }
+    }
+    let alt = control_body(p, TokenSet::new(&[ELSEIF_KW, ELSE_KW, ENDIF_KW]), blade);
     loop {
+        let clause_blade = p.at_directive();
         if p.at(ELSEIF_KW) || (p.at(ELSE_KW) && p.nth(1) == IF_KW && !alt) {
             let c = p.start();
             if p.at(ELSE_KW) {
@@ -249,32 +294,35 @@ fn if_stmt(p: &mut Parser<'_>) {
             } else {
                 p.bump(ELSEIF_KW);
             }
-            paren_cond(p);
-            control_body(p, TokenSet::new(&[ELSEIF_KW, ELSE_KW, ENDIF_KW]));
+            stmt_cond(p, clause_blade);
+            control_body(
+                p,
+                TokenSet::new(&[ELSEIF_KW, ELSE_KW, ENDIF_KW]),
+                clause_blade,
+            );
             c.complete(p, ELSEIF_CLAUSE);
         } else if p.at(ELSE_KW) {
             let c = p.start();
             p.bump(ELSE_KW);
-            control_body(p, TokenSet::new(&[ENDIF_KW]));
+            control_body(p, TokenSet::new(&[ENDIF_KW]), clause_blade);
             c.complete(p, ELSE_CLAUSE);
         } else {
             break;
         }
     }
     if alt {
-        p.expect(ENDIF_KW);
-        stmt_end(p);
+        alt_end(p, ENDIF_KW, blade);
     }
     m.complete(p, IF_STMT);
 }
 
 fn while_stmt(p: &mut Parser<'_>) {
     let m = p.start();
+    let blade = p.at_directive();
     p.bump(WHILE_KW);
-    paren_cond(p);
-    if control_body(p, TokenSet::new(&[ENDWHILE_KW])) {
-        p.expect(ENDWHILE_KW);
-        stmt_end(p);
+    stmt_cond(p, blade);
+    if control_body(p, TokenSet::new(&[ENDWHILE_KW]), blade) {
+        alt_end(p, ENDWHILE_KW, blade);
     }
     m.complete(p, WHILE_STMT);
 }
@@ -291,54 +339,70 @@ fn do_while_stmt(p: &mut Parser<'_>) {
 
 fn for_stmt(p: &mut Parser<'_>) {
     let m = p.start();
+    let blade = p.at_directive();
     p.bump(FOR_KW);
-    p.expect(L_PAREN);
-    for (i, kind) in [FOR_INIT, FOR_COND, FOR_STEP].into_iter().enumerate() {
-        let c = p.start();
-        let end = if i == 2 { R_PAREN } else { SEMI };
-        while !p.at(end) && !p.at(EOF) {
-            if exprs::opt_expr(p).is_none() {
-                p.err_and_bump("expected an expression");
+    if blade && !p.at(L_PAREN) {
+        p.error("expected `(`");
+    } else {
+        p.expect(L_PAREN);
+        for (i, kind) in [FOR_INIT, FOR_COND, FOR_STEP].into_iter().enumerate() {
+            let c = p.start();
+            let end = if i == 2 { R_PAREN } else { SEMI };
+            while !p.at(end) && !p.at(EOF) {
+                if exprs::opt_expr(p).is_none() {
+                    p.err_and_bump("expected an expression");
+                }
+                if !p.eat(COMMA) {
+                    break;
+                }
             }
-            if !p.eat(COMMA) {
-                break;
-            }
+            c.complete(p, kind);
+            p.expect(end);
         }
-        c.complete(p, kind);
-        p.expect(end);
     }
-    if control_body(p, TokenSet::new(&[ENDFOR_KW])) {
-        p.expect(ENDFOR_KW);
-        stmt_end(p);
+    if control_body(p, TokenSet::new(&[ENDFOR_KW]), blade) {
+        alt_end(p, ENDFOR_KW, blade);
     }
     m.complete(p, FOR_STMT);
 }
 
 fn foreach_stmt(p: &mut Parser<'_>) {
     let m = p.start();
+    let blade = p.at_directive();
     p.bump(FOREACH_KW);
-    p.expect(L_PAREN);
-    expr(p);
-    p.expect(AS_KW);
-    p.eat(AMP);
-    expr(p);
-    if p.eat(FAT_ARROW) {
+    if blade && !p.at(L_PAREN) {
+        p.error("expected `(`");
+    } else {
+        p.expect(L_PAREN);
+        expr(p);
+        p.expect(AS_KW);
         p.eat(AMP);
         expr(p);
+        if p.eat(FAT_ARROW) {
+            p.eat(AMP);
+            expr(p);
+        }
+        p.expect(R_PAREN);
     }
-    p.expect(R_PAREN);
-    if control_body(p, TokenSet::new(&[ENDFOREACH_KW])) {
-        p.expect(ENDFOREACH_KW);
-        stmt_end(p);
+    let mut forelse_empty = false;
+    if control_body(p, TokenSet::new(&[ENDFOREACH_KW]), blade) {
+        forelse_empty = blade::at_forelse_empty(p);
+        alt_end(p, ENDFOREACH_KW, blade);
     }
     m.complete(p, FOREACH_STMT);
+    if forelse_empty {
+        blade::forelse_empty_branch(p);
+    }
 }
 
 fn switch_stmt(p: &mut Parser<'_>) {
     let m = p.start();
+    let blade = p.at_directive();
     p.bump(SWITCH_KW);
-    paren_cond(p);
-    let alt = if p.at(COLON) {
+    stmt_cond(p, blade);
+    let alt = if blade {
+        true
+    } else if p.at(COLON) {
         p.bump(COLON);
         true
     } else {
@@ -347,26 +411,38 @@ fn switch_stmt(p: &mut Parser<'_>) {
     };
     let end = if alt { ENDSWITCH_KW } else { R_CURLY };
     p.eat(SEMI);
+    if blade {
+        blade::before_first_case(p);
+    }
     while !p.at(end) && !p.at(EOF) {
         let c = p.start();
-        if p.eat(CASE_KW) {
+        let case_blade = p.at_directive();
+        if case_blade && p.at(CASE_KW) {
+            p.bump(CASE_KW);
+            stmt_cond(p, true);
+        } else if p.eat(CASE_KW) {
             expr(p);
         } else if !p.eat(DEFAULT_KW) {
             c.abandon(p);
             p.err_and_bump("expected `case` or `default`");
             continue;
         }
-        if !p.eat(COLON) {
+        if !case_blade && !p.eat(COLON) {
             p.expect(SEMI);
         }
         while !p.at(CASE_KW) && !p.at(DEFAULT_KW) && !p.at(end) && !p.at(EOF) {
+            if p.at(R_CURLY) {
+                p.err_and_bump("unmatched `}`");
+                continue;
+            }
             stmt(p, false);
         }
         c.complete(p, SWITCH_CASE);
     }
-    p.expect(end);
     if alt {
-        stmt_end(p);
+        alt_end(p, end, blade);
+    } else {
+        p.expect(end);
     }
     m.complete(p, SWITCH_STMT);
 }
@@ -416,7 +492,7 @@ fn declare_stmt(p: &mut Parser<'_>) {
     p.expect(R_PAREN);
     if p.at(SEMI) || p.at(CLOSE_TAG) || p.at(EOF) {
         stmt_end(p);
-    } else if control_body(p, TokenSet::new(&[ENDDECLARE_KW])) {
+    } else if control_body(p, TokenSet::new(&[ENDDECLARE_KW]), false) {
         p.expect(ENDDECLARE_KW);
         stmt_end(p);
     }

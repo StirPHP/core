@@ -1,0 +1,60 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"<input @checked($a) @disabled(! $b) @class(['c' => $d]) @style(['e'])>\")"
+---
+SOURCE_FILE
+  INLINE_HTML_STMT
+    INLINE_HTML "<input "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@checked"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        VARIABLE_EXPR
+          VARIABLE "$a"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@disabled"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        PREFIX_EXPR
+          BANG "!"
+          VARIABLE_EXPR
+            VARIABLE "$b"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@class"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        ARRAY_EXPR
+          L_BRACK "["
+          ARRAY_ELEM
+            STRING_LITERAL
+              STRING_SINGLE "'c'"
+            FAT_ARROW "=>"
+            VARIABLE_EXPR
+              VARIABLE "$d"
+          R_BRACK "]"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@style"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        ARRAY_EXPR
+          L_BRACK "["
+          ARRAY_ELEM
+            STRING_LITERAL
+              STRING_SINGLE "'e'"
+          R_BRACK "]"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML ">"

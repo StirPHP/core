@@ -1,0 +1,32 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"<span @class(['k' => @empty($v)])></span>\")"
+---
+SOURCE_FILE
+  INLINE_HTML_STMT
+    INLINE_HTML "<span "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@class"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        ARRAY_EXPR
+          L_BRACK "["
+          ARRAY_ELEM
+            STRING_LITERAL
+              STRING_SINGLE "'k'"
+            FAT_ARROW "=>"
+            ERROR_SUPPRESS_EXPR
+              AT "@"
+              EMPTY_EXPR
+                EMPTY_KW "empty"
+                ARG_LIST
+                  L_PAREN "("
+                  ARG
+                    VARIABLE_EXPR
+                      VARIABLE "$v"
+                  R_PAREN ")"
+          R_BRACK "]"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML "></span>"

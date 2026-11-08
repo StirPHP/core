@@ -1,0 +1,11 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"{{ $a; }}\")"
+---
+SOURCE_FILE
+  ECHO_TAG_STMT
+    OPEN_TAG_WITH_ECHO "{{"
+    VARIABLE_EXPR
+      VARIABLE "$a"
+    SEMI ";"
+  CLOSE_TAG "}}"

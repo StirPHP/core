@@ -86,6 +86,10 @@ fn recovers_from_garbage() {
         "<?php if ($a { echo 1; }",
         "<?php foo(1, 2",
         "<?php ) ] } ;",
+        "<?php isset;",
+        "<?php empty ]",
+        "<?php switch ($a): case 1: } endswitch;",
+        "<?php $a = <<<'A'\n",
     ] {
         let parse = parse(src);
         assert_eq!(parse.syntax().to_string(), src);

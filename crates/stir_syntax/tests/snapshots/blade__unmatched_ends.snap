@@ -1,0 +1,33 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_err(\"@endif @endforeach @endfor @endwhile @endswitch @empty\")"
+---
+SOURCE_FILE
+  ERROR
+    ENDIF_KW "@endif"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  ERROR
+    ENDFOREACH_KW "@endforeach"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  ERROR
+    ENDFOR_KW "@endfor"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  ERROR
+    ENDWHILE_KW "@endwhile"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  ERROR
+    ENDSWITCH_KW "@endswitch"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  ERROR
+    ENDFOREACH_KW "@empty"
+error 0..6: unmatched `@endif`
+error 7..18: unmatched `@endforeach`
+error 19..26: unmatched `@endfor`
+error 27..36: unmatched `@endwhile`
+error 37..47: unmatched `@endswitch`
+error 48..54: unmatched `@empty`

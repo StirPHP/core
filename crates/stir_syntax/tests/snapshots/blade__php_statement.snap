@@ -1,0 +1,33 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@php($a = 1)\\n@php ($b = [')'])\")"
+---
+SOURCE_FILE
+  EXPR_STMT
+    BLADE_DIRECTIVE_NAME "@php"
+    PAREN_EXPR
+      L_PAREN "("
+      ASSIGN_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$a"
+        EQ "="
+        LITERAL
+          INT_NUMBER "1"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML "\n"
+  EXPR_STMT
+    BLADE_DIRECTIVE_NAME "@php"
+    PAREN_EXPR
+      L_PAREN "("
+      ASSIGN_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$b"
+        EQ "="
+        ARRAY_EXPR
+          L_BRACK "["
+          ARRAY_ELEM
+            STRING_LITERAL
+              STRING_SINGLE "')'"
+          R_BRACK "]"
+      R_PAREN ")"

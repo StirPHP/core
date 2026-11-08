@@ -1,5 +1,6 @@
-//! The PHP grammar.
+//! The PHP grammar, and the Blade directives that build on it.
 
+mod blade;
 mod exprs;
 mod items;
 mod stmts;
@@ -103,7 +104,11 @@ pub(super) fn attributes(p: &mut Parser<'_>) {
 /// `(a, b: c, ...$d)` or the first-class-callable `(...)`.
 pub(super) fn arg_list(p: &mut Parser<'_>) {
     let m = p.start();
-    p.bump(L_PAREN);
+    if !p.expect(L_PAREN) {
+        // `isset` and the like come here without looking
+        m.complete(p, ARG_LIST);
+        return;
+    }
     if p.at(ELLIPSIS) && p.nth(1) == R_PAREN {
         let c = p.start();
         p.bump(ELLIPSIS);

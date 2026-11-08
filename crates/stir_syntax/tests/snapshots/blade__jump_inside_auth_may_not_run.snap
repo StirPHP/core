@@ -1,0 +1,54 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@foreach ($a as $b) @auth @break @endauth @can('c') @continue(2) @endcan @endforeach\")"
+---
+SOURCE_FILE
+  FOREACH_STMT
+    FOREACH_KW "@foreach"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$a"
+    AS_KW "as"
+    VARIABLE_EXPR
+      VARIABLE "$b"
+    R_PAREN ")"
+    BLOCK
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+      BLADE_DIRECTIVE
+        BLADE_DIRECTIVE_NAME "@auth"
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+      IF_STMT
+        BREAK_STMT
+          BREAK_KW "@break"
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+      BLADE_DIRECTIVE
+        BLADE_DIRECTIVE_NAME "@endauth"
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+      BLADE_DIRECTIVE
+        BLADE_DIRECTIVE_NAME "@can"
+        ARG_LIST
+          L_PAREN "("
+          ARG
+            STRING_LITERAL
+              STRING_SINGLE "'c'"
+          R_PAREN ")"
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+      IF_STMT
+        CONTINUE_STMT
+          CONTINUE_KW "@continue"
+          L_PAREN "("
+          LITERAL
+            INT_NUMBER "2"
+          R_PAREN ")"
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+      BLADE_DIRECTIVE
+        BLADE_DIRECTIVE_NAME "@endcan"
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+    ENDFOREACH_KW "@endforeach"

@@ -1,0 +1,15 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@php echo \\\"{{ a }}\\\" . '@if' @endphp\")"
+---
+SOURCE_FILE
+  OPEN_TAG "@php"
+  ECHO_STMT
+    ECHO_KW "echo"
+    BIN_EXPR
+      STRING_LITERAL
+        STRING_DOUBLE "\"{{ a }}\""
+      DOT "."
+      STRING_LITERAL
+        STRING_SINGLE "'@if'"
+  CLOSE_TAG "@endphp"

@@ -1,0 +1,26 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@if ($a) <?php else: ?> b <?php endif; ?>\")"
+---
+SOURCE_FILE
+  IF_STMT
+    IF_KW "@if"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$a"
+    R_PAREN ")"
+    BLOCK
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+      OPEN_TAG "<?php "
+    ELSE_CLAUSE
+      ELSE_KW "else"
+      BLOCK
+        COLON ":"
+        CLOSE_TAG "?>"
+        INLINE_HTML_STMT
+          INLINE_HTML " b "
+        OPEN_TAG "<?php "
+    ENDIF_KW "endif"
+    SEMI ";"
+  CLOSE_TAG "?>"

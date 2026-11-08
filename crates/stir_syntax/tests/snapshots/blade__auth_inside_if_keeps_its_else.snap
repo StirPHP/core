@@ -1,0 +1,32 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@if ($a) @auth b @else c @endauth @else d @endif\")"
+---
+SOURCE_FILE
+  IF_STMT
+    IF_KW "@if"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$a"
+    R_PAREN ")"
+    BLOCK
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+      BLADE_DIRECTIVE
+        BLADE_DIRECTIVE_NAME "@auth"
+      INLINE_HTML_STMT
+        INLINE_HTML " b "
+      BLADE_DIRECTIVE
+        BLADE_DIRECTIVE_NAME "@else"
+      INLINE_HTML_STMT
+        INLINE_HTML " c "
+      BLADE_DIRECTIVE
+        BLADE_DIRECTIVE_NAME "@endauth"
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+    ELSE_CLAUSE
+      ELSE_KW "@else"
+      BLOCK
+        INLINE_HTML_STMT
+          INLINE_HTML " d "
+    ENDIF_KW "@endif"

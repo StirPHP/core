@@ -1,0 +1,15 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"<?php $a = '{{ @if'; ?>\")"
+---
+SOURCE_FILE
+  OPEN_TAG "<?php "
+  EXPR_STMT
+    ASSIGN_EXPR
+      VARIABLE_EXPR
+        VARIABLE "$a"
+      EQ "="
+      STRING_LITERAL
+        STRING_SINGLE "'{{ @if'"
+    SEMI ";"
+  CLOSE_TAG "?>"

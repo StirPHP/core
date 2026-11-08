@@ -1,0 +1,24 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@foreach ($a as $b)@break @continue @endforeach\")"
+---
+SOURCE_FILE
+  FOREACH_STMT
+    FOREACH_KW "@foreach"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$a"
+    AS_KW "as"
+    VARIABLE_EXPR
+      VARIABLE "$b"
+    R_PAREN ")"
+    BLOCK
+      BREAK_STMT
+        BREAK_KW "@break"
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+      CONTINUE_STMT
+        CONTINUE_KW "@continue"
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+    ENDFOREACH_KW "@endforeach"

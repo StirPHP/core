@@ -1,0 +1,9 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_err(\"{{ }}\")"
+---
+SOURCE_FILE
+  ECHO_TAG_STMT
+    OPEN_TAG_WITH_ECHO "{{"
+  CLOSE_TAG "}}"
+error 3..5: expected an expression

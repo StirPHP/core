@@ -1,0 +1,60 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@include('a', ['b' => $c]) @includeWhen($d, 'e') @each('f', $g, 'h', 'i')\")"
+---
+SOURCE_FILE
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@include"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'a'"
+      COMMA ","
+      ARG
+        ARRAY_EXPR
+          L_BRACK "["
+          ARRAY_ELEM
+            STRING_LITERAL
+              STRING_SINGLE "'b'"
+            FAT_ARROW "=>"
+            VARIABLE_EXPR
+              VARIABLE "$c"
+          R_BRACK "]"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@includeWhen"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        VARIABLE_EXPR
+          VARIABLE "$d"
+      COMMA ","
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'e'"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@each"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'f'"
+      COMMA ","
+      ARG
+        VARIABLE_EXPR
+          VARIABLE "$g"
+      COMMA ","
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'h'"
+      COMMA ","
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'i'"
+      R_PAREN ")"

@@ -1,0 +1,18 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"{{\\n    $a\\n        ->b()\\n}}\")"
+---
+SOURCE_FILE
+  ECHO_TAG_STMT
+    OPEN_TAG_WITH_ECHO "{{"
+    METHOD_CALL_EXPR
+      PROPERTY_FETCH_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$a"
+        ARROW "->"
+        NAME
+          IDENT "b"
+      ARG_LIST
+        L_PAREN "("
+        R_PAREN ")"
+  CLOSE_TAG "}}"

@@ -1,0 +1,66 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@extends('a')\\n@section('b', 'c')\\n@section('d')\\n{{ $e }}\\n@show\\n@yield('f', $g)\\n@endsection\")"
+---
+SOURCE_FILE
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@extends"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'a'"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML "\n"
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@section"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'b'"
+      COMMA ","
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'c'"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML "\n"
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@section"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'d'"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML "\n"
+  ECHO_TAG_STMT
+    OPEN_TAG_WITH_ECHO "{{"
+    VARIABLE_EXPR
+      VARIABLE "$e"
+  CLOSE_TAG "}}"
+  INLINE_HTML_STMT
+    INLINE_HTML "\n"
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@show"
+  INLINE_HTML_STMT
+    INLINE_HTML "\n"
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@yield"
+    ARG_LIST
+      L_PAREN "("
+      ARG
+        STRING_LITERAL
+          STRING_SINGLE "'f'"
+      COMMA ","
+      ARG
+        VARIABLE_EXPR
+          VARIABLE "$g"
+      R_PAREN ")"
+  INLINE_HTML_STMT
+    INLINE_HTML "\n"
+  BLADE_DIRECTIVE
+    BLADE_DIRECTIVE_NAME "@endsection"

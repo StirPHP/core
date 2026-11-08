@@ -1,0 +1,11 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_err(\"@break()\")"
+---
+SOURCE_FILE
+  IF_STMT
+    BREAK_KW "@break"
+    L_PAREN "("
+    R_PAREN ")"
+    BREAK_STMT
+error 7..8: expected an expression

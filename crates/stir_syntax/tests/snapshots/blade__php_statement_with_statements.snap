@@ -1,0 +1,21 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_err(\"@php($a = 1;)\")"
+---
+SOURCE_FILE
+  EXPR_STMT
+    BLADE_DIRECTIVE_NAME "@php"
+    PAREN_EXPR
+      L_PAREN "("
+      ASSIGN_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$a"
+        EQ "="
+        LITERAL
+          INT_NUMBER "1"
+  EMPTY_STMT
+    SEMI ";"
+  ERROR
+    R_PAREN ")"
+error 11..12: expected `)`
+error 12..13: expected a statement

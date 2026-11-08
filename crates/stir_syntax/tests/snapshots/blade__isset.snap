@@ -1,0 +1,27 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@isset($a, $b['c']) a @endisset\")"
+---
+SOURCE_FILE
+  IF_STMT
+    ISSET_EXPR
+      ISSET_KW "@isset"
+      ARG_LIST
+        L_PAREN "("
+        ARG
+          VARIABLE_EXPR
+            VARIABLE "$a"
+        COMMA ","
+        ARG
+          INDEX_EXPR
+            VARIABLE_EXPR
+              VARIABLE "$b"
+            L_BRACK "["
+            STRING_LITERAL
+              STRING_SINGLE "'c'"
+            R_BRACK "]"
+        R_PAREN ")"
+    BLOCK
+      INLINE_HTML_STMT
+        INLINE_HTML " a "
+    ENDIF_KW "@endisset"

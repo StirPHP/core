@@ -1,0 +1,36 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"@foreach ($a as $k => [$b, $c]) {{ $b }} @endforeach\")"
+---
+SOURCE_FILE
+  FOREACH_STMT
+    FOREACH_KW "@foreach"
+    L_PAREN "("
+    VARIABLE_EXPR
+      VARIABLE "$a"
+    AS_KW "as"
+    VARIABLE_EXPR
+      VARIABLE "$k"
+    FAT_ARROW "=>"
+    ARRAY_EXPR
+      L_BRACK "["
+      ARRAY_ELEM
+        VARIABLE_EXPR
+          VARIABLE "$b"
+      COMMA ","
+      ARRAY_ELEM
+        VARIABLE_EXPR
+          VARIABLE "$c"
+      R_BRACK "]"
+    R_PAREN ")"
+    BLOCK
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+      ECHO_TAG_STMT
+        OPEN_TAG_WITH_ECHO "{{"
+        VARIABLE_EXPR
+          VARIABLE "$b"
+      CLOSE_TAG "}}"
+      INLINE_HTML_STMT
+        INLINE_HTML " "
+    ENDFOREACH_KW "@endforeach"
