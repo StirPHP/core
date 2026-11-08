@@ -1,0 +1,6 @@
+=== action: Organize imports
+=== path: /src/resources/views/show.blade.php
+=== input
+<?php use B\C; use A\B; ?>‸
+{{ new B }} {{ new C }}
+=== no-offer

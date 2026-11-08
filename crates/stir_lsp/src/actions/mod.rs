@@ -317,6 +317,36 @@ impl<'c> Cx<'c> {
         }
     }
 
+    /// Is this a Blade template?
+    pub fn is_template(&self) -> bool {
+        stir_syntax::is_blade_path(self.file.path(self.db))
+    }
+
+    /// Is the selection inside one block of PHP: `@php ... @endphp` or `<?php ... ?>`? Outside of
+    /// one, in `{{ }}` or a directive's arguments, there's no place for a statement.
+    pub fn in_php_block(&self) -> bool {
+        let mut open = None;
+        for token in self
+            .root
+            .descendants_with_tokens()
+            .filter_map(|e| e.into_token())
+        {
+            match token.kind() {
+                SyntaxKind::OPEN_TAG => open = Some(token.text_range().end()),
+                SyntaxKind::CLOSE_TAG | SyntaxKind::OPEN_TAG_WITH_ECHO => {
+                    if let Some(start) = open.take()
+                        && start <= self.range.start()
+                        && self.range.end() <= token.text_range().start()
+                    {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        open.is_some_and(|start| start <= self.range.start())
+    }
+
     /// The token at the start of the selection.
     pub fn here(&self) -> Option<SyntaxToken> {
         self.token_at(self.range.start())
@@ -379,6 +409,12 @@ pub fn offers<'c>(cx: &'c Cx<'c>) -> Vec<Offer<'c>> {
     {
         return out;
     }
+    if cx.is_template() {
+        template_offers(cx, &mut out);
+        out.retain(|o| cx.wants(o.kind));
+        out.sort_by_key(|o| !o.preferred);
+        return out;
+    }
     if cx.wants(Kind::QuickFix) {
         guarded(&mut out, |o| fix_names::offers(cx, o));
         guarded(&mut out, |o| fix_types::offers(cx, o));
@@ -412,6 +448,37 @@ pub fn offers<'c>(cx: &'c Cx<'c>) -> Vec<Offer<'c>> {
     out.retain(|o| cx.wants(o.kind));
     out.sort_by_key(|o| !o.preferred);
     out
+}
+
+/// What can be done in a template. Fixing a name works anywhere, as its import goes in a `@use`,
+/// as does what only edits a class. What puts statements in place of what's selected needs a block
+/// of PHP to be in. Not removing an "unused" variable, which an `@include` passes along unseen, or
+/// sorting imports, or a comment on the line above, which there would be HTML.
+fn template_offers<'c>(cx: &'c Cx<'c>, out: &mut Vec<Offer<'c>>) {
+    if cx.wants(Kind::QuickFix) {
+        guarded(out, |o| fix_names::offers(cx, o));
+        guarded(out, |o| fix_members::offers(cx, o));
+    }
+    if !cx.in_php_block() {
+        return;
+    }
+    if cx.wants(Kind::QuickFix) {
+        guarded(out, |o| fix_types::offers(cx, o));
+    }
+    if cx.wants(Kind::RefactorExtract) {
+        guarded(out, |o| variables::extract_offers(cx, o));
+        guarded(out, |o| extract::offers(cx, o));
+    }
+    if cx.wants(Kind::RefactorInline) {
+        guarded(out, |o| variables::inline_offers(cx, o));
+    }
+    if cx.wants(Kind::RefactorRewrite) {
+        guarded(out, |o| members::offers(cx, o));
+        guarded(out, |o| classes::offers(cx, o));
+        guarded(out, |o| flow::offers(cx, o));
+        guarded(out, |o| fix_types::refactor_offers(cx, o));
+        guarded(out, |o| signature::offers(cx, o));
+    }
 }
 
 /// The edits of the offer `id`, for this selection of this text, or why there aren't any.
@@ -449,7 +516,10 @@ pub fn finish(db: &dyn Db, change: Change) -> Result<Change, Refusal> {
             ));
         }
         let text = apply(file.text(db), &change, file)?;
-        if !stir_syntax::parse(&text).errors().is_empty() {
+        if !stir_syntax::parse_path(file.path(db), &text)
+            .errors()
+            .is_empty()
+        {
             return Err(format!(
                 "It would leave `{}` with syntax errors, so it wasn't done. That's a bug in StirPHP.",
                 file.path(db).display()

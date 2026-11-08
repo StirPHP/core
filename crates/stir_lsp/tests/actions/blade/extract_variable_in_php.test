@@ -1,0 +1,13 @@
+=== action: Extract to a variable
+=== path: /src/resources/views/show.blade.php
+=== input
+<p>héllo</p>
+@php
+    $x = ⟦1 + 2⟧;
+@endphp
+=== output
+<p>héllo</p>
+@php
+    $value = 1 + 2;
+    $x = $value;
+@endphp

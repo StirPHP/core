@@ -1,0 +1,16 @@
+=== action: Import function `App\helper`
+=== path: /src/resources/views/show.blade.php
+=== fixes: function.notFound
+=== file: /src/helpers.php
+<?php
+namespace App;
+function helper(): int { return 1; }
+=== file: /vendor/Factory.php
+<?php
+namespace Illuminate\View;
+class Factory {}
+=== input
+{{ help‸er() }}
+=== output
+@use('function App\helper')
+{{ helper() }}

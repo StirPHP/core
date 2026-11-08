@@ -1,0 +1,29 @@
+=== action: Import `App\Models\Post`
+=== path: /src/resources/views/show.blade.php
+=== fixes: class.notFound
+=== file: /src/Post.php
+<?php
+namespace App\Models;
+class Post {}
+class Author {}
+=== file: /vendor/Factory.php
+<?php
+namespace Illuminate\View;
+class Factory {}
+=== input
+<!-- 日本語 -->
+@use('App\Models\Author')
+<p>
+    @foreach ([new Po‸st] as $post)
+        {{ $post::class }}
+    @endforeach
+</p>
+=== output
+<!-- 日本語 -->
+@use('App\Models\Author')
+@use('App\Models\Post')
+<p>
+    @foreach ([new Post] as $post)
+        {{ $post::class }}
+    @endforeach
+</p>

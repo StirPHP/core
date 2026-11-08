@@ -1,0 +1,18 @@
+=== action: Import `App\Models\Post`
+=== path: /src/resources/views/show.blade.php
+=== fixes: class.notFound
+=== file: /src/Post.php
+<?php
+namespace App\Models;
+class Post {}
+=== file: /vendor/Factory.php
+<?php
+namespace Illuminate\View;
+class Factory {}
+=== input
+<h1>Grüße</h1>
+{{ new Po‸st }}
+=== output
+@use('App\Models\Post')
+<h1>Grüße</h1>
+{{ new Post }}

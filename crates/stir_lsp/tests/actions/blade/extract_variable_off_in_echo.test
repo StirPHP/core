@@ -1,0 +1,5 @@
+=== action: Extract to a variable
+=== path: /src/resources/views/show.blade.php
+=== input
+{{ ⟦1 + 2⟧ }}
+=== no-offer

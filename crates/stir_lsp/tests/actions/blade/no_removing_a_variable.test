@@ -1,0 +1,8 @@
+=== action: Remove unused variable `$x`
+=== path: /src/resources/views/show.blade.php
+=== input
+@php
+    $‸x = 1;
+@endphp
+@include('card')
+=== no-offer

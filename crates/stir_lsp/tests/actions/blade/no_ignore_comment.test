@@ -1,0 +1,5 @@
+=== action: Ignore `class.notFound` on this line
+=== path: /src/resources/views/show.blade.php
+=== input
+{{ new Nothi‸ng }}
+=== no-offer

@@ -1,0 +1,6 @@
+=== action: Extract to a variable
+=== path: /src/resources/views/show.blade.php
+=== input
+@foreach (⟦range(1, 2)⟧ as $x)
+@endforeach
+=== no-offer

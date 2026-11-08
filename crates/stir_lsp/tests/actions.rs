@@ -4,6 +4,7 @@
 //! === action: Import `App\Foo`
 //! === php: 8.1                  (optional: the versions the project runs on)
 //! === level: 6                  (optional: the rule level, 5 otherwise)
+//! === path: /src/a.blade.php    (optional: where the input is, /src/main.php otherwise)
 //! === crlf                      (optional: the files have CRLF line endings)
 //! === fixes: class.notFound     (optional: this is gone afterwards)
 //! === new: a.b                  (optional: this may be new afterwards)
@@ -36,6 +37,7 @@ struct Fixture {
     action: String,
     php: Option<String>,
     level: Option<u8>,
+    path: Option<String>,
     crlf: bool,
     extensions: Option<Vec<String>>,
     fixes: Vec<String>,
@@ -85,6 +87,7 @@ fn parse_fixture(text: &str) -> Fixture {
             "action" => f.action = rest.to_owned(),
             "php" => f.php = Some(rest.to_owned()),
             "level" => f.level = rest.parse().ok(),
+            "path" => f.path = Some(rest.to_owned()),
             "crlf" => f.crlf = true,
             "extensions" => {
                 f.extensions = Some(rest.split(',').map(|e| e.trim().to_owned()).collect());
@@ -194,7 +197,7 @@ fn run(bench: &mut Bench, f: &Fixture) -> Result<(), String> {
     let db = &mut bench.db;
     let file = SourceFile::new(
         db,
-        "/src/main.php".into(),
+        f.path.as_deref().unwrap_or("/src/main.php").into(),
         input.clone(),
         FileOrigin::Source,
     );
@@ -319,7 +322,7 @@ fn run(bench: &mut Bench, f: &Fixture) -> Result<(), String> {
         }
     }
     for (s, new) in &touched {
-        let errors = stir_syntax::parse(new);
+        let errors = stir_syntax::parse_path(s.path(db), new);
         if !errors.errors().is_empty() {
             return Err(format!("doesn't parse: {:?}\n{new}", errors.errors()));
         }

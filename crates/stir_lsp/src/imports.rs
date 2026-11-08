@@ -50,6 +50,8 @@ pub struct Imports<'a> {
     newline: &'static str,
     /// Are global classes written `\Foo` here, rather than imported?
     global_by_backslash: bool,
+    /// A Blade template, whose imports are `@use(...)`.
+    blade: bool,
 }
 
 /// PER-CS's order of the kinds of imports.
@@ -84,6 +86,9 @@ impl<'a> Imports<'a> {
     pub fn new(db: &'a dyn Db, file: SourceFile, offset: TextSize) -> Option<Imports<'a>> {
         let text = file.text(db).as_str();
         let root = stir_db::parse(db, file).syntax();
+        if stir_syntax::is_blade_path(file.path(db)) {
+            return Some(Self::of_template(db, file, text, &root));
+        }
         let open = root
             .descendants_with_tokens()
             .filter_map(|e| e.into_token())
@@ -200,7 +205,61 @@ impl<'a> Imports<'a> {
             braced,
             newline,
             global_by_backslash,
+            blade: false,
         })
+    }
+
+    /// In a template, what's imported is imported from the `@use` on: names go in at the top.
+    fn of_template(db: &'a dyn Db, file: SourceFile, text: &'a str, root: &SyntaxNode) -> Self {
+        let uses = root
+            .children()
+            .filter(|c| c.kind() == BLADE_DIRECTIVE)
+            .filter_map(|c| {
+                let name = c
+                    .children_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .find(|t| t.kind() == BLADE_DIRECTIVE_NAME)?;
+                if !name.text().eq_ignore_ascii_case("@use") {
+                    return None;
+                }
+                let args = c
+                    .children_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .find(|t| t.kind() == BLADE_RAW_ARGS)?;
+                let written = args.text().trim_matches(['(', ')', ' ', '\'', '"']);
+                let (kind, written) = if let Some(rest) = written.strip_prefix("function ") {
+                    (UseKind::Function, rest)
+                } else if let Some(rest) = written.strip_prefix("const ") {
+                    (UseKind::Const, rest)
+                } else {
+                    (UseKind::Class, written)
+                };
+                Some(UseDecl {
+                    kind,
+                    key: sort_key(written),
+                    range: c.text_range(),
+                })
+            })
+            .collect();
+        let end = root.text_range().end();
+        let scope = file_items(db, file)
+            .scope_at(end.max(1.into()) - TextSize::from(1))
+            .as_ref()
+            .clone();
+        Imports {
+            text,
+            global_by_backslash: prefers_backslash(root, &scope),
+            scope,
+            declared_classes: Vec::new(),
+            declared_functions: Vec::new(),
+            declared_consts: Vec::new(),
+            uses,
+            anchor: None,
+            indent: String::new(),
+            braced: false,
+            newline: if text.contains("\r\n") { "\r\n" } else { "\n" },
+            blade: true,
+        }
     }
 
     /// How to refer to the class `fqn`.
@@ -345,6 +404,16 @@ impl<'a> Imports<'a> {
             let found = usize::from(use_decl.range.start()) + at + " as ".len();
             return word(found).to_owned();
         }
+        // `@use('App\Post', 'Alias')`
+        if self.blade {
+            for use_decl in &self.uses {
+                let decl = &self.text[use_decl.range];
+                let lower = decl.to_ascii_lowercase();
+                if let Some(at) = lower.find(&format!("'{alias}'")) {
+                    return word(usize::from(use_decl.range.start()) + at + 1).to_owned();
+                }
+            }
+        }
         alias.to_owned()
     }
 
@@ -365,6 +434,21 @@ impl<'a> Imports<'a> {
             UseKind::Const => "const ",
         };
         let nl = self.newline;
+        if self.blade {
+            let line = format!("@use('{keyword}{}')", fqn.as_str());
+            return Some(match self.uses.last() {
+                Some(last) => ImportEdit {
+                    at: last.range.end(),
+                    text: format!("{nl}{line}"),
+                    line,
+                },
+                None => ImportEdit {
+                    at: TextSize::from(0),
+                    text: format!("{line}{nl}"),
+                    line,
+                },
+            });
+        }
         let indent = &self.indent;
         let line = format!("{indent}use {keyword}{};", fqn.as_str());
         let same: Vec<&UseDecl> = self.uses.iter().filter(|u| u.kind == kind).collect();
