@@ -2,7 +2,7 @@
   "name": "stirphp",
   "displayName": "StirPHP",
   "description": "Type checking, completion and navigation for PHP, from the StirPHP language server.",
-  "version": "0.1.21",
+  "version": "0.2.0",
   "publisher": "stirphp",
   "license": "MIT",
   "private": true,
@@ -22,7 +22,11 @@
     "untrustedWorkspaces": {
       "supported": "limited",
       "description": "In an untrusted workspace, custom rules and PHPStan never run, and `stirphp.server.path` and `stirphp.phpstan.path` from the workspace are ignored.",
-      "restrictedConfigurations": ["stirphp.server.path", "stirphp.phpstan.path", "stirphp.phpstan.configuration"]
+      "restrictedConfigurations": [
+        "stirphp.server.path",
+        "stirphp.phpstan.path",
+        "stirphp.phpstan.configuration"
+      ]
     }
   },
   "contributes": {
