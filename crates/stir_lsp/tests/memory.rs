@@ -223,8 +223,13 @@ fn session(db: &mut RootDatabase, ws: Workspace, sources: &[SourceFile], plan: &
         // what an editor asks of other files meanwhile
         for _ in 0..2 {
             let other = sources[rng.below(sources.len())];
-            let len = other.text(db).len();
-            let at = TextSize::from(rng.below(len) as u32);
+            // where a cursor can be: between characters
+            let text = other.text(db);
+            let mut at = rng.below(text.len());
+            while !text.is_char_boundary(at) {
+                at -= 1;
+            }
+            let at = TextSize::from(at as u32);
             let t = Instant::now();
             let _ = stir_lsp::hover::hover(db, ws, other, at);
             hover_time.add(t);
