@@ -187,9 +187,7 @@ fn blade_use_ref(db: &dyn Db, ws: Workspace, node: &SyntaxNode, out: &mut Vec<(T
         .find(|c: char| !matches!(c, '(' | ' ' | '\'' | '"' | '\\'))
         .unwrap_or(text.len());
     let rest = &text[start..];
-    let len = rest
-        .find([')', ' ', '\'', '"', ','])
-        .unwrap_or(rest.len());
+    let len = rest.find([')', ' ', '\'', '"', ',']).unwrap_or(rest.len());
     let name = &rest[..len];
     if name.contains('{') || name == "function" || name == "const" {
         return;

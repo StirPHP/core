@@ -9,3 +9,6 @@
     {{ $thing->title }}
     {{ $thing->nothing }} // error: property.notFound
 @endforeach
+{{-- what a query added to a model is read like this, but a method that isn't there is a typo --}}
+{{ (new \App\Models\Magic)->comments_count }}
+{{ (new \App\Models\Magic)->nothing() }} // error: method.notFound

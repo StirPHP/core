@@ -160,9 +160,14 @@ fn project_finds_views_as_usual(db: &dyn Db, ws: Workspace) -> bool {
             return false;
         }
         if !stir_syntax::is_blade_path(file.path(db))
-            && ["addLocation(", "prependLocation(", "addExtension("]
-                .iter()
-                .any(|call| text.contains(call))
+            && [
+                "addLocation(",
+                "prependLocation(",
+                "addExtension('",
+                "addExtension(\"",
+            ]
+            .iter()
+            .any(|call| text.contains(call))
         {
             return false;
         }

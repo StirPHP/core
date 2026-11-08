@@ -41,3 +41,10 @@ class WithThing
 {
     use HasThing;
 }
+
+class Magic
+{
+    public function __get(string $name): mixed { return null; }
+    /** @param list<mixed> $args */
+    public function __call(string $name, array $args): mixed { return null; }
+}

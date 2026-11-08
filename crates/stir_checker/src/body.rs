@@ -5135,7 +5135,8 @@ impl<'a, 'db> Checker<'a, 'db> {
                         // PHPStan's `reportMagicProperties`: fine at level 0, but from level 1
                         // a property only `__get` knows of has to be declared with `@property`
                         if self.has_magic(&cls, "__get") {
-                            // a template's `$errors->login`: there, that's how these are used
+                            // a template's `$errors->login` and `$post->comments_count`: that's
+                            // how it reads what it's given, which may have been added by a query
                             if self.template.is_none() {
                                 self.error(
                                     range,
@@ -5449,14 +5450,12 @@ impl<'a, 'db> Checker<'a, 'db> {
         // PHPStan's `reportMagicMethods`: fine at level 0, but from level 1 a method only
         // `__call` knows of has to be declared with `@method`
         if matches!(cls.kind(), TyKind::Class { .. }) && self.has_magic(&cls, "__call") {
-            if self.template.is_none() {
-                self.error(
-                    range,
-                    codes::METHOD_NOT_FOUND,
-                    format!("`{recv}` has no method `{name}`, only `__call`"),
-                );
-                self.tag_level(1);
-            }
+            self.error(
+                range,
+                codes::METHOD_NOT_FOUND,
+                format!("`{recv}` has no method `{name}`, only `__call`"),
+            );
+            self.tag_level(1);
             self.check_args_untyped(node);
             return Ty::untyped();
         }
@@ -5800,14 +5799,12 @@ impl<'a, 'db> Checker<'a, 'db> {
                     return t;
                 }
                 if self.has_magic(&cls, "__callStatic") {
-                    if self.template.is_none() {
-                        self.error(
-                            name_node.text_range(),
-                            codes::STATIC_METHOD_NOT_FOUND,
-                            format!("`{cls}` has no method `{name}`, only `__callStatic`"),
-                        );
-                        self.tag_level(1);
-                    }
+                    self.error(
+                        name_node.text_range(),
+                        codes::STATIC_METHOD_NOT_FOUND,
+                        format!("`{cls}` has no method `{name}`, only `__callStatic`"),
+                    );
+                    self.tag_level(1);
                     self.check_args_untyped(node);
                     return Ty::untyped();
                 }

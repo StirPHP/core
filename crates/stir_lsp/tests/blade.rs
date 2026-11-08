@@ -218,9 +218,8 @@ async fn going_to_a_definition_in_a_template() {
     );
 
     // a variable goes to where it's first seen
-    let def = s.at("textDocument/definition", "$title }}
-", 1).await;
-    assert_eq!(def["range"]["start"]["character"], 20, "{def}");
+    let def = s.at("textDocument/definition", "$title }}\n", 1).await;
+    assert_eq!(def["range"]["start"]["character"], 21, "{def}");
     assert_eq!(s.range_text(&def["range"]), "$title", "{def}");
 
     let def = s.at("textDocument/definition", "$local + 1", 1).await;
