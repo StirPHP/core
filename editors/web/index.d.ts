@@ -12,4 +12,4 @@ export interface Port {
 export function serve(port: Port, options?: { wasm?: unknown }): Promise<void>;
 
 /** Starts the language server in a module Web Worker. */
-export function startWorker(options?: { name?: string }): Worker;
+export function startWorker(): Worker;

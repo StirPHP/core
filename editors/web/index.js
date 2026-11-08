@@ -15,13 +15,10 @@ export { serve } from './serve.js';
 
 /**
  * Starts the language server in a module Web Worker.
- * @param {{name?: string}} [options]
  * @returns {Worker}
  */
-export function startWorker(options = {}) {
-  // written out like this so that bundlers (Vite, webpack) see the worker and the `.wasm` it loads
-  return new Worker(new URL('./worker.js', import.meta.url), {
-    type: 'module',
-    name: options.name ?? 'stirphp',
-  });
+export function startWorker() {
+  // written out like this, with nothing but literals in the options, so that bundlers (Vite,
+  // webpack) see the worker and the `.wasm` it loads: Vite refuses options it can't evaluate
+  return new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'stirphp' });
 }
