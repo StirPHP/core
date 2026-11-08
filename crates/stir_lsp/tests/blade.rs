@@ -802,3 +802,159 @@ async fn code_actions_in_a_template() {
         "{actions:?}"
     );
 }
+
+/// A Laravel application's template and the controller that renders it, both open.
+struct Rendered {
+    c: Client,
+    controller: String,
+    template: String,
+    _tmp: tempfile::TempDir,
+}
+
+const CONTROLLER: &str = "<?php
+namespace App;
+use App\\Models\\Post;
+class Show
+{
+    public function __invoke(Post $post)
+    {
+        return view('show', ['post' => $post]);
+    }
+}
+";
+
+const SHOWN: &str = "<p>日本語</p> {{ $post->title }} {{ $post->wrong() }}\n{{ $missing }}\n";
+
+async fn rendered() -> Rendered {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    write(
+        &root.join("stirphp.neon"),
+        "parameters:\n    stirphp:\n        frameworks:\n            laravel: true\n",
+    );
+    write(&root.join("bootstrap/app.php"), "<?php\n");
+    write(
+        &root.join("app/Models/Post.php"),
+        "<?php\nnamespace App\\Models;\nclass Post {\n    public string $title = '';\n}\n",
+    );
+    write(
+        &root.join("app/Models/Page.php"),
+        "<?php\nnamespace App\\Models;\nclass Page {\n    public string $title = '';\n    public function wrong(): int { return 1; }\n}\n",
+    );
+    write(
+        &root.join("app/Factory.php"),
+        "<?php\nnamespace Illuminate\\View;\nclass Factory {}\n",
+    );
+    write(
+        &root.join("app/helpers.php"),
+        "<?php\nfunction view(string $name, array $data = []): string { return ''; }\n",
+    );
+    let controller_path = root.join("app/Show.php");
+    write(&controller_path, CONTROLLER);
+    let template_path = root.join("resources/views/show.blade.php");
+    write(&template_path, SHOWN);
+    let (controller, template) = (uri(&controller_path), uri(&template_path));
+    let mut c = Client::start();
+    c.request(
+        "initialize",
+        json!({"processId": null, "rootUri": uri(&root), "capabilities": {},
+               "initializationOptions": {"workspaceTrusted": true}}),
+    )
+    .await;
+    c.notify("initialized", json!({})).await;
+    for (doc, text) in [(&controller, CONTROLLER), (&template, SHOWN)] {
+        c.notify(
+            "textDocument/didOpen",
+            json!({"textDocument": {"uri": doc, "languageId": "php", "version": 1, "text": text}}),
+        )
+        .await;
+    }
+    Rendered {
+        c,
+        controller,
+        template,
+        _tmp: tmp,
+    }
+}
+
+impl Rendered {
+    /// The template's diagnostics, once they come to these codes.
+    async fn template_reports(&mut self, wanted: &[&str]) {
+        let uri = self.template.clone();
+        let mut last = Vec::new();
+        let waited = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                let diags = self.c.diagnostics(&uri).await;
+                let mut codes: Vec<String> = diags
+                    .iter()
+                    .map(|d| d["code"].as_str().unwrap().to_owned())
+                    .collect();
+                codes.sort();
+                if codes == wanted {
+                    return;
+                }
+                last = codes;
+            }
+        })
+        .await;
+        assert!(waited.is_ok(), "wanted {wanted:?}, last got {last:?}");
+    }
+
+    async fn change_controller(&mut self, version: u32, text: &str) {
+        let doc = self.controller.clone();
+        self.c
+            .notify(
+                "textDocument/didChange",
+                json!({"textDocument": {"uri": doc, "version": version},
+                       "contentChanges": [{"text": text}]}),
+            )
+            .await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_templates_variable_has_the_type_of_what_renders_it() {
+    let mut r = rendered().await;
+    r.template_reports(&["method.notFound", "variable.undefined"])
+        .await;
+    let uri = r.template.clone();
+    let got =
+        r.c.request(
+            "textDocument/hover",
+            json!({"textDocument": {"uri": uri}, "position": position(SHOWN, "$post->title", 1)}),
+        )
+        .await;
+    let shown = got["contents"]["value"].as_str().unwrap_or("").to_owned();
+    assert!(shown.contains("App\\Models\\Post"), "{shown}");
+    assert!(shown.contains("Given to this template"), "{shown}");
+    // renaming stays refused: its name is in the controller as well
+    let refused =
+        r.c.send_request_for_error(
+            "textDocument/prepareRename",
+            json!({"textDocument": {"uri": uri}, "position": position(SHOWN, "$post->title", 1)}),
+        )
+        .await;
+    assert!(refused.is_some(), "{refused:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn editing_what_renders_a_template_changes_what_it_reports() {
+    let mut r = rendered().await;
+    r.template_reports(&["method.notFound", "variable.undefined"])
+        .await;
+    // what's given has that method
+    let page = CONTROLLER.replace("Post", "Page");
+    r.change_controller(2, &page).await;
+    r.template_reports(&["variable.undefined"]).await;
+    // and now the variable that wasn't there
+    let more = page.replace("['post' => $post]", "['post' => $post, 'missing' => 1]");
+    r.change_controller(3, &more).await;
+    r.template_reports(&[]).await;
+    r.change_controller(4, CONTROLLER).await;
+    r.template_reports(&["method.notFound", "variable.undefined"])
+        .await;
+    // what's given can't be read, so nothing's known of the template
+    let elsewhere = CONTROLLER.replace("['post' => $post]", "$post->toArray()");
+    r.change_controller(5, &elsewhere).await;
+    r.template_reports(&[]).await;
+}

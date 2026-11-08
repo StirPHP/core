@@ -325,6 +325,122 @@ async fn session_on_a_project() {
     );
 }
 
+/// What's known of a project's templates: how many are closed and why the others are open, how many
+/// of the variables read in them have a known type, and how long it takes to check everything after
+/// an edit of `VIEWS_EDIT`, a file of the project with `return view(` in it.
+///
+/// ```sh
+/// MEMORY_PROJECT=/path/to/project VIEWS_EDIT=app/Http/Controllers/HomeController.php \
+///   cargo test --release -p stir_lsp --test memory -- --ignored --nocapture templates_of_a_project
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "takes a project"]
+async fn templates_of_a_project() {
+    use salsa::Setter as _;
+    use stir_syntax::SyntaxKind::{ECHO_TAG_STMT, VARIABLE_EXPR};
+    let dir = std::env::var("MEMORY_PROJECT").expect("MEMORY_PROJECT: the project's folder");
+    let (mut db, ws, sources) = load(Path::new(&dir)).await;
+    let check_all = |db: &RootDatabase| {
+        let start = Instant::now();
+        let mut found = 0;
+        for f in &sources {
+            found += stir_checker::check_file(db, ws, *f).len();
+        }
+        (start.elapsed(), found)
+    };
+    let (first, found) = check_all(&db);
+    println!(
+        "first check: {first:?}, {found} diagnostics, rss {} MiB",
+        rss().0
+    );
+    let mut reasons: BTreeMap<String, usize> = BTreeMap::new();
+    let (mut closed, mut open) = (0, 0);
+    let (mut echoes, mut echoes_known, mut reads, mut reads_known) = (0, 0, 0, 0);
+    let (mut closed_echoes, mut closed_echoes_known) = (0, 0);
+    let (mut closed_reads, mut closed_reads_known) = (0, 0);
+    let mut unknown_in_closed: BTreeMap<String, usize> = BTreeMap::new();
+    for &file in &sources {
+        if !stir_syntax::is_blade_path(file.path(&db)) {
+            continue;
+        }
+        let data = stir_checker::views::view_data(&db, ws, file);
+        let shown = file.path(&db).display().to_string();
+        let shown = shown.rsplit("/resources/views/").next().unwrap_or(&shown);
+        match data.open {
+            None => {
+                closed += 1;
+                println!("closed {shown}: {} variables", data.vars.len());
+            }
+            Some(why) => {
+                open += 1;
+                *reasons.entry(format!("{why:?}")).or_default() += 1;
+                println!("open {shown}: {why:?}");
+            }
+        }
+        let typed = stir_checker::typed_file(&db, ws, file);
+        let root = stir_db::parse(&db, file).syntax();
+        for node in root.descendants().filter(|n| n.kind() == VARIABLE_EXPR) {
+            let known = typed
+                .types
+                .get(&node.text_range())
+                .is_some_and(|t| !t.is_untyped() && !t.is_error());
+            reads += 1;
+            reads_known += usize::from(known);
+            if data.is_closed() {
+                closed_reads += 1;
+                closed_reads_known += usize::from(known);
+                if !known {
+                    *unknown_in_closed
+                        .entry(node.text().to_string())
+                        .or_default() += 1;
+                }
+            }
+            if node.parent().is_some_and(|p| p.kind() == ECHO_TAG_STMT) {
+                echoes += 1;
+                echoes_known += usize::from(known);
+                if data.is_closed() {
+                    closed_echoes += 1;
+                    closed_echoes_known += usize::from(known);
+                }
+            }
+        }
+    }
+    println!("templates: {closed} closed, {open} open: {reasons:?}");
+    println!(
+        "`{{{{ $var }}}}`: {echoes_known} of {echoes} typed; in closed templates {closed_echoes_known} of {closed_echoes}"
+    );
+    println!(
+        "all variable reads: {reads_known} of {reads} typed; in closed templates {closed_reads_known} of {closed_reads}"
+    );
+    println!("not typed in closed templates: {unknown_in_closed:?}");
+    let Ok(edit) = std::env::var("VIEWS_EDIT") else {
+        return;
+    };
+    let wanted = Path::new(&dir).join(edit);
+    let wanted = std::fs::canonicalize(wanted).unwrap();
+    let file = *sources
+        .iter()
+        .find(|f| f.path(&db) == wanted.as_path())
+        .expect("the file to edit");
+    let original = file.text(&db).clone();
+    // a comment before everything: what's rendered is the same, at other places
+    let moved = original.replacen("<?php", "<?php\n// moved", 1);
+    let _ = file.set_text(&mut db).to(moved);
+    let (again, _) = check_all(&db);
+    println!("after an edit that changes nothing: {again:?}");
+    // a variable's type changes
+    let changed = original.replacen("return view(", "$given = 1; return view(", 1);
+    let changed = changed.replacen("view('", "view('", 1);
+    let _ = file.set_text(&mut db).to(changed);
+    let (again, _) = check_all(&db);
+    println!("after an edit to the body: {again:?}");
+    let data_changed = original.replacen("view('home', [", "view('home', ['seeded' => 1, ", 1);
+    let _ = file.set_text(&mut db).to(data_changed);
+    let (again, _) = check_all(&db);
+    println!("after a new variable: {again:?}");
+    println!("rss at the end {} MiB, peak {} MiB", rss().0, rss().1);
+}
+
 /// Arrays written a part at a time in branches, in a loop: each branch leaves the array another
 /// shape, which used to double the union of shapes at each `if` (PHPStan's bug 7903).
 const BRANCHY_ARRAYS: &str = r#"<?php

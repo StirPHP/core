@@ -151,6 +151,16 @@ pub fn describe(
                 ));
             }
             let code = render::code(&local_label(&name, &ty));
+            let given = kind == LocalKind::Open
+                && stir_checker::views::view_data(db, ws, file)
+                    .vars
+                    .contains_key(bare);
+            if given {
+                return Some(format!(
+                    "{code}\n\nGiven to this template by what renders it: this is what all of \
+                     that comes to."
+                ));
+            }
             Some(
                 match implicit_note(bare).filter(|_| kind == LocalKind::Implicit) {
                     Some(note) => format!("{code}\n\n{note}"),
