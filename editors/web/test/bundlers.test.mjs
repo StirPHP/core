@@ -11,3 +11,10 @@ test('the worker is started with options a bundler can read', () => {
   assert.deepEqual(new Function(`return ${call[1]}`)(), { type: 'module', name: 'stirphp' });
   assert.doesNotMatch(call[1], /options|\?\?/);
 });
+
+test("a page's bundle doesn't get the .wasm too", () => {
+  const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  // only the worker loads the server; importing it here would make a bundler emit the `.wasm`
+  // for the page as well, a second copy of 15 MB
+  assert.doesNotMatch(source, /^\s*(import|export)\b.*from\s+'\.\/(serve\.js|pkg\/)/m);
+});

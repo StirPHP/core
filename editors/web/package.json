@@ -13,12 +13,16 @@
       "default": "./index.js"
     },
     "./worker.js": "./worker.js",
-    "./serve.js": "./serve.js"
+    "./serve.js": {
+      "types": "./serve.d.ts",
+      "default": "./serve.js"
+    }
   },
   "files": [
     "index.js",
     "index.d.ts",
     "serve.js",
+    "serve.d.ts",
     "worker.js",
     "pkg/stir_wasm.js",
     "pkg/stir_wasm.d.ts",

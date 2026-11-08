@@ -10,8 +10,10 @@
 // and hand `reader` and `writer` to a language client (monaco-languageclient's
 // `MonacoLanguageClient`, say). The project's files go in `initializationOptions.files`; see the
 // README.
-
-export { serve } from './serve.js';
+//
+// `serve`, which runs the server on the thread it's called on, is in `stirphp-web/serve.js`. It
+// isn't exported from here, as it would bring the `.wasm` into the page's bundle as well as the
+// worker's.
 
 /**
  * Starts the language server in a module Web Worker.
