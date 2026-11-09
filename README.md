@@ -3,7 +3,7 @@
 StirPHP is a type checker and language server for PHP. It reads your `.php` files, their PHPDoc and your Composer
 setup as they are. There's nothing to migrate to and no required configuration.
 
-The goal is the best open source language server for PHP, as good as PhpStorm's engine. Type safety shouldn't depend on
+The goal is the best open source language server for PHP. Type safety shouldn't depend on
 being able to pay for a licence, and it should work live in the editor. It isn't there yet: see [Current state](#current-state).
 
 It's written in Rust, and the command is `stirphp`.
@@ -102,9 +102,7 @@ indentation, blank lines, brace placement and one statement to a line. It doesn'
 expressions stay where they are, and lines continuing an expression keep their indentation relative to its start. Alignment
 before `=` and `=>` stays, as PER-CS allows it. In files with HTML around their PHP, only the spaces within lines change.
 
-Run over everything in `corpus/` (about 54,000 files, some of them deliberately odd), tokens didn't change, a second run
-changed nothing, and nothing that parsed stopped parsing. It isn't configurable beyond the indentation, and isn't
-PhpStorm-compatible; PER-CS is the style.
+It isn't configurable beyond the indentation: PER-CS is the style.
 
 ## Configuration
 
@@ -194,7 +192,7 @@ The limits:
   phpstan-wordpress do. For the rest, and for other extensions such as strict rules, [run PHPStan alongside
   StirPHP](#running-phpstan), or write what a project needs as [scripts](#custom-rules).
 - The checks don't all exist yet, and those that exist don't always agree with PHPStan. Conditions and comparisons that can
-  only go one way are reported only where that's certain, so far fewer of them are found. A project with
+  only go one way are reported only where that's certain, so some are missed. A project with
   `treatPhpDocTypesAsCertain: false` gets none of them, because types here don't say which came from PHPDoc.
   `missingType.generics`, `missingType.callable` and `missingType.checkedException` aren't reported at all.
 
@@ -263,9 +261,7 @@ Duplicates:
   anywhere in the file.
 - One of StirPHP's removes one of PHPStan's. Two on a line with one identifier may be different errors.
 - A report with no identifier is never a duplicate. Neither is a report of StirPHP's own, such as `SPHP0061`, so PHPStan's
-  error about the same thing under another identifier is shown too. Nor are the same error on different lines, as with a call
-  over several lines: on Laravel's framework at level 5, 1593 of PHPStan's 2884 errors were removed, and 97 of the other 1291 had
-  one of StirPHP's with its identifier within 3 lines, some of which really are other errors.
+  error about the same thing under another identifier is shown too. Nor are the same error on different lines, as with a call over several lines.
 - What StirPHP reports and PHPStan doesn't stays. PHPStan's silence doesn't take anything away, and the checks don't all agree yet.
 
 Baselines and ignore rules don't cross over. PHPStan applies its own to what it reports, and StirPHP's apply to what StirPHP
@@ -442,7 +438,7 @@ Each is on when the project uses that framework: `laravel/framework`, `pestphp/p
 `johnpbloch/wordpress-core`, `roots/wordpress`, `php-stubs/wordpress-stubs`, a `wp-config.php` or `wp-content` folder, or
 a plugin's `Plugin Name:` header. `parameters.stirphp.frameworks` turns one off or on: `{laravel: false, wordpress: true}`.
 
-**Laravel**, after what larastan does:
+**Laravel**:
 
 - Models get properties for the columns their migrations in `database/migrations` create (by `$table`, or the class's
   name in plural, as Laravel has it), their `$casts` and `casts()`, accessors (`getFullNameAttribute()` and
@@ -483,36 +479,17 @@ Properties it's given by `$this->name = ..` in the file or `tests/Pest.php` can 
 
 **Mockery**: `Mockery::mock(Foo::class)` and `spy()`, and a Laravel test's `$this->mock()`, are a `Foo` as well as a mock.
 
-**Symfony and Doctrine**, after phpstan-symfony and phpstan-doctrine: services and parameters come from the compiled
+**Symfony and Doctrine**: services and parameters come from the compiled
 container, `parameters.symfony.containerXmlPath` or else one in `var/cache/`, the `dev` environment's first, so
 `$container->get('app.mailer')` and `$this->getParameter('kernel.debug')` have types. A container that hasn't been
 compiled isn't compiled; then a `get(Foo::class)` is still a `Foo`. `getRepository(Product::class)` gives the repository
 `#[ORM\Entity(repositoryClass: ..)]` names, and repositories have `findByX()`, `findOneByX()` and `countByX()`.
 
-**WordPress**, after phpstan-wordpress: `php-stubs/wordpress-stubs` is loaded when it's installed, `global $wpdb;` and the
+**WordPress**: `php-stubs/wordpress-stubs` is loaded when it's installed, `global $wpdb;` and the
 other globals WordPress sets up have their types, and `add_action()` and `add_filter()` are checked: a callback that isn't
 a function, one that needs more arguments than `$accepted_args`, or takes fewer than it says, and `$accepted_args` above what
 any `do_action()` or `apply_filters()` of that hook in the project passes (`wordpress.hookArguments`). Going to the
 definition of a hook's name finds where it runs.
-
-What's measured, with PHPStan and the extension at the same level:
-
-- Laravel's framework repository, with no configuration: 8993 reported before, 4937 now. 4074 went, 3577 of which PHPStan
-  without larastan reports on the same line with the same identifier: calls and properties only Laravel's magic has.
-  18 are new, errors that the ones before stopped short of.
-- [BookStack](https://github.com/BookStackApp/BookStack), an MIT-licensed Laravel application, at its own level 5: 149 before,
-  36 now. PHPStan with larastan reports none. What's left isn't about Laravel's magic: argument types the checker gets wrong,
-  such as Collection where an array is taken.
-- A new Laravel application with models, relations, scopes, casts and a controller: 20 before, 3 now. Larastan reports 6.
-  Both find the 3 mistakes written in on purpose. Larastan also reports an `Attribute` accessor without type arguments, a
-  property of a relation without them, and a macro added outside a service provider, which are all fine.
-- A new Symfony application with an entity, its repository and a controller, and a container: 5 before, 1 now, the same as
-  PHPStan's.
-- A WordPress plugin with hooks: none of its 3 mistakes before, all of them now, plus a hook's arguments PHPStan doesn't check.
-
-On the framework repository, with thousands of models in its tests, a run takes about a fifth more CPU time, most of it in
-the models' scripts and the extra checking of what used to be unknown. On BookStack it's within the noise, as it is on
-Symfony's and PHPStan's repositories.
 
 Not there yet: config keys of `config()`, the results of `$collection->map->name` (it's the property's type, not a
 collection of them), relation names in `with()` and `has()`, route names in groups, `Request` input as more than `mixed`,
@@ -636,25 +613,14 @@ Every edit is checked to leave each file it touches parsing, or it isn't made. E
 version of each open file when the editor can take that, and the file's line endings and indentation. Nothing is offered in
 a file that has syntax errors.
 
-Measured on Laravel's framework, Symfony and PHPStan's source, in memory, at diagnostics and a fixed sample of places and
-selections in 400 files of each (`crates/stir_lsp/tests/actions_corpus.rs`): about 5,000 actions applied, every result
-parsed, and about 25 left a new error in the file, which were all the checker seeing the moved code differently rather than
-the code doing something else: what a condition had narrowed being lost in an extracted method or variable, or a typo's
-correction being a method with another signature. Working out what's offered took 0.1 ms at the median and 15 ms at the
-95th percentile, extracting a method 3 to 6 ms (under 60 ms at the 95th), and a change of signature, which looks at the
-whole project, 40 to 400 ms once the project's been checked. Most of the changes of signature tried there were refused,
-because a call of a method of that name was on something whose class isn't known, or a callable named it.
-
 Not offered: adding `declare(strict_types=1)`, which isn't reported and changes what the code does; moving a class to the
 file PSR-4 says, which would mean creating and renaming files, so it's left out; adding to a baseline; extracting from a
 closure; and inlining methods.
 
 ## Current state
 
-This is early, and accuracy against PHPStan is still being improved. On Laravel's framework, Symfony and PHPStan's own
-source, each with its own configuration, it reports about 4900, 1300 and 1300 problems, in about 4 to 6 seconds each. Those
-include false alarms, at a rate nobody has measured overall yet. Reducing them is the current work. If `stirphp check` is wrong
-about your code, please [open an issue](https://github.com/StirPHP/core/issues) with a small example.
+This is early, and StirPHP still reports some false alarms. If `stirphp check` is wrong about your code, please
+[open an issue](https://github.com/StirPHP/core/issues) with a small example.
 
 Not there yet: wrapping long lines when formatting, and the rest of what [frameworks](#frameworks) need.
 
