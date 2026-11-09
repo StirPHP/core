@@ -559,6 +559,11 @@ impl<'a> Lexer<'a> {
                         *self.modes.last_mut().unwrap() = Mode::Code;
                         return;
                     }
+                    if let Some(tag) = blade::tag_at(&rest[i..]) {
+                        self.flush_html(i);
+                        self.lex_blade_tag(tag);
+                        return;
+                    }
                     i += 1;
                 }
                 b'{' => match self.lex_blade_brace(i) {
@@ -573,6 +578,171 @@ impl<'a> Lexer<'a> {
             }
         }
         self.flush_html(i);
+    }
+
+    /// Lexes a component's tag, which starts here. The attributes are read as Laravel reads them
+    /// once it knows it's a tag, which is not quite as it finds that out.
+    fn lex_blade_tag(&mut self, tag: blade::Tag) {
+        let start = self.pos;
+        self.push(BLADE_TAG_START, tag.start);
+        if tag.name_end > tag.start {
+            self.push(BLADE_TAG_NAME, tag.name_end - tag.start);
+        }
+        let attrs_end = start + tag.attrs_end;
+        if tag.closes {
+            if attrs_end > self.pos {
+                let text = self.src[self.pos..attrs_end].trim();
+                let kind = if text.is_empty() {
+                    WHITESPACE
+                } else {
+                    BLADE_ATTR_TEXT
+                };
+                self.push(kind, attrs_end - self.pos);
+            }
+        } else {
+            self.lex_blade_attrs(attrs_end);
+        }
+        self.push(BLADE_TAG_END, tag.end - tag.attrs_end);
+    }
+
+    fn lex_blade_attrs(&mut self, end: usize) {
+        let outer = self.limit;
+        self.limit = end;
+        while self.pos < end {
+            let b = self.bytes();
+            if b[0].is_ascii_whitespace() || b[0] == 0x0b {
+                let len = b
+                    .iter()
+                    .take_while(|c| c.is_ascii_whitespace() || **c == 0x0b)
+                    .count();
+                self.push(WHITESPACE, len);
+            } else if let Some(close) = blade::comment_end(b, 0) {
+                self.push(BLADE_COMMENT, close);
+            } else if let Some(len) = blade::class_or_style_end(b, 0) {
+                self.push(BLADE_DIRECTIVE_NAME, 6);
+                self.push(L_PAREN, 1);
+                self.lex_blade_region_within(self.pos + len - 7);
+            } else if let Some(len) = blade::attribute_bag_end(b, 0) {
+                self.push(OPEN_TAG_WITH_ECHO, 2);
+                self.lex_blade_region_within(self.pos + len - 4);
+                self.push(CLOSE_TAG, 2);
+            } else if let Some(len) = blade::short_attr_end(b, 0) {
+                self.push(BLADE_ATTR_NAME, 1);
+                self.lex_blade_region_within(self.pos + len - 1);
+            } else {
+                self.lex_blade_attr();
+            }
+        }
+        self.limit = outer;
+    }
+
+    /// `name`, `name=value`, or something that's skipped between them.
+    fn lex_blade_attr(&mut self) {
+        let b = self.bytes();
+        let name = b
+            .iter()
+            .take_while(|c| is_blade_word(**c) || matches!(c, b'-' | b':' | b'.' | b'@' | b'%'))
+            .count();
+        if name == 0 {
+            let len = b
+                .iter()
+                .take_while(|c| {
+                    !(c.is_ascii_whitespace()
+                        || is_blade_word(**c)
+                        || matches!(c, b'-' | b':' | b'.' | b'@' | b'%' | b'{'))
+                })
+                .count()
+                .max(1);
+            let len = (len..=b.len())
+                .find(|&l| self.rest().is_char_boundary(l))
+                .unwrap_or(b.len());
+            self.push(BLADE_ATTR_TEXT, len);
+            return;
+        }
+        let bound = blade::attr_is_bound(&self.rest()[..name]);
+        self.push(BLADE_ATTR_NAME, name);
+        if self.peek(0) != Some(b'=') {
+            return;
+        }
+        self.push(EQ, 1);
+        let b = self.bytes();
+        let quoted = match b.first() {
+            // Laravel's `"[^"]+"`: `""` is the empty value anyway
+            Some(q @ (b'"' | b'\'')) => b[1..].iter().position(|c| c == q).map(|len| (1, len)),
+            _ => None,
+        };
+        let (open, len) = quoted.unwrap_or((
+            0,
+            b.iter()
+                .take_while(|c| !(c.is_ascii_whitespace() || **c == b'>'))
+                .count(),
+        ));
+        if open > 0 {
+            self.push(BLADE_ATTR_QUOTE, 1);
+        }
+        let value_end = self.pos + len;
+        if bound {
+            self.lex_blade_region_within(value_end);
+        } else {
+            self.lex_blade_attr_text(value_end);
+        }
+        if open > 0 {
+            self.push(BLADE_ATTR_QUOTE, 1);
+        }
+    }
+
+    /// What's in a tag that's PHP, if there's anything to it.
+    fn lex_blade_region_within(&mut self, end: usize) {
+        if self.pos < end {
+            self.lex_blade_region(end);
+        }
+    }
+
+    /// The value of an attribute that's text, in which echos are still compiled.
+    fn lex_blade_attr_text(&mut self, end: usize) {
+        let limit = self.limit;
+        self.limit = end;
+        while self.pos < end {
+            let rest = self.rest();
+            let mut i = 0;
+            let mut echo = None;
+            while i < rest.len() {
+                match rest.as_bytes()[i] {
+                    b'@' if rest.as_bytes().get(i + 1) == Some(&b'{') => {
+                        if let Some((_, close, at)) = self.blade_echo_at(i + 1) {
+                            i += 1 + at + close.len();
+                            continue;
+                        }
+                    }
+                    b'{' => {
+                        if let Some(close) = blade::comment_end(rest.as_bytes(), i) {
+                            echo = Some((i, None, close));
+                            break;
+                        }
+                        if let Some((open, close, at)) = self.blade_echo_at(i) {
+                            echo = Some((i, Some((open, close)), at));
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            let text = echo.map_or(rest.len(), |(at, ..)| at);
+            if text > 0 {
+                self.push(BLADE_ATTR_TEXT, text);
+            }
+            match echo {
+                None => {}
+                Some((at, None, close)) => self.push(BLADE_COMMENT, close - at),
+                Some((_, Some((open, close)), at)) => {
+                    self.push(OPEN_TAG_WITH_ECHO, open);
+                    self.lex_blade_region_within(self.pos + at - open);
+                    self.push(CLOSE_TAG, close.len());
+                }
+            }
+        }
+        self.limit = limit;
     }
 
     fn flush_html(&mut self, len: usize) {

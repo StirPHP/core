@@ -1,0 +1,38 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_err(\"<x-a :b=\\\"$c +\\\" d=\\\"{{ $e }}\\\" /><p>{{ $f }}</p>\")"
+---
+SOURCE_FILE
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "a"
+    BLADE_ATTR
+      BLADE_ATTR_NAME ":b"
+      EQ "="
+      BLADE_ATTR_QUOTE "\""
+      BIN_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$c"
+        PLUS "+"
+      BLADE_ATTR_QUOTE "\""
+    BLADE_ATTR
+      BLADE_ATTR_NAME "d"
+      EQ "="
+      BLADE_ATTR_QUOTE "\""
+      BLADE_ATTR_ECHO
+        OPEN_TAG_WITH_ECHO "{{"
+        VARIABLE_EXPR
+          VARIABLE "$e"
+        CLOSE_TAG "}}"
+      BLADE_ATTR_QUOTE "\""
+    BLADE_TAG_END "/>"
+  INLINE_HTML_STMT
+    INLINE_HTML "<p>"
+  ECHO_TAG_STMT
+    OPEN_TAG_WITH_ECHO "{{"
+    VARIABLE_EXPR
+      VARIABLE "$f"
+  CLOSE_TAG "}}"
+  INLINE_HTML_STMT
+    INLINE_HTML "</p>"
+error 13..14: expected an expression

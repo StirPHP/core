@@ -31,6 +31,18 @@ pub enum SyntaxKind {
     BLADE_DIRECTIVE_NAME,
     /// The parentheses of a directive whose arguments aren't PHP, with what's in them.
     BLADE_RAW_ARGS,
+    /// What a component's tag starts with: `<x-`, `<x:` or `</x-`.
+    BLADE_TAG_START,
+    /// The name of a component in its tag: `forms.input` in `<x-forms.input`.
+    BLADE_TAG_NAME,
+    /// What a component's tag ends with: `>` or `/>`.
+    BLADE_TAG_END,
+    /// The name of an attribute in a component's tag, as written: `:title`.
+    BLADE_ATTR_NAME,
+    /// A quote around the value of an attribute in a component's tag.
+    BLADE_ATTR_QUOTE,
+    /// Text in the value of an attribute in a component's tag, or what Laravel skips between them.
+    BLADE_ATTR_TEXT,
 
     // ---- literals and names ----
     INT_NUMBER,
@@ -279,6 +291,16 @@ pub enum SyntaxKind {
     EMPTY_STMT,
     /// A Blade directive that isn't control flow: its name and arguments, `@section('title')`.
     BLADE_DIRECTIVE,
+    /// `<x-name ...>` or `<x-name ... />`. It stays flat, with what's between it and its end being
+    /// the statements around it, as those run in the same scope and Laravel doesn't ask for the
+    /// two to match.
+    BLADE_TAG,
+    /// `</x-name>`
+    BLADE_TAG_CLOSE,
+    /// An attribute of a component's tag: `:title="$title"`, `class="a {{ $b }}"`, `:$short`.
+    BLADE_ATTR,
+    /// `{{ $attributes }}` in a tag, or what's echoed in the text of an attribute's value.
+    BLADE_ATTR_ECHO,
 
     // declarations: parts
     MODIFIERS,

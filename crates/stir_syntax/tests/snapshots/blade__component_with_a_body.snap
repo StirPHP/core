@@ -1,0 +1,20 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"<x-card>a {{ $b }}</x-card >\")"
+---
+SOURCE_FILE
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "card"
+    BLADE_TAG_END ">"
+  INLINE_HTML_STMT
+    INLINE_HTML "a "
+  ECHO_TAG_STMT
+    OPEN_TAG_WITH_ECHO "{{"
+    VARIABLE_EXPR
+      VARIABLE "$b"
+  CLOSE_TAG "}}"
+  BLADE_TAG_CLOSE
+    BLADE_TAG_START "</x-"
+    BLADE_TAG_NAME "card"
+    BLADE_TAG_END ">"

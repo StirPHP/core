@@ -1,0 +1,41 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"<x-a {{ $attributes }} {{ $attributes->merge(['b' => 'c']) }}></x-a>\")"
+---
+SOURCE_FILE
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "a"
+    BLADE_ATTR_ECHO
+      OPEN_TAG_WITH_ECHO "{{"
+      VARIABLE_EXPR
+        VARIABLE "$attributes"
+      CLOSE_TAG "}}"
+    BLADE_ATTR_ECHO
+      OPEN_TAG_WITH_ECHO "{{"
+      METHOD_CALL_EXPR
+        PROPERTY_FETCH_EXPR
+          VARIABLE_EXPR
+            VARIABLE "$attributes"
+          ARROW "->"
+          NAME
+            IDENT "merge"
+        ARG_LIST
+          L_PAREN "("
+          ARG
+            ARRAY_EXPR
+              L_BRACK "["
+              ARRAY_ELEM
+                STRING_LITERAL
+                  STRING_SINGLE "'b'"
+                FAT_ARROW "=>"
+                STRING_LITERAL
+                  STRING_SINGLE "'c'"
+              R_BRACK "]"
+          R_PAREN ")"
+      CLOSE_TAG "}}"
+    BLADE_TAG_END ">"
+  BLADE_TAG_CLOSE
+    BLADE_TAG_START "</x-"
+    BLADE_TAG_NAME "a"
+    BLADE_TAG_END ">"

@@ -1,0 +1,21 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"</x-a> </x-slot> <x-a>\")"
+---
+SOURCE_FILE
+  BLADE_TAG_CLOSE
+    BLADE_TAG_START "</x-"
+    BLADE_TAG_NAME "a"
+    BLADE_TAG_END ">"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_TAG_CLOSE
+    BLADE_TAG_START "</x-"
+    BLADE_TAG_NAME "slot"
+    BLADE_TAG_END ">"
+  INLINE_HTML_STMT
+    INLINE_HTML " "
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "a"
+    BLADE_TAG_END ">"

@@ -1,0 +1,38 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"<x-a b=\\\"c {{ $d }} e {!! $f !!} @{{ g }} {{-- h --}}\\\" i='{{{ $j }}}' />\")"
+---
+SOURCE_FILE
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "a"
+    BLADE_ATTR
+      BLADE_ATTR_NAME "b"
+      EQ "="
+      BLADE_ATTR_QUOTE "\""
+      BLADE_ATTR_TEXT "c "
+      BLADE_ATTR_ECHO
+        OPEN_TAG_WITH_ECHO "{{"
+        VARIABLE_EXPR
+          VARIABLE "$d"
+        CLOSE_TAG "}}"
+      BLADE_ATTR_TEXT " e "
+      BLADE_ATTR_ECHO
+        OPEN_TAG_WITH_ECHO "{!!"
+        VARIABLE_EXPR
+          VARIABLE "$f"
+        CLOSE_TAG "!!}"
+      BLADE_ATTR_TEXT " @{{ g }} "
+      BLADE_COMMENT "{{-- h --}}"
+      BLADE_ATTR_QUOTE "\""
+    BLADE_ATTR
+      BLADE_ATTR_NAME "i"
+      EQ "="
+      BLADE_ATTR_QUOTE "'"
+      BLADE_ATTR_ECHO
+        OPEN_TAG_WITH_ECHO "{{{"
+        VARIABLE_EXPR
+          VARIABLE "$j"
+        CLOSE_TAG "}}}"
+      BLADE_ATTR_QUOTE "'"
+    BLADE_TAG_END "/>"

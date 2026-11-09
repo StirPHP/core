@@ -1,0 +1,62 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"<x-a><x-slot:b class=\\\"c\\\">d</x-slot:b><x-slot name=\\\"e\\\">f</x-slot><x-slot :name=\\\"$g\\\">h</x-slot></x-a>\")"
+---
+SOURCE_FILE
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "a"
+    BLADE_TAG_END ">"
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "slot:b"
+    BLADE_ATTR
+      BLADE_ATTR_NAME "class"
+      EQ "="
+      BLADE_ATTR_QUOTE "\""
+      BLADE_ATTR_TEXT "c"
+      BLADE_ATTR_QUOTE "\""
+    BLADE_TAG_END ">"
+  INLINE_HTML_STMT
+    INLINE_HTML "d"
+  BLADE_TAG_CLOSE
+    BLADE_TAG_START "</x-"
+    BLADE_TAG_NAME "slot:b"
+    BLADE_TAG_END ">"
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "slot"
+    BLADE_ATTR
+      BLADE_ATTR_NAME "name"
+      EQ "="
+      BLADE_ATTR_QUOTE "\""
+      BLADE_ATTR_TEXT "e"
+      BLADE_ATTR_QUOTE "\""
+    BLADE_TAG_END ">"
+  INLINE_HTML_STMT
+    INLINE_HTML "f"
+  BLADE_TAG_CLOSE
+    BLADE_TAG_START "</x-"
+    BLADE_TAG_NAME "slot"
+    BLADE_TAG_END ">"
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "slot"
+    BLADE_ATTR
+      BLADE_ATTR_NAME ":name"
+      EQ "="
+      BLADE_ATTR_QUOTE "\""
+      VARIABLE_EXPR
+        VARIABLE "$g"
+      BLADE_ATTR_QUOTE "\""
+    BLADE_TAG_END ">"
+  INLINE_HTML_STMT
+    INLINE_HTML "h"
+  BLADE_TAG_CLOSE
+    BLADE_TAG_START "</x-"
+    BLADE_TAG_NAME "slot"
+    BLADE_TAG_END ">"
+  BLADE_TAG_CLOSE
+    BLADE_TAG_START "</x-"
+    BLADE_TAG_NAME "a"
+    BLADE_TAG_END ">"

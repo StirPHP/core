@@ -1,0 +1,13 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"<div><x-card /></div>\")"
+---
+SOURCE_FILE
+  INLINE_HTML_STMT
+    INLINE_HTML "<div>"
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "card"
+    BLADE_TAG_END "/>"
+  INLINE_HTML_STMT
+    INLINE_HTML "</div>"

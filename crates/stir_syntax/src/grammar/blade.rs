@@ -75,6 +75,105 @@ pub(super) fn directive(p: &mut Parser<'_>) {
     }
 }
 
+/// A component's tag, whichever end of it. It's flat, as `@section` is.
+pub(super) fn component_tag(p: &mut Parser<'_>) {
+    let closes = p.nth_text(0).starts_with("</");
+    let m = p.start();
+    p.bump(BLADE_TAG_START);
+    p.eat(BLADE_TAG_NAME);
+    while !p.at(EOF) && !p.at(BLADE_TAG_END) {
+        match p.current() {
+            BLADE_ATTR_NAME => attribute(p),
+            BLADE_DIRECTIVE_NAME => directive(p),
+            OPEN_TAG_WITH_ECHO => attribute_echo(p),
+            _ => p.bump_any(),
+        }
+    }
+    p.eat(BLADE_TAG_END);
+    m.complete(p, if closes { BLADE_TAG_CLOSE } else { BLADE_TAG });
+}
+
+fn at_attribute_end(p: &Parser<'_>) -> bool {
+    matches!(
+        p.current(),
+        EOF | BLADE_TAG_END
+            | BLADE_ATTR_NAME
+            | BLADE_ATTR_QUOTE
+            | BLADE_ATTR_TEXT
+            | BLADE_DIRECTIVE_NAME
+            | OPEN_TAG_WITH_ECHO
+    )
+}
+
+/// `{{ ... }}`, in a tag or in the text of an attribute's value.
+fn attribute_echo(p: &mut Parser<'_>) {
+    let m = p.start();
+    p.bump(OPEN_TAG_WITH_ECHO);
+    stmts::expr_list(p);
+    p.eat(SEMI);
+    if !p.at(CLOSE_TAG) {
+        p.error("expected the end of the echo");
+        while !p.at(EOF) && !p.at(CLOSE_TAG) && !p.at(BLADE_TAG_END) {
+            p.bump_any();
+        }
+    }
+    p.eat(CLOSE_TAG);
+    m.complete(p, BLADE_ATTR_ECHO);
+}
+
+/// `name`, `name="text {{ $echo }}"`, `:name="$php"` or `:$name`.
+fn attribute(p: &mut Parser<'_>) {
+    let spelled = p.nth_text(0);
+    let m = p.start();
+    p.bump(BLADE_ATTR_NAME);
+    if spelled == ":" && p.at(VARIABLE) {
+        // `:$name`
+        attribute_php(p);
+    } else if p.eat(EQ) {
+        let quoted = p.eat(BLADE_ATTR_QUOTE);
+        if blade::attr_is_bound(&spelled) {
+            if !at_attribute_end(p) {
+                attribute_php(p);
+            }
+        } else {
+            while p.at(BLADE_ATTR_TEXT) || p.at(OPEN_TAG_WITH_ECHO) {
+                if p.at(OPEN_TAG_WITH_ECHO) {
+                    attribute_echo(p);
+                } else {
+                    p.bump(BLADE_ATTR_TEXT);
+                }
+            }
+        }
+        if quoted {
+            p.eat(BLADE_ATTR_QUOTE);
+        }
+    }
+    m.complete(p, BLADE_ATTR);
+}
+
+/// The value of an attribute that's PHP. It's written into an array as it is, so `$a, 'b' => $c`
+/// would do, if not for anything anyone means by it.
+fn attribute_php(p: &mut Parser<'_>) {
+    exprs::expr(p);
+    while p.eat(COMMA) {
+        if at_attribute_end(p) {
+            break;
+        }
+        exprs::expr(p);
+        if p.eat(FAT_ARROW) {
+            exprs::expr(p);
+        }
+    }
+    if !at_attribute_end(p) {
+        let m = p.start();
+        p.error("expected the end of the attribute's value");
+        while !at_attribute_end(p) {
+            p.bump_any();
+        }
+        m.complete(p, ERROR);
+    }
+}
+
 /// Is the current token an `@else`, `@elseif` or `@endif` of a flat directive around it?
 pub(super) fn at_flat_condition_part(p: &Parser<'_>) -> bool {
     let open = p.blade_conditions;

@@ -122,6 +122,11 @@ impl<'s> Parser<'s> {
         self.raw(n).map_or(EOF, |t| t.kind)
     }
 
+    /// How far it's got, for telling if something took anything.
+    pub(crate) fn position(&self) -> usize {
+        self.pos
+    }
+
     pub(crate) fn current(&self) -> SyntaxKind {
         self.nth(0)
     }

@@ -1,0 +1,74 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"<x-a b c=\\\"d\\\" e='f' g=h :i=\\\"$j\\\" :k-l='$m[\\\"n\\\"]' ::o=\\\"p.q\\\" bind:r=\\\"$s\\\" :t=$u :$v @click=\\\"w\\\" />\")"
+---
+SOURCE_FILE
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "a"
+    BLADE_ATTR
+      BLADE_ATTR_NAME "b"
+    BLADE_ATTR
+      BLADE_ATTR_NAME "c"
+      EQ "="
+      BLADE_ATTR_QUOTE "\""
+      BLADE_ATTR_TEXT "d"
+      BLADE_ATTR_QUOTE "\""
+    BLADE_ATTR
+      BLADE_ATTR_NAME "e"
+      EQ "="
+      BLADE_ATTR_QUOTE "'"
+      BLADE_ATTR_TEXT "f"
+      BLADE_ATTR_QUOTE "'"
+    BLADE_ATTR
+      BLADE_ATTR_NAME "g"
+      EQ "="
+      BLADE_ATTR_TEXT "h"
+    BLADE_ATTR
+      BLADE_ATTR_NAME ":i"
+      EQ "="
+      BLADE_ATTR_QUOTE "\""
+      VARIABLE_EXPR
+        VARIABLE "$j"
+      BLADE_ATTR_QUOTE "\""
+    BLADE_ATTR
+      BLADE_ATTR_NAME ":k-l"
+      EQ "="
+      BLADE_ATTR_QUOTE "'"
+      INDEX_EXPR
+        VARIABLE_EXPR
+          VARIABLE "$m"
+        L_BRACK "["
+        STRING_LITERAL
+          STRING_DOUBLE "\"n\""
+        R_BRACK "]"
+      BLADE_ATTR_QUOTE "'"
+    BLADE_ATTR
+      BLADE_ATTR_NAME "::o"
+      EQ "="
+      BLADE_ATTR_QUOTE "\""
+      BLADE_ATTR_TEXT "p.q"
+      BLADE_ATTR_QUOTE "\""
+    BLADE_ATTR
+      BLADE_ATTR_NAME "bind:r"
+      EQ "="
+      BLADE_ATTR_QUOTE "\""
+      VARIABLE_EXPR
+        VARIABLE "$s"
+      BLADE_ATTR_QUOTE "\""
+    BLADE_ATTR
+      BLADE_ATTR_NAME ":t"
+      EQ "="
+      VARIABLE_EXPR
+        VARIABLE "$u"
+    BLADE_ATTR
+      BLADE_ATTR_NAME ":"
+      VARIABLE_EXPR
+        VARIABLE "$v"
+    BLADE_ATTR
+      BLADE_ATTR_NAME "@click"
+      EQ "="
+      BLADE_ATTR_QUOTE "\""
+      BLADE_ATTR_TEXT "w"
+      BLADE_ATTR_QUOTE "\""
+    BLADE_TAG_END "/>"

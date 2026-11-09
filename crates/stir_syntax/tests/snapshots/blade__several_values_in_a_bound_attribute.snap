@@ -1,0 +1,22 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"<x-a :b=\\\"$c, 'd' => $e\\\" />\")"
+---
+SOURCE_FILE
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "a"
+    BLADE_ATTR
+      BLADE_ATTR_NAME ":b"
+      EQ "="
+      BLADE_ATTR_QUOTE "\""
+      VARIABLE_EXPR
+        VARIABLE "$c"
+      COMMA ","
+      STRING_LITERAL
+        STRING_SINGLE "'d'"
+      FAT_ARROW "=>"
+      VARIABLE_EXPR
+        VARIABLE "$e"
+      BLADE_ATTR_QUOTE "\""
+    BLADE_TAG_END "/>"

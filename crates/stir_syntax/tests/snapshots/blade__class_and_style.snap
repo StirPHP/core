@@ -1,0 +1,51 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"<x-a @class(['b', 'c' => $d]) @style([\\\"e: f\\\" => g($h)]) />\")"
+---
+SOURCE_FILE
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "a"
+    BLADE_DIRECTIVE
+      BLADE_DIRECTIVE_NAME "@class"
+      ARG_LIST
+        L_PAREN "("
+        ARG
+          ARRAY_EXPR
+            L_BRACK "["
+            ARRAY_ELEM
+              STRING_LITERAL
+                STRING_SINGLE "'b'"
+            COMMA ","
+            ARRAY_ELEM
+              STRING_LITERAL
+                STRING_SINGLE "'c'"
+              FAT_ARROW "=>"
+              VARIABLE_EXPR
+                VARIABLE "$d"
+            R_BRACK "]"
+        R_PAREN ")"
+    BLADE_DIRECTIVE
+      BLADE_DIRECTIVE_NAME "@style"
+      ARG_LIST
+        L_PAREN "("
+        ARG
+          ARRAY_EXPR
+            L_BRACK "["
+            ARRAY_ELEM
+              STRING_LITERAL
+                STRING_DOUBLE "\"e: f\""
+              FAT_ARROW "=>"
+              CALL_EXPR
+                NAME_EXPR
+                  NAME_REF
+                    IDENT "g"
+                ARG_LIST
+                  L_PAREN "("
+                  ARG
+                    VARIABLE_EXPR
+                      VARIABLE "$h"
+                  R_PAREN ")"
+            R_BRACK "]"
+        R_PAREN ")"
+    BLADE_TAG_END "/>"

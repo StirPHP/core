@@ -1,0 +1,25 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"<x-a.b-c /><x:d /><x-pkg::e /><x-f:g /><x-h.i::j.k />\")"
+---
+SOURCE_FILE
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "a.b-c"
+    BLADE_TAG_END "/>"
+  BLADE_TAG
+    BLADE_TAG_START "<x:"
+    BLADE_TAG_NAME "d"
+    BLADE_TAG_END "/>"
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "pkg::e"
+    BLADE_TAG_END "/>"
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "f:g"
+    BLADE_TAG_END "/>"
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "h.i::j.k"
+    BLADE_TAG_END "/>"

@@ -1,0 +1,22 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_err(\"<x-a :class=\\\"{ 'b': c }\\\" />\")"
+---
+SOURCE_FILE
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "a"
+    BLADE_ATTR
+      BLADE_ATTR_NAME ":class"
+      EQ "="
+      BLADE_ATTR_QUOTE "\""
+      ERROR
+        L_CURLY "{"
+        STRING_SINGLE "'b'"
+        COLON ":"
+        IDENT "c"
+        R_CURLY "}"
+      BLADE_ATTR_QUOTE "\""
+    BLADE_TAG_END "/>"
+error 13..14: expected an expression
+error 13..14: expected the end of the attribute's value

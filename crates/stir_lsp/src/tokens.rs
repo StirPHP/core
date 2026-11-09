@@ -81,7 +81,10 @@ fn lexical(kind: SyntaxKind, parent: Option<SyntaxKind>) -> Option<(TokenType, u
     }
     Some(match kind {
         BLADE_DIRECTIVE_NAME => (TokenType::Keyword, 0),
-        BLADE_RAW_ARGS => (TokenType::String, 0),
+        BLADE_RAW_ARGS | BLADE_ATTR_TEXT | BLADE_ATTR_QUOTE => (TokenType::String, 0),
+        BLADE_TAG_START | BLADE_TAG_END => (TokenType::Keyword, 0),
+        BLADE_TAG_NAME => (TokenType::Class, 0),
+        BLADE_ATTR_NAME => (TokenType::Property, 0),
         COMMENT | BLADE_COMMENT => (TokenType::Comment, 0),
         DOC_COMMENT => (TokenType::Comment, modifier::DOCUMENTATION),
         INT_NUMBER | FLOAT_NUMBER => (TokenType::Number, 0),

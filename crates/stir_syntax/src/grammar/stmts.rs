@@ -47,12 +47,22 @@ pub(super) fn block(p: &mut Parser<'_>) {
 }
 
 pub(super) fn stmt(p: &mut Parser<'_>, top_level: bool) {
+    let before = p.position();
+    statement(p, top_level);
+    // `class` with no name to it takes nothing, and neither would trying again
+    if p.position() == before && !p.at(EOF) {
+        p.err_and_bump("expected a statement");
+    }
+}
+
+fn statement(p: &mut Parser<'_>, top_level: bool) {
     let _ = top_level;
     if p.at_directive() && blade::stmt(p) {
         return;
     }
     match p.current() {
         BLADE_DIRECTIVE_NAME => blade::directive(p),
+        BLADE_TAG_START => blade::component_tag(p),
         OPEN_TAG | CLOSE_TAG => {
             // Tags behave like statement separators.
             p.bump_any();
@@ -212,7 +222,7 @@ fn expr_stmt(p: &mut Parser<'_>) {
     m.complete(p, EXPR_STMT);
 }
 
-fn expr_list(p: &mut Parser<'_>) {
+pub(super) fn expr_list(p: &mut Parser<'_>) {
     loop {
         expr(p);
         if !p.eat(COMMA) {

@@ -1,0 +1,35 @@
+---
+source: crates/stir_syntax/tests/blade.rs
+expression: "check_ok(\"👋<x-a :b=\\\"'سلام' . $c\\\" d=\\\"世界 {{ $e }}\\\" />🎉\")"
+---
+SOURCE_FILE
+  INLINE_HTML_STMT
+    INLINE_HTML "👋"
+  BLADE_TAG
+    BLADE_TAG_START "<x-"
+    BLADE_TAG_NAME "a"
+    BLADE_ATTR
+      BLADE_ATTR_NAME ":b"
+      EQ "="
+      BLADE_ATTR_QUOTE "\""
+      BIN_EXPR
+        STRING_LITERAL
+          STRING_SINGLE "'سلام'"
+        DOT "."
+        VARIABLE_EXPR
+          VARIABLE "$c"
+      BLADE_ATTR_QUOTE "\""
+    BLADE_ATTR
+      BLADE_ATTR_NAME "d"
+      EQ "="
+      BLADE_ATTR_QUOTE "\""
+      BLADE_ATTR_TEXT "世界 "
+      BLADE_ATTR_ECHO
+        OPEN_TAG_WITH_ECHO "{{"
+        VARIABLE_EXPR
+          VARIABLE "$e"
+        CLOSE_TAG "}}"
+      BLADE_ATTR_QUOTE "\""
+    BLADE_TAG_END "/>"
+  INLINE_HTML_STMT
+    INLINE_HTML "🎉"

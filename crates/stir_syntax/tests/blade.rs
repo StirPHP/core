@@ -372,6 +372,173 @@ fn inputs(data: &str) -> Vec<(&str, &str)> {
         .collect()
 }
 
+// ---------- components ----------
+blade!(component_closing_itself, "<div><x-card /></div>");
+blade!(component_with_a_body, "<x-card>a {{ $b }}</x-card >");
+blade!(
+    component_names,
+    "<x-a.b-c /><x:d /><x-pkg::e /><x-f:g /><x-h.i::j.k />"
+);
+blade!(
+    attribute_kinds,
+    "<x-a b c=\"d\" e='f' g=h :i=\"$j\" :k-l='$m[\"n\"]' ::o=\"p.q\" bind:r=\"$s\" :t=$u :$v @click=\"w\" />"
+);
+blade!(
+    attribute_echos,
+    "<x-a b=\"c {{ $d }} e {!! $f !!} @{{ g }} {{-- h --}}\" i='{{{ $j }}}' />"
+);
+blade!(
+    attribute_bag,
+    "<x-a {{ $attributes }} {{ $attributes->merge(['b' => 'c']) }}></x-a>"
+);
+blade!(
+    class_and_style,
+    "<x-a @class(['b', 'c' => $d]) @style([\"e: f\" => g($h)]) />"
+);
+blade!(
+    slots,
+    "<x-a><x-slot:b class=\"c\">d</x-slot:b><x-slot name=\"e\">f</x-slot><x-slot :name=\"$g\">h</x-slot></x-a>"
+);
+blade!(
+    in_a_tag_of_several_lines,
+    "<x-a\n    {{-- :b=\"$c\" --}}\n    :d=\"$e\"\n/>"
+);
+blade!(
+    multi_byte_around_a_tag,
+    "👋<x-a :b=\"'سلام' . $c\" d=\"世界 {{ $e }}\" />🎉"
+);
+blade!(
+    tags_across_conditions,
+    "@if ($a) <x-b> @endif c @if ($d) </x-b> @endif"
+);
+blade!(an_end_with_nothing_to_end, "</x-a> </x-slot> <x-a>");
+blade!(
+    several_values_in_a_bound_attribute,
+    "<x-a :b=\"$c, 'd' => $e\" />"
+);
+blade_err!(
+    attribute_broken_stays_inside,
+    "<x-a :b=\"$c +\" d=\"{{ $e }}\" /><p>{{ $f }}</p>"
+);
+blade_err!(
+    alpines_object_wants_two_colons,
+    "<x-a :class=\"{ 'b': c }\" />"
+);
+
+#[test]
+fn a_statement_that_takes_nothing_doesnt_hold_up_a_block() {
+    for src in ["<?php { class(", "<?php class(", "{!! @class( !!}"] {
+        assert_eq!(parse_blade(src).syntax().to_string(), src);
+    }
+}
+
+#[test]
+fn what_isnt_a_component_is_text() {
+    for src in [
+        "<div class=\"a\"></div>",
+        "<xa>",
+        "<x>",
+        "<x->",
+        "<x-a b=\"c\"d=\"e\">",
+        "<x-a",
+        "<input type=\"x-a\">",
+        "a < x-b",
+        "@verbatim <x-a :b=\"$c\" /> @endverbatim",
+        "{{-- <x-a :b=\"$c +\" /> --}}",
+    ] {
+        let parse = parse_blade(src);
+        assert_eq!(parse.syntax().to_string(), src);
+        assert!(parse.errors().is_empty(), "{src}");
+        assert!(
+            !parse.syntax().descendants().any(|n| matches!(
+                n.kind(),
+                SyntaxKind::BLADE_TAG | SyntaxKind::BLADE_TAG_CLOSE
+            )),
+            "{src}"
+        );
+    }
+}
+
+#[test]
+fn what_laravel_doesnt_take_for_a_tag_is_compiled_as_any_other_text() {
+    let src = "<x-a {{ $b }} @if ($c) d @endif>";
+    assert_eq!(
+        nodes(src)
+            .into_iter()
+            .filter(|k| matches!(k, SyntaxKind::ECHO_TAG_STMT | SyntaxKind::IF_STMT))
+            .count(),
+        2
+    );
+    check_ok(src);
+}
+
+#[test]
+fn positions_of_what_an_attribute_has_are_those_of_the_file() {
+    let src = "é<x-a :b=\"$c\" d=\"{{ $e }}\" :$f />";
+    let parse = parse_blade(src);
+    for name in ["$c", "$e", "$f"] {
+        let at = src.find(name).unwrap() as u32;
+        let token = parse
+            .syntax()
+            .descendants_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.text() == name)
+            .unwrap();
+        assert_eq!(u32::from(token.text_range().start()), at, "{name}");
+    }
+}
+
+#[test]
+fn any_text_of_tag_like_pieces_stays_in_the_tree() {
+    let pieces = [
+        "<x-a",
+        "</x-a>",
+        ">",
+        "/>",
+        " ",
+        "b=",
+        "\"",
+        "'",
+        ":c=",
+        "::d=",
+        "{{",
+        "}}",
+        "{{--",
+        "--}}",
+        "@class(",
+        ")",
+        "(",
+        ":$e",
+        "$f",
+        "é",
+        "\n",
+        "<",
+        "=",
+        "@if",
+        "@endif",
+        "{!!",
+        "!!}",
+        "?>",
+        "<?php",
+        "<x-slot",
+        "</x-slot",
+        "{{ $attributes",
+        "@verbatim",
+        "@endverbatim",
+    ];
+    let mut seed = 12345u64;
+    for _ in 0..3000 {
+        let mut src = String::new();
+        for _ in 0..12 {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            src.push_str(pieces[(seed >> 33) as usize % pieces.len()]);
+        }
+        assert_eq!(parse_blade(&src).syntax().to_string(), src);
+    }
+}
+
 const LARAVEL_INPUTS: &str = include_str!("blade/laravel_inputs.txt");
 const LARAVEL_REJECTED: &str = include_str!("blade/laravel_rejected.txt");
 

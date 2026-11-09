@@ -283,9 +283,398 @@ pub fn flat_part(name: &str) -> Option<FlatPart> {
     }
 }
 
+/// Where the parts of a tag at the start of a text are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Tag {
+    /// The length of `<x-`, or of `</x-`.
+    pub(crate) start: usize,
+    /// Where the name ends, and for a tag that opens, the attributes start.
+    pub(crate) name_end: usize,
+    /// Where the attributes end, and `>` or `/>` starts.
+    pub(crate) attrs_end: usize,
+    pub(crate) end: usize,
+    pub(crate) closes: bool,
+}
+
+/// Regular expressions' `\s`.
+fn is_space(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)
+}
+
+fn is_word(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+fn is_tag_name_byte(b: u8) -> bool {
+    is_word(b) || matches!(b, b'-' | b':' | b'.')
+}
+
+fn is_attr_name_byte(b: u8) -> bool {
+    is_word(b) || matches!(b, b'-' | b':' | b'.' | b'@' | b'%')
+}
+
+/// `<x-`, with what's allowed around the `<` and the `/`.
+fn tag_prefix(b: &[u8]) -> Option<(usize, bool)> {
+    let mut i = 1;
+    let closes = b.get(1) == Some(&b'/');
+    if closes {
+        i += 1;
+    }
+    while b.get(i).copied().is_some_and(is_space) {
+        i += 1;
+    }
+    (b.get(i) == Some(&b'x') && matches!(b.get(i + 1), Some(b'-' | b':')))
+        .then_some((i + 2, closes))
+}
+
+/// Past the first `)` that balances the `(` at `open`. As in Laravel's regular expression, this
+/// counts them all, those in a string too.
+pub(crate) fn balanced_parens(b: &[u8], open: usize) -> Option<usize> {
+    let mut depth = 0u32;
+    for (i, c) in b.iter().enumerate().skip(open) {
+        match c {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `@class(...)` or `@style(...)` at `at`: where it ends.
+pub(crate) fn class_or_style_end(b: &[u8], at: usize) -> Option<usize> {
+    let rest = &b[at..];
+    if rest.starts_with(b"@class(") || rest.starts_with(b"@style(") {
+        balanced_parens(b, at + 6)
+    } else {
+        None
+    }
+}
+
+/// `{{ $attributes ... }}` at `at`: where it ends. What's in it can't have a `}`.
+pub(crate) fn attribute_bag_end(b: &[u8], at: usize) -> Option<usize> {
+    if !b[at..].starts_with(b"{{") {
+        return None;
+    }
+    let mut i = at + 2;
+    while b.get(i).copied().is_some_and(is_space) {
+        i += 1;
+    }
+    if !b[i..].starts_with(b"$attributes") {
+        return None;
+    }
+    let close = i + b[i..].iter().position(|c| *c == b'}')?;
+    b[close..].starts_with(b"}}").then_some(close + 2)
+}
+
+/// `:$name` at `at`: where it ends.
+pub(crate) fn short_attr_end(b: &[u8], at: usize) -> Option<usize> {
+    if !b[at..].starts_with(b":$") {
+        return None;
+    }
+    let len = b[at + 2..].iter().take_while(|c| is_word(**c)).count();
+    (len > 0).then_some(at + 2 + len)
+}
+
+/// Past a Blade comment at `at`, which Laravel has taken out before it looks for tags.
+pub(crate) fn comment_end(b: &[u8], at: usize) -> Option<usize> {
+    if !b[at..].starts_with(b"{{--") {
+        return None;
+    }
+    let text = &b[at + 4..];
+    text.windows(4)
+        .position(|w| w == b"--}}")
+        .map(|i| at + 4 + i + 4)
+}
+
+/// Finds where the attributes of a tag end, as Laravel's regular expressions do: this goes through
+/// the same choices in the same order, and goes back on them the same way, so what's a tag there
+/// is one here. What's found not to lead anywhere is remembered, which is what keeps it from
+/// taking long on what's only a long way from being a tag.
+struct AttrMatcher<'a> {
+    b: &'a [u8],
+    closing_itself: bool,
+    dead_ends: std::collections::HashSet<usize>,
+}
+
+/// More attributes than anyone writes: what the matching in PHP would give up on too.
+const MAX_ATTRS: u32 = 2000;
+
+impl AttrMatcher<'_> {
+    /// From `at`, on to the end of the tag: where the attributes end. Spaces at the end count as
+    /// being in them.
+    fn rest(&mut self, at: usize, depth: u32) -> Option<usize> {
+        if depth > MAX_ATTRS || self.dead_ends.contains(&at) {
+            return None;
+        }
+        let (next, spaced) = self.skip_space(at);
+        if spaced
+            && next < self.b.len()
+            && let Some(end) = self.attribute(next, depth)
+        {
+            return Some(end);
+        }
+        if self.ends_at(next) {
+            return Some(next);
+        }
+        self.dead_ends.insert(at);
+        None
+    }
+
+    fn skip_space(&self, mut at: usize) -> (usize, bool) {
+        let mut spaced = false;
+        loop {
+            if self.b.get(at).copied().is_some_and(is_space) {
+                spaced = true;
+                at += 1;
+            } else if at < self.b.len()
+                && let Some(end) = comment_end(self.b, at)
+            {
+                at = end;
+            } else {
+                return (at, spaced);
+            }
+        }
+    }
+
+    fn ends_at(&self, at: usize) -> bool {
+        if self.closing_itself {
+            return self.b[at..].starts_with(b"/>");
+        }
+        self.b.get(at) == Some(&b'>') && !matches!(self.b[at - 1], b'/' | b'=' | b'-')
+    }
+
+    fn attribute(&mut self, at: usize, depth: u32) -> Option<usize> {
+        let whole = class_or_style_end(self.b, at)
+            .or_else(|| attribute_bag_end(self.b, at))
+            .or_else(|| short_attr_end(self.b, at));
+        if let Some(end) = whole
+            && let Some(found) = self.rest(end, depth + 1)
+        {
+            return Some(found);
+        }
+        let name = self.b[at..]
+            .iter()
+            .take_while(|c| is_attr_name_byte(**c))
+            .count();
+        if name == 0 {
+            return None;
+        }
+        let name_end = at + name;
+        if self.b.get(name_end) == Some(&b'=') {
+            let value = name_end + 1;
+            match self.b.get(value) {
+                Some(q @ (b'"' | b'\'')) => {
+                    if let Some(len) = self.b[value + 1..].iter().position(|c| c == q)
+                        && let Some(found) = self.rest(value + 1 + len + 1, depth + 1)
+                    {
+                        return Some(found);
+                    }
+                }
+                Some(_) => {
+                    let len = self.b[value..]
+                        .iter()
+                        .take_while(|c| !matches!(c, b'\'' | b'"' | b'=' | b'<' | b'>'))
+                        .count();
+                    for end in (value + 1..=value + len).rev() {
+                        if let Some(found) = self.rest(end, depth + 1) {
+                            return Some(found);
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
+        self.rest(name_end, depth + 1)
+    }
+}
+
+/// The tag at the start of `text`, which has a `<`, if it's one by Laravel's compiler. Whatever
+/// isn't is text there, and is here.
+pub(crate) fn tag_at(text: &str) -> Option<Tag> {
+    let b = text.as_bytes();
+    let (start, closes) = tag_prefix(b)?;
+    let name_len = b[start..]
+        .iter()
+        .take_while(|c| is_tag_name_byte(**c))
+        .count();
+    let name_end = start + name_len;
+    if closes {
+        // `</x-slot` is any end of a slot: this comes first in Laravel, and is all it asks of it
+        if b[start..].starts_with(b"slot") {
+            let close = name_end + b[name_end..].iter().position(|c| *c == b'>')?;
+            return Some(Tag {
+                start,
+                name_end,
+                attrs_end: close,
+                end: close + 1,
+                closes,
+            });
+        }
+        let close = name_end + b[name_end..].iter().take_while(|c| is_space(**c)).count();
+        return (b.get(close) == Some(&b'>')).then_some(Tag {
+            start,
+            name_end,
+            attrs_end: close,
+            end: close + 1,
+            closes,
+        });
+    }
+    for closing_itself in [true, false] {
+        let mut matcher = AttrMatcher {
+            b,
+            closing_itself,
+            dead_ends: std::collections::HashSet::new(),
+        };
+        if let Some(attrs_end) = matcher.rest(name_end, 0) {
+            return Some(Tag {
+                start,
+                name_end,
+                attrs_end,
+                end: attrs_end + if closing_itself { 2 } else { 1 },
+                closes,
+            });
+        }
+    }
+    None
+}
+
+/// Is this name of an attribute, as written, one whose value is PHP?
+pub fn attr_is_bound(name: &str) -> bool {
+    let name = name.strip_prefix("bind:").unwrap_or_else(|| {
+        name.strip_prefix(':')
+            .filter(|rest| !rest.starts_with(':'))
+            .unwrap_or("")
+    });
+    !name.is_empty() && name.bytes().all(|c| is_tag_name_byte(c) || c == b'@')
+}
+
+/// The name of an attribute without what says how it's read.
+pub fn attr_key(name: &str) -> &str {
+    if let Some(rest) = name.strip_prefix("bind:") {
+        return rest;
+    }
+    if let Some(rest) = name.strip_prefix("::") {
+        return rest;
+    }
+    if attr_is_bound(name) {
+        return &name[1..];
+    }
+    name
+}
+
+/// Laravel's `Str::camel`.
+pub fn camel(key: &str) -> String {
+    let mut out = String::with_capacity(key.len());
+    let mut upper = false;
+    for c in key.chars() {
+        if matches!(c, '-' | '_' | ' ') {
+            upper = !out.is_empty() || upper;
+            continue;
+        }
+        if upper {
+            out.extend(c.to_uppercase());
+        } else if out.is_empty() {
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+        upper = false;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tag's text, split where it has its parts.
+    fn parts(text: &str) -> Option<(&str, &str, &str)> {
+        let tag = tag_at(text)?;
+        Some((
+            &text[tag.start..tag.name_end],
+            &text[tag.name_end..tag.attrs_end],
+            &text[tag.attrs_end..tag.end],
+        ))
+    }
+
+    #[test]
+    fn tags_are_what_laravels_regular_expressions_take_them_for() {
+        assert_eq!(parts("<x-a/>"), Some(("a", "", "/>")));
+        assert_eq!(parts("<x-a>"), Some(("a", "", ">")));
+        assert_eq!(parts("< x:a.b-c::d />"), Some(("a.b-c::d", " ", "/>")));
+        assert_eq!(parts("<x-a b=c/>"), Some(("a", " b=c", "/>")));
+        assert_eq!(
+            parts("<x-a b=c d=\"e\" />"),
+            Some(("a", " b=c d=\"e\" ", "/>"))
+        );
+        assert_eq!(parts("</x-a >"), Some(("a", " ", ">")));
+        assert_eq!(
+            parts("</x-slot name=\"a\">"),
+            Some(("slot", " name=\"a\"", ">"))
+        );
+        assert_eq!(
+            parts("<x-a @class(['b' => ($c)]) />"),
+            Some(("a", " @class(['b' => ($c)]) ", "/>"))
+        );
+        assert_eq!(
+            parts("<x-a {{ $attributes->c() }}>"),
+            Some(("a", " {{ $attributes->c() }}", ">"))
+        );
+        assert_eq!(
+            parts("<x-a {{-- \" --}} b>"),
+            Some(("a", " {{-- \" --}} b", ">"))
+        );
+    }
+
+    #[test]
+    fn what_laravel_doesnt_take_for_a_tag() {
+        for text in [
+            "<x>",
+            "<xa>",
+            "<x->",
+            "<x-a->",
+            "<x-a b=>",
+            "<x-a b=\"c\"d=\"e\">",
+            "<x-a {{ $b }}>",
+            "<x-a @if($b)>",
+            "<x-a @class(['b)'])>",
+            "<x-a b=\"c>",
+            "<x-a",
+            "</x-a b>",
+            "<x-a é>",
+        ] {
+            assert_eq!(tag_at(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_long_way_from_being_a_tag_doesnt_take_long() {
+        let text = format!("<x-a{}", " b=c".repeat(5000));
+        assert_eq!(tag_at(&text), None);
+    }
+
+    #[test]
+    fn attributes_are_named_as_laravel_has_them() {
+        assert!(attr_is_bound(":a-b"));
+        assert!(attr_is_bound("bind:a"));
+        assert!(!attr_is_bound("::a"));
+        assert!(!attr_is_bound(":"));
+        assert!(!attr_is_bound("a"));
+        assert_eq!(attr_key(":a-b"), "a-b");
+        assert_eq!(attr_key("::a"), "a");
+        assert_eq!(attr_key("bind:a"), "a");
+        assert_eq!(attr_key("wire:click"), "wire:click");
+        assert_eq!(camel("user-id"), "userId");
+        assert_eq!(camel("user_id"), "userId");
+        assert_eq!(camel("userId"), "userId");
+        assert_eq!(camel("Title"), "title");
+    }
 
     #[test]
     fn the_table_is_sorted_for_its_binary_search() {

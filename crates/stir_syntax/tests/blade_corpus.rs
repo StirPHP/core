@@ -65,9 +65,8 @@ fn laravels_own_templates_parse() {
     errors_of(&malformed);
 }
 
-/// What the tests can't see for themselves: this reports, and doesn't decide.
 #[test]
-fn report_on_an_application() {
+fn an_applications_templates_parse() {
     let Some(app) = corpus("laravel-io") else {
         return;
     };
@@ -83,7 +82,65 @@ fn report_on_an_application() {
             let first = tree.lines().find(|l| l.starts_with("error"));
             eprintln!("  {}: {}", path.display(), first.unwrap_or_default());
         }
+        assert!(errors.is_empty());
+        assert!(!files.is_empty());
     }
+}
+
+/// The strings Laravel's own tests give to a method called `method`.
+fn php_strings_given_to(source: &str, method: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for piece in source.split(&format!("->{method}('")).skip(1) {
+        let mut text = String::new();
+        let mut chars = piece.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => match chars.next() {
+                    Some('\'') => text.push('\''),
+                    Some('\\') => text.push('\\'),
+                    Some(other) => {
+                        text.push('\\');
+                        text.push(other);
+                    }
+                    None => {}
+                },
+                '\'' => break,
+                other => text.push(other),
+            }
+        }
+        found.push(text);
+    }
+    found
+}
+
+/// What Laravel's tests of its component tags give it. Its compiler has nothing to refuse in them
+/// on our side: what it does refuse is for a component it can't find.
+#[test]
+fn laravels_tests_of_component_tags_parse() {
+    let Some(framework) = corpus("framework") else {
+        return;
+    };
+    let path = framework.join("tests/View/Blade/BladeComponentTagCompilerTest.php");
+    let source = std::fs::read_to_string(path).unwrap();
+    let mut inputs = php_strings_given_to(&source, "compileTags");
+    inputs.extend(php_strings_given_to(&source, "compileSlots"));
+    assert!(inputs.len() >= 50, "{} inputs", inputs.len());
+    let mut tags = 0;
+    for input in &inputs {
+        let parse = parse_blade(input);
+        assert_eq!(parse.syntax().to_string(), *input);
+        assert!(parse.errors().is_empty(), "{input}\n{}", parse.debug_tree());
+        tags += parse
+            .syntax()
+            .descendants()
+            .filter(|n| n.kind() == stir_syntax::SyntaxKind::BLADE_TAG)
+            .count();
+    }
+    assert!(
+        tags >= inputs.len(),
+        "{tags} tags in {} inputs",
+        inputs.len()
+    );
 }
 
 /// Every `compile*` method of Laravel's traits is in our table, or here to say why it isn't.
