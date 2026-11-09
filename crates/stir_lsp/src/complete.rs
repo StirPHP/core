@@ -323,6 +323,9 @@ fn in_text(root: &SyntaxNode, offset: TextSize) -> bool {
                 | BLADE_COMMENT
                 | BLADE_RAW_ARGS
                 | BLADE_IGNORED_ARGS
+                | BLADE_ATTR_TEXT
+                | BLADE_ATTR_NAME
+                | BLADE_TAG_NAME
         ) && t.text_range().end() > offset
     })
 }
@@ -461,6 +464,9 @@ fn template_items(
 ) -> Option<Completions> {
     let root = stir_db::parse(db, file).syntax();
     let text = file.text(db);
+    if let Some(found) = component_items(db, ws, &root, text, offset) {
+        return Some(found);
+    }
     if let Some((inner, written)) = stir_checker::script::links::view_string_at(&root, offset) {
         let query = written.to_ascii_lowercase();
         let mut names: Vec<&String> = stir_checker::script::links::view_names(db, ws)
@@ -503,6 +509,51 @@ fn template_items(
     Some(Completions {
         items,
         replace: TextRange::new(at, offset),
+        incomplete: false,
+    })
+}
+
+/// The names of components after `<x-`, in HTML or in the name of a tag that's there already.
+fn component_items(
+    db: &dyn Db,
+    ws: Workspace,
+    root: &SyntaxNode,
+    text: &str,
+    offset: TextSize,
+) -> Option<Completions> {
+    let off = usize::from(offset).min(text.len());
+    let start = text[..off]
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ':' | '.'))
+        .last()
+        .map_or(off, |(i, _)| i);
+    // `<x-` and `<x:` are both in what's taken for the name
+    let written = &text[start..off];
+    let (prefix, written) = written
+        .strip_prefix("x-")
+        .map(|w| ("x-", w))
+        .or_else(|| written.strip_prefix("x:").map(|w| ("x:", w)))?;
+    if !text[..start].trim_end().ends_with(['<', '/']) {
+        return None;
+    }
+    let token = root.token_at_offset(offset).left_biased()?;
+    if !matches!(
+        token.kind(),
+        INLINE_HTML | BLADE_TAG_NAME | BLADE_TAG_START | WHITESPACE
+    ) {
+        return None;
+    }
+    let names = stir_checker::views::component_index(db, ws).tag_names();
+    let items = names
+        .into_iter()
+        .filter(|n| n.starts_with(written))
+        .map(|n| Item::new(n.clone(), ItemKind::Class, n))
+        .collect();
+    let after = start + prefix.len();
+    Some(Completions {
+        items,
+        replace: TextRange::new(TextSize::from(after as u32), offset),
         incomplete: false,
     })
 }

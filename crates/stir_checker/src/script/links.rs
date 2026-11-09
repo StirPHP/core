@@ -206,6 +206,223 @@ const HOOK_FUNCTIONS: &[&str] = &[
     "remove_all_filters",
 ];
 
+/// A part of a component's tag that's a name for something.
+enum TagPart {
+    /// The name of the component, in its tag or its end.
+    Name(stir_syntax::SyntaxToken),
+    /// An attribute, by its key, with where its name is.
+    Attribute(String, TextRange),
+}
+
+/// What of a component's tag is at `offset`.
+fn tag_part_at(root: &SyntaxNode, offset: TextSize) -> Option<(SyntaxNode, TagPart)> {
+    let at = root.token_at_offset(offset);
+    let token = [at.clone().right_biased(), at.left_biased()]
+        .into_iter()
+        .flatten()
+        .find(|t| matches!(t.kind(), BLADE_TAG_NAME | BLADE_ATTR_NAME))?;
+    if token.kind() == BLADE_TAG_NAME {
+        let tag = token.parent()?;
+        if tag.kind() == BLADE_TAG && crate::views::tag_is_slot(&tag) {
+            return None;
+        }
+        return Some((tag, TagPart::Name(token)));
+    }
+    let tag = token.parent()?.parent().filter(|n| n.kind() == BLADE_TAG)?;
+    if crate::views::tag_is_slot(&tag) {
+        return None;
+    }
+    let attribute = crate::views::tag_attributes(&tag)
+        .into_iter()
+        .find(|a| a.name_range == token.text_range())?;
+    Some((tag, TagPart::Attribute(attribute.key, token.text_range())))
+}
+
+/// The templates a component's name in a tag could be for.
+fn view_file(db: &dyn Db, ws: Workspace, view: &str) -> Option<SourceFile> {
+    views(db, ws, view).first().map(|(file, _)| *file)
+}
+
+/// Where a variable `@props` declares is declared, in the template `file`: the string for it.
+fn prop_declared(db: &dyn Db, file: SourceFile, key: &str) -> Option<TextRange> {
+    let root = stir_db::parse(db, file).syntax();
+    let camel = stir_syntax::blade_camel(key);
+    root.descendants()
+        .filter(|n| n.kind() == BLADE_DIRECTIVE)
+        .filter(|n| crate::body::template::directive_name(n).as_deref() == Some("props"))
+        .flat_map(|n| n.descendants().collect::<Vec<_>>())
+        .filter(|n| n.kind() == ARRAY_ELEM)
+        .filter_map(|elem| elem.children().find(|c| c.kind() == STRING_LITERAL))
+        .find_map(|literal| {
+            let (value, range) = string_value(&literal)?;
+            (value == key || value == camel).then_some(range)
+        })
+}
+
+/// The constructor's parameter an attribute of a component is for.
+fn constructor_param(
+    ctx: &crate::Ctx<'_>,
+    class: &str,
+    key: &str,
+) -> Option<(SourceFile, crate::model::ParamSig)> {
+    let model = ctx.class(class)?;
+    let (owner, method, _) = ctx.find_method(&model.self_ty(), "__construct")?;
+    let sig = ctx.method_sig(&owner, method);
+    let camel = stir_syntax::blade_camel(key);
+    let param = sig.params.into_iter().find(|p| p.name == camel.as_str())?;
+    Some((owner.file, param))
+}
+
+/// Where the name of a component in its tag, or an attribute in it, leads: its class or template,
+/// and the parameter of the constructor or the variable of `@props`.
+pub fn tag_targets(
+    db: &dyn Db,
+    ws: Workspace,
+    file: SourceFile,
+    offset: TextSize,
+) -> Vec<(SourceFile, TextRange)> {
+    use crate::views::ComponentTarget;
+    let root = stir_db::parse(db, file).syntax();
+    let Some((tag, part)) = tag_part_at(&root, offset) else {
+        return Vec::new();
+    };
+    let target = crate::views::resolve_component(db, ws, &crate::views::tag_name(&tag));
+    let ctx = crate::Ctx::new(db, ws);
+    match (target, part) {
+        (ComponentTarget::Class(class), TagPart::Name(_)) => ctx
+            .class(&class)
+            .map(|model| vec![(model.file, model.def.name_range)])
+            .unwrap_or_default(),
+        (ComponentTarget::View(view), TagPart::Name(_)) => views(db, ws, &view),
+        (ComponentTarget::Class(class), TagPart::Attribute(key, _)) => {
+            constructor_param(&ctx, &class, &key)
+                .map(|(owner, param)| vec![(owner, param.range)])
+                .unwrap_or_default()
+        }
+        (ComponentTarget::View(view), TagPart::Attribute(key, _)) => view_file(db, ws, &view)
+            .and_then(|template| Some((template, prop_declared(db, template, &key)?)))
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// What to say of a part of a tag on hovering over it.
+pub struct TagHover {
+    pub range: TextRange,
+    /// The declaration: code, if there's any.
+    pub code: Option<String>,
+    pub note: String,
+}
+
+/// What's said of the name of a component in its tag, or an attribute in it.
+pub fn tag_hover(
+    db: &dyn Db,
+    ws: Workspace,
+    file: SourceFile,
+    offset: TextSize,
+) -> Option<TagHover> {
+    use crate::views::ComponentTarget;
+    let root = stir_db::parse(db, file).syntax();
+    let (tag, part) = tag_part_at(&root, offset)?;
+    let target = crate::views::resolve_component(db, ws, &crate::views::tag_name(&tag));
+    let ctx = crate::Ctx::new(db, ws);
+    let hover = |range, code, note: String| Some(TagHover { range, code, note });
+    let unread = "A package's component, or one registered in a way that can't be read.";
+    match part {
+        TagPart::Name(token) => {
+            let range = token.text_range();
+            match target {
+                ComponentTarget::Class(class) => {
+                    let Some(model) = ctx.class(&class) else {
+                        return hover(range, None, unread.to_owned());
+                    };
+                    let params = ctx
+                        .find_method(&model.self_ty(), "__construct")
+                        .map(|(owner, method, _)| ctx.method_sig(&owner, method).params)
+                        .unwrap_or_default();
+                    let shown: Vec<String> = params
+                        .iter()
+                        .map(|p| {
+                            let default = if p.optional { " = ..." } else { "" };
+                            format!("{} ${}{default}", p.ty, p.name)
+                        })
+                        .collect();
+                    hover(
+                        range,
+                        Some(format!("class {}({})", model.name, shown.join(", "))),
+                        "A component with a class.".to_owned(),
+                    )
+                }
+                ComponentTarget::View(view) => {
+                    let declared = view_file(db, ws, &view).and_then(|template| {
+                        let root = stir_db::parse(db, template).syntax();
+                        let props = root.descendants().find(|n| {
+                            n.kind() == BLADE_DIRECTIVE
+                                && crate::body::template::directive_name(n).as_deref()
+                                    == Some("props")
+                        })?;
+                        Some(props.text().to_string().trim().to_owned())
+                    });
+                    hover(
+                        range,
+                        declared,
+                        format!("An anonymous component, the template `{view}`."),
+                    )
+                }
+                ComponentTarget::Dynamic => hover(
+                    range,
+                    None,
+                    "The component it's given to render, which could be any.".to_owned(),
+                ),
+                ComponentTarget::Unknown => hover(range, None, unread.to_owned()),
+            }
+        }
+        TagPart::Attribute(key, range) => match target {
+            ComponentTarget::Class(class) => match constructor_param(&ctx, &class, &key) {
+                Some((_, param)) => hover(
+                    range,
+                    Some(format!("{} ${}", param.ty, param.name)),
+                    format!("A parameter of the constructor of `{class}`."),
+                ),
+                None => hover(
+                    range,
+                    None,
+                    "Not a parameter of the constructor: it goes in `$attributes`.".to_owned(),
+                ),
+            },
+            ComponentTarget::View(view) => {
+                let template = view_file(db, ws, &view)?;
+                if prop_declared(db, template, &key).is_some() {
+                    let name = stir_syntax::blade_camel(&key);
+                    let data = crate::views::view_data(db, ws, template);
+                    let code = data
+                        .vars
+                        .get(name.as_str())
+                        .map_or_else(|| format!("${name}"), |v| format!("{} ${name}", v.ty));
+                    return hover(
+                        range,
+                        Some(code),
+                        "Declared by the component's `@props`.".to_owned(),
+                    );
+                }
+                let has_props = stir_db::parse(db, template)
+                    .syntax()
+                    .descendants()
+                    .filter(|n| n.kind() == BLADE_DIRECTIVE)
+                    .any(|n| crate::body::template::directive_name(&n).as_deref() == Some("props"));
+                let note = if has_props {
+                    "Not in the component's `@props`: it goes in `$attributes`."
+                } else {
+                    "A variable of the component, and also in its `$attributes`."
+                };
+                hover(range, None, note.to_owned())
+            }
+            _ => None,
+        },
+    }
+}
+
 /// What the string at `offset` in `file` names, as places in the workspace: none where it's no
 /// string, or one that names nothing known.
 pub fn string_targets(
@@ -214,6 +431,12 @@ pub fn string_targets(
     file: SourceFile,
     offset: TextSize,
 ) -> Vec<(SourceFile, TextRange)> {
+    if stir_syntax::is_blade_path(file.path(db)) {
+        let tag = tag_targets(db, ws, file, offset);
+        if !tag.is_empty() {
+            return tag;
+        }
+    }
     let root = stir_db::parse(db, file).syntax();
     let Some(token) = root.token_at_offset(offset).right_biased() else {
         return Vec::new();

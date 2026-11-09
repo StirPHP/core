@@ -21,6 +21,20 @@ pub fn hover(
     file: SourceFile,
     offset: TextSize,
 ) -> Option<HoverResult> {
+    if stir_syntax::is_blade_path(file.path(db))
+        && let Some(tag) = stir_checker::script::links::tag_hover(db, ws, file, offset)
+    {
+        let mut markdown = String::new();
+        if let Some(code) = &tag.code {
+            markdown.push_str(&render::code(code));
+            markdown.push_str("\n\n");
+        }
+        markdown.push_str(&tag.note);
+        return Some(HoverResult {
+            range: tag.range,
+            markdown,
+        });
+    }
     let typed = typed_file(db, ws, file);
     if let Some((range, def)) = nav::def_at(db, ws, file, offset) {
         let narrowed = typed.types.get(&range).cloned();

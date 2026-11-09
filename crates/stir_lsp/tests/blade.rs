@@ -912,6 +912,226 @@ impl Rendered {
     }
 }
 
+const WITH_COMPONENTS: &str = "<p>🎉 日本語</p> <x-alert type=\"a\" :limit=\"$given->count\" other=\"{{ $title }}\" :$title>
+    <x-slot:heading>🎉 {{ $title }}</x-slot:heading>
+</x-alert>
+<p>日本語</p> <x-card :kind=\"$title\" not-a-prop=\"b\" /> <x-bare a=\"b\" /> <x-pkg::thing c=\"d\" />
+<p>日本語</p> <x-tabs /><x-forms.input />
+<x-
+<x-fo
+<x:ca
+<div class=\"<x-a\"></div> {{ '<x-' }}
+";
+
+/// A template with components of each kind around it.
+async fn with_components() -> Session {
+    let mut s = Session::start(WITH_COMPONENTS).await;
+    let root = s.root.clone();
+    let files = [
+        ("bootstrap/app.php", "<?php\n"),
+        (
+            "app/View/Component.php",
+            "<?php\nnamespace Illuminate\\View;\nabstract class Component {\n    public $attributes;\n    public static function resolve($data) { return new static; }\n    abstract public function render();\n}\n",
+        ),
+        (
+            "app/View/Components/Alert.php",
+            "<?php\nnamespace App\\View\\Components;\nuse Illuminate\\View\\Component;\nclass Alert extends Component {\n    public function __construct(public string $type, public int $limit = 0) {}\n    public function render() { return view('components.alert'); }\n}\n",
+        ),
+        (
+            "app/View/Components/Forms/Input.php",
+            "<?php\nnamespace App\\View\\Components\\Forms;\nclass Input extends \\Illuminate\\View\\Component {\n    public function render() { return view('components.forms.input'); }\n}\n",
+        ),
+        (
+            "resources/views/components/alert.blade.php",
+            "{{ $type }}\n",
+        ),
+        ("resources/views/components/forms/input.blade.php", "a\n"),
+        (
+            "resources/views/components/card.blade.php",
+            "@props(['title', 'kind' => 'info'])\n{{ $kind }}\n",
+        ),
+        ("resources/views/components/bare.blade.php", "{{ $a }}\n"),
+        ("resources/views/components/tabs/index.blade.php", "a\n"),
+    ];
+    for (path, text) in files {
+        write(&root.join(path), text);
+    }
+    // what's been written since it started is seen by the server restarted on them
+    let mut c = Client::start();
+    c.request(
+        "initialize",
+        json!({"processId": null, "rootUri": uri(&root), "capabilities": {},
+               "initializationOptions": {"workspaceTrusted": true}}),
+    )
+    .await;
+    c.notify("initialized", json!({})).await;
+    c.notify(
+        "textDocument/didOpen",
+        json!({"textDocument": {"uri": s.uri, "languageId": "php", "version": 1, "text": WITH_COMPONENTS}}),
+    )
+    .await;
+    s.c = c;
+    s
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hovering_in_a_components_tag() {
+    let mut s = with_components().await;
+    let got = s.hover("alert type", 2).await;
+    assert!(got.contains("App\\View\\Components\\Alert"), "{got}");
+    assert!(got.contains("string $type"), "{got}");
+    let got = s.hover("forms.input", 8).await;
+    assert!(got.contains("Forms\\Input"), "{got}");
+    let got = s.hover("card :kind", 1).await;
+    assert!(got.contains("@props(['title', 'kind' => 'info'])"), "{got}");
+    assert!(got.contains("components.card"), "{got}");
+    let got = s.hover("tabs />", 1).await;
+    assert!(got.contains("components.tabs.index"), "{got}");
+    let got = s.hover("pkg::thing", 1).await;
+    assert!(got.contains("package"), "{got}");
+
+    let got = s.hover(":limit", 3).await;
+    assert!(got.contains("int $limit"), "{got}");
+    let got = s.hover("other=", 2).await;
+    assert!(got.contains("$attributes"), "{got}");
+    let got = s.hover("kind=", 1).await;
+    assert!(got.contains("$kind"), "{got}");
+    assert!(got.contains("@props"), "{got}");
+    let got = s.hover("not-a-prop", 3).await;
+    assert!(got.contains("$attributes"), "{got}");
+
+    // the variables in it are what they are anywhere, after multi-byte text
+    let raw = s.at("textDocument/hover", "$given->count", 2).await;
+    assert_eq!(s.range_text(&raw["range"]), "$given", "{raw}");
+    let raw = s.at("textDocument/hover", "$title }}\" :$title", 2).await;
+    assert_eq!(s.range_text(&raw["range"]), "$title", "{raw}");
+    let raw = s.at("textDocument/hover", ":$title>", 2).await;
+    assert_eq!(s.range_text(&raw["range"]), "$title", "{raw}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn going_to_a_definition_from_a_components_tag() {
+    let mut s = with_components().await;
+    let root = s.root.clone();
+    let got = s.at("textDocument/definition", "alert type", 2).await;
+    assert!(
+        is_under(&got["uri"], &root, "app/View/Components/Alert.php"),
+        "{got}"
+    );
+    let got = s.at("textDocument/definition", "forms.input", 8).await;
+    assert!(
+        is_under(&got["uri"], &root, "app/View/Components/Forms/Input.php"),
+        "{got}"
+    );
+    let got = s.at("textDocument/definition", "card :kind", 1).await;
+    assert!(
+        is_under(
+            &got["uri"],
+            &root,
+            "resources/views/components/card.blade.php"
+        ),
+        "{got}"
+    );
+    let got = s.at("textDocument/definition", "tabs />", 1).await;
+    assert!(
+        is_under(
+            &got["uri"],
+            &root,
+            "resources/views/components/tabs/index.blade.php"
+        ),
+        "{got}"
+    );
+    // the end of a tag goes to the same place
+    let got = s.at("textDocument/definition", "alert>\n<p>", 2).await;
+    assert!(
+        is_under(&got["uri"], &root, "app/View/Components/Alert.php"),
+        "{got}"
+    );
+    // a parameter of the constructor and a variable of `@props`
+    let got = s.at("textDocument/definition", ":limit", 3).await;
+    assert!(
+        is_under(&got["uri"], &root, "app/View/Components/Alert.php"),
+        "{got}"
+    );
+    assert_eq!(got["range"]["start"]["line"], 4, "{got}");
+    let got = s.at("textDocument/definition", ":kind", 3).await;
+    assert!(
+        is_under(
+            &got["uri"],
+            &root,
+            "resources/views/components/card.blade.php"
+        ),
+        "{got}"
+    );
+    assert_eq!(got["range"]["start"]["line"], 0, "{got}");
+    // nothing for what's only in `$attributes`, or a package's
+    let got = s.at("textDocument/definition", "not-a-prop", 3).await;
+    assert!(got.is_null(), "{got}");
+    let got = s.at("textDocument/definition", "pkg::thing", 1).await;
+    assert!(got.is_null(), "{got}");
+    // a variable in an attribute is one of this template's
+    let got = s
+        .at("textDocument/definition", "$title }}\" :$title", 2)
+        .await;
+    assert!(got["uri"] == json!(s.uri), "{got}");
+    let got = s.at("textDocument/definition", ":$title>", 2).await;
+    assert!(got["uri"] == json!(s.uri), "{got}");
+    assert_eq!(s.range_text(&got["range"]), "$title", "{got}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn completing_a_components_name() {
+    let mut s = with_components().await;
+    let got = s.labels("<x-\n", 3).await;
+    assert_eq!(
+        got,
+        ["alert", "bare", "card", "forms.input", "tabs"],
+        "{got:?}"
+    );
+    let got = s.labels("<x-fo\n", 5).await;
+    assert_eq!(got, ["forms.input"], "{got:?}");
+    let raw = s.at("textDocument/completion", "<x-fo\n", 5).await;
+    let edit = &raw["items"][0]["textEdit"];
+    assert_eq!(s.range_text(&edit["range"]), "fo", "{edit}");
+    assert_eq!(edit["newText"], "forms.input", "{edit}");
+    let got = s.labels("<x:ca\n", 5).await;
+    assert_eq!(got, ["card"], "{got:?}");
+    // the name that's there, and not in a string
+    let got = s.labels("x-tabs />", 4).await;
+    assert_eq!(got, ["tabs"], "{got:?}");
+    let got = s.labels("'<x-' }}", 4).await;
+    assert!(!got.contains(&"alert".to_owned()), "{got:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_template_with_components_has_no_false_alarms_in_the_editor() {
+    let mut s = with_components().await;
+    let uri = s.uri.clone();
+    let diags = s.c.diagnostics(&uri).await;
+    assert_eq!(diags, Vec::<Value>::new());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_template_of_a_component_has_what_its_class_gives() {
+    let mut s = with_components().await;
+    let root = s.root.clone();
+    let path = root.join("resources/views/components/alert.blade.php");
+    let doc = uri(&path);
+    s.c.notify(
+        "textDocument/didOpen",
+        json!({"textDocument": {"uri": doc, "languageId": "php", "version": 1, "text": "{{ $type }}\n"}}),
+    )
+    .await;
+    let got =
+        s.c.request(
+            "textDocument/hover",
+            json!({"textDocument": {"uri": doc}, "position": {"line": 0, "character": 4}}),
+        )
+        .await;
+    let shown = got["contents"]["value"].as_str().unwrap_or("");
+    assert!(shown.contains("string"), "{got}");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_templates_variable_has_the_type_of_what_renders_it() {
     let mut r = rendered().await;
