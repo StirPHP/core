@@ -465,6 +465,9 @@ a plugin's `Plugin Name:` header. `parameters.stirphp.frameworks` turns one off 
   `$request->user()` give the user model `config/auth.php` names. Laravel's class aliases, such as `\DB`, are there.
 - Macros the project and its packages add with `Foo::macro('name', ..)` and `Foo::mixin(new Bar)` aren't reported, though
   what they return isn't known.
+- Blade templates are checked wherever they hold PHP: `{{ }}`, directives, `@php` and component attributes. A template's
+  variables are typed from what renders it, such as `view('posts.index', ['posts' => $posts])`. A variable is reported as
+  undefined only when everything that renders the template can be read.
 - In a closure given to `Artisan::command()` or the console kernel's `command()`, `$this` is the `ClosureCommand` Laravel
   binds it to, so `$this->comment()` and `$this->argument()` resolve; not in a static closure, which PHP can't bind.
 - In an editor, these complete, hover and lead to where they're declared: a relation's property to its method, a scope to its
