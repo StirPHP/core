@@ -82,7 +82,7 @@ Measured on this machine, with a 54-file project (Firefox, localhost):
 
 | | |
 |---|---|
-| `stir_wasm_bg.wasm` | 14.7 MB, 3.4 MB gzipped, 2.4 MB with brotli (10 MB of it is PHP's stubs) |
+| `stir_wasm_bg.wasm` | 15.0 MB, 3.5 MB gzipped, 2.5 MB with brotli (10 MB of it is PHP's stubs) |
 | page load to first diagnostics | about 1.0 s (1.7 s on the first visit) |
 | an edit to its diagnostics | 155 to 165 ms, the 150 ms wait included |
 | completion | 1 to 10 ms |

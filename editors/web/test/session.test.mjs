@@ -139,3 +139,38 @@ test('diagnostics, completion with an import, and rename across files', async ()
   c.notify('exit', null);
   await c.worker.terminate();
 });
+
+test('a template, by its name and whatever its language is called', async () => {
+  const c = client();
+  await c.request('initialize', {
+    processId: null,
+    rootUri: root,
+    capabilities: {},
+    initializationOptions: { files: { '/project/composer.json': '{}' } },
+  });
+  c.notify('initialized', {});
+  const uri = `${root}/page.blade.php`;
+  const page = '<p @click="a">{{ strlen(1, 2, 3) }}</p>\n@fore\n';
+  c.notify('textDocument/didOpen', {
+    textDocument: { uri, languageId: 'blade', version: 1, text: page },
+  });
+  const diagnostics = await c.until(diagnosticsOf(uri));
+  const lines = diagnostics.params.diagnostics.map((d) => d.range.start.line);
+  assert.ok(lines.includes(0), JSON.stringify(diagnostics));
+
+  const hover = await c.request('textDocument/hover', {
+    textDocument: { uri },
+    position: { line: 0, character: 19 },
+  });
+  assert.match(JSON.stringify(hover.result), /strlen/);
+
+  const completion = await c.request('textDocument/completion', {
+    textDocument: { uri },
+    position: { line: 1, character: 5 },
+    context: { triggerKind: 1 },
+  });
+  assert.ok(completion.result.items.some((i) => i.label === '@foreach'), JSON.stringify(completion.result));
+  await c.request('shutdown', null);
+  c.notify('exit', null);
+  await c.worker.terminate();
+});
