@@ -13,6 +13,20 @@
 //! are then unknown. Otherwise it's *closed*: its variables have the types its sources give them,
 //! and one that none of them gives is undefined.
 //!
+//! A component is one more way of being rendered, by Laravel's rules for it:
+//!
+//! - `<x-name>` stands for what [`component_index`] says, as `ComponentTagCompiler` looks for it: a
+//!   class, or else a template under `components/`.
+//! - An anonymous component's template is given the attributes of its tags, and its slots. Those
+//!   are its variables, unless `@props` takes them away again by not naming them. Nothing else of
+//!   the tag's template gets to it, so one that's open doesn't open it.
+//! - A class's template, which is whatever its methods make with `view()`, is given its public
+//!   properties and methods, and the slots of the tags for that class.
+//! - `{{ $attributes }}` passes on what can't be seen: only what a component's `@props` doesn't
+//!   name is known not to be there, and that it's not known what those are.
+//! - A slot that can't be told which component it's for, or a `<x-dynamic-component>`, is given to
+//!   them all, as far as it's said.
+//!
 //! A template's data depends on the checked bodies of the templates that include it, which depend
 //! on what those are given. A recursive `@include` would make that a cycle, and a cycle through
 //! `typed_file` would have a different outcome by which file is checked first. So templates are
@@ -944,9 +958,18 @@ struct Reader<'a> {
     out: ViewSites,
     /// The strings that have been read as what they are.
     consumed: Vec<TextRange>,
-    /// The components open at this point: the site of each, or nothing for one that doesn't
-    /// have one, which its slots are lost to.
-    open_components: Vec<Option<usize>>,
+    /// The components open at this point.
+    open_components: Vec<OpenComponent>,
+}
+
+/// A component whose end hasn't been seen.
+#[derive(Debug, Clone, Copy)]
+enum OpenComponent {
+    Site(usize),
+    /// It has no site, as with a class: which of them gets its slots can't be told.
+    Unknown,
+    /// `@component('package::name')`, which is that package's.
+    Package,
 }
 
 impl Reader<'_> {
@@ -1359,15 +1382,16 @@ impl Reader<'_> {
             range: tag.text_range(),
         });
         if tag.token(BLADE_TAG_END).is_some_and(|t| t.text() == ">") {
-            self.open_components.push(Some(index));
+            self.open_components.push(OpenComponent::Site(index));
         }
     }
 
     /// A slot of what's the current component here.
     fn slot(&mut self, part: DataPart) {
-        match self.open_components.last().copied().flatten() {
-            Some(index) => self.out.sites[index].data.push(part),
-            None => match part {
+        match self.open_components.last().copied() {
+            Some(OpenComponent::Package) => {}
+            Some(OpenComponent::Site(index)) => self.out.sites[index].data.push(part),
+            Some(OpenComponent::Unknown) | None => match part {
                 DataPart::Slot(name) | DataPart::Pair(name, _) => {
                     self.out.stray_slots.push(name);
                 }
@@ -1625,9 +1649,13 @@ impl Reader<'_> {
             let index = self.out.sites.len();
             let kind = SiteKind::Component { tag: None };
             self.add_site(&target, kind, data, false, node.text_range());
-            // a class's or a package's has no site, nor anything that can be said of its slots
-            self.open_components
-                .push((self.out.sites.len() > index).then_some(index));
+            self.open_components.push(if self.out.sites.len() > index {
+                OpenComponent::Site(index)
+            } else if plain_string(&target).is_some_and(|name| name.contains("::")) {
+                OpenComponent::Package
+            } else {
+                OpenComponent::Unknown
+            });
             return;
         }
         let kind = SiteKind::Include {
@@ -1854,6 +1882,15 @@ impl ViewIndex {
             Some(tag) => components.resolve(tag),
             None => ComponentTarget::View(String::new()),
         };
+        // a package's, unless a namespace is the project's own: which goes by the rest of the name
+        if target == ComponentTarget::Unknown
+            && let Some((_, rest)) = tag.as_deref().and_then(|t| t.split_once("::"))
+        {
+            let pattern = format!("*.components.{}*", normal_view_name(rest));
+            self.opens
+                .push((Target::Pattern(pattern), OpenReason::RenderedByPackage));
+            return;
+        }
         let class = match target {
             ComponentTarget::View(_) => return,
             ComponentTarget::Class(class) => Some(class.to_ascii_lowercase()),
@@ -1913,10 +1950,9 @@ pub struct PackageViews {
     shared: Vec<SmolStr>,
     /// What it registers for component tags.
     registrations: Vec<Registration>,
-    /// The tags its templates have, none of them of a package by name: `app-layout`.
-    tags: Vec<String>,
-    /// The names of slots in those.
-    tag_slots: Vec<SmolStr>,
+    /// The tags its templates have, none of them of a package by name, such as `app-layout`, and
+    /// the slots in each: it may be the project's component that those are for.
+    tags: Vec<(String, Vec<DataPart>)>,
 }
 
 /// See [`PackageViews`]: `view('auth.login')` from a controller's trait, read as it's written, as
@@ -1936,12 +1972,32 @@ pub fn package_views(db: &dyn Db, ws: Workspace) -> PackageViews {
         if stir_syntax::is_blade_path(file.path(db)) {
             if source.contains("<x") {
                 let root = stir_db::parse(db, file).syntax();
-                for tag in root.descendants().filter(|n| n.kind() == BLADE_TAG) {
-                    let name = tag_name(&tag);
-                    if tag_is_slot(&tag) {
-                        out.tag_slots.extend(slot_name(&tag).ok().flatten());
-                    } else if !name.contains("::") {
-                        out.tags.push(name);
+                let mut reader = Reader {
+                    db,
+                    file,
+                    out: ViewSites::default(),
+                    consumed: Vec::new(),
+                    open_components: Vec::new(),
+                };
+                for node in root.descendants() {
+                    match node.kind() {
+                        BLADE_TAG => reader.tag(&node),
+                        BLADE_TAG_CLOSE if !tag_name(&node).starts_with("slot") => {
+                            reader.open_components.pop();
+                        }
+                        _ => {}
+                    }
+                }
+                for site in reader.out.sites {
+                    if let SiteKind::Component { tag: Some(tag) } = site.kind
+                        && !tag.contains("::")
+                    {
+                        let slots = site
+                            .data
+                            .into_iter()
+                            .filter(|p| matches!(p, DataPart::Slot(_) | DataPart::NotUnderstood))
+                            .collect();
+                        out.tags.push((tag, slots));
                     }
                 }
             }
@@ -1949,7 +2005,14 @@ pub fn package_views(db: &dyn Db, ws: Workspace) -> PackageViews {
         }
         let renders =
             !names.is_empty() && (source.contains("view(") || source.contains("View::make("));
-        let registers = source.contains("omponent");
+        let registers = [
+            "omponent(",
+            "omponents(",
+            "omponentNamespace(",
+            "ComponentsAs(",
+        ]
+        .iter()
+        .any(|call| source.contains(call));
         if !renders && !registers && !source.contains("directive(") && !source.contains("share(") {
             continue;
         }
@@ -2085,13 +2148,26 @@ pub fn component_index(db: &dyn Db, ws: Workspace) -> ComponentIndex {
     for registration in &packages.registrations {
         index.register(registration);
     }
+    // of the application itself, and not a module with a folder of the same name
+    let components_dir = ws
+        .files(db)
+        .iter()
+        .filter(|f| f.origin(db) == FileOrigin::Source)
+        .filter_map(|f| {
+            let path = f.path(db).to_string_lossy().replace('\\', "/");
+            let root = path.strip_suffix("/bootstrap/app.php")?.to_owned();
+            Some(format!("{root}/app/View/Components/"))
+        })
+        .min_by_key(String::len);
     for &file in ws.files(db) {
         if file.origin(db) != FileOrigin::Source {
             continue;
         }
         let path = file.path(db).to_string_lossy().replace('\\', "/");
-        if let Some((_, under)) = path.rsplit_once("/app/View/Components/")
-            && let Some(under) = under.strip_suffix(".php")
+        if let Some(under) = components_dir
+            .as_ref()
+            .and_then(|dir| path.strip_prefix(dir.as_str()))
+            .and_then(|under| under.strip_suffix(".php"))
         {
             let items = stir_hir::file_items(db, file);
             let base = under.rsplit('/').next().unwrap_or(under);
@@ -2263,13 +2339,27 @@ pub fn view_index(db: &dyn Db, ws: Workspace) -> ViewIndex {
     }
     index.recursive = on_cycles(&edges);
     let packages = package_views(db, ws);
-    index.stray_slots.extend(packages.tag_slots.iter().cloned());
-    for tag in &packages.tags {
+    for (tag, slots) in &packages.tags {
         // whether it's rendered at all isn't known, nor what with
-        if let ComponentTarget::View(view) = components.resolve(tag) {
-            index
-                .opens
-                .push((Target::Name(view), OpenReason::RenderedByPackage));
+        match components.resolve(tag) {
+            ComponentTarget::View(view) => {
+                index
+                    .opens
+                    .push((Target::Name(view), OpenReason::RenderedByPackage));
+            }
+            ComponentTarget::Class(class) => {
+                let entry = index
+                    .class_slots
+                    .entry(class.to_ascii_lowercase())
+                    .or_default();
+                for slot in slots {
+                    match slot {
+                        DataPart::Slot(name) => entry.0.push(name.clone()),
+                        _ => entry.1 = true,
+                    }
+                }
+            }
+            ComponentTarget::Dynamic | ComponentTarget::Unknown => {}
         }
     }
     index.stray_slots.sort();

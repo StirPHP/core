@@ -37,3 +37,11 @@
 {{ $not_on_this_page }} // error: variable.undefined
 <x-recursive />
 @include('components.rendered_openly', (array) $post)
+<x-late_props a="1" /> <x-props_of_a_variable a="1" />
+@if ($count)
+    <x-card title="e" :post="$post"> {{ $not_here_either }} // error: variable.undefined
+    </x-card>
+@endif
+<x-with_slot_in_a_condition>
+    @if ($count) <x-slot:maybe>{{ $count }}</x-slot:maybe> @endif
+</x-with_slot_in_a_condition>
