@@ -175,6 +175,32 @@ impl Client {
         }
     }
 
+    /// A request that may run into the server changing its state, as it does when told it can trust
+    /// scripts: it's answered `ContentModified` then, for the client to ask again, as editors do.
+    pub async fn request_settled(&mut self, method: &str, params: Value) -> Value {
+        for _ in 0..200 {
+            let id = self.next_id;
+            self.next_id += 1;
+            self.send(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
+                .await;
+            let answer = loop {
+                let msg = self.next().await;
+                if msg.get("id") == Some(&json!(id)) && msg.get("method").is_none() {
+                    break msg;
+                }
+                self.backlog.push(msg);
+            };
+            match answer.get("error") {
+                Some(err) if err["code"] == -32801 => {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                Some(err) => panic!("{method} failed: {err}"),
+                None => return answer["result"].clone(),
+            }
+        }
+        panic!("{method} was never answered with the state settled");
+    }
+
     /// The error a request is answered with, if it is.
     pub async fn send_request_for_error(&mut self, method: &str, params: Value) -> Option<Value> {
         let id = self.next_id;

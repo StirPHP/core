@@ -696,10 +696,11 @@ async fn hooks_and_magic_members_reach_hover_and_completion() {
         .to_owned();
     assert!(!shown.contains("Post"), "{shown}");
 
+    // the answer changes what the server knows, which it may be asked about at that very moment
     c.respond(&question, json!({"title": "Allow"})).await;
     let mut shown = String::new();
     for _ in 0..200 {
-        let got = c.request("textDocument/hover", hover(5, 1)).await;
+        let got = c.request_settled("textDocument/hover", hover(5, 1)).await;
         shown = got["contents"]["value"]
             .as_str()
             .unwrap_or_default()
@@ -712,20 +713,22 @@ async fn hooks_and_magic_members_reach_hover_and_completion() {
     assert!(shown.contains("Post"), "{shown}");
 
     // a return type hook, then members
-    let got = c.request("textDocument/hover", hover(5, 8)).await;
+    let got = c.request_settled("textDocument/hover", hover(5, 8)).await;
     let shown = got["contents"]["value"].as_str().unwrap().to_owned();
     assert!(
         shown.contains("string") && shown.contains("title"),
         "{shown}"
     );
-    let got = c.request("textDocument/hover", hover(6, 8)).await;
+    let got = c.request_settled("textDocument/hover", hover(6, 8)).await;
     let shown = got["contents"]["value"].as_str().unwrap().to_owned();
     assert!(
         shown.contains("bool") && shown.contains("publish"),
         "{shown}"
     );
 
-    let got = c.request("textDocument/completion", complete_at).await;
+    let got = c
+        .request_settled("textDocument/completion", complete_at)
+        .await;
     let items = got["items"]
         .as_array()
         .cloned()
