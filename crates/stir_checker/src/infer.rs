@@ -209,6 +209,16 @@ impl Inference {
                     if !rest.is_empty() {
                         self.unify_depth(env, var_members[0], &Ty::union(rest), depth + 1);
                     }
+                } else {
+                    // `Box<T>|Crate<T>` against a `Crate<X>`: it's the one it is
+                    for a in arg.members() {
+                        let found = var_members.iter().find(|m| {
+                            matches!(m.kind(), TyKind::Class { name, .. } if as_class(env, a, name).is_some())
+                        });
+                        if let Some(m) = found {
+                            self.unify_depth(env, m, a, depth + 1);
+                        }
+                    }
                 }
             }
             _ => {}

@@ -171,3 +171,36 @@ function covariant_value(Holder1 $h): Dog {
 function covariant_wrong(Holder1 $h): int {
     return $h->get(); // error: return.type
 }
+
+/**
+ * @template T
+ */
+class InferBox
+{
+    /** @param T $value */
+    public function __construct(public mixed $value) {}
+}
+
+/**
+ * @template T
+ */
+class InferCrate
+{
+    /** @param T $value */
+    public function __construct(public mixed $value) {}
+}
+
+/**
+ * @template T
+ * @param string|InferBox<T>|InferCrate<T> $from
+ * @return T
+ */
+function infer_from_either(string|InferBox|InferCrate $from): mixed
+{
+    throw new \Exception();
+}
+
+function infer_from_either_test(): void
+{
+    infer_from_either(new InferCrate(1))->nope(); // error: method.nonObject
+}
