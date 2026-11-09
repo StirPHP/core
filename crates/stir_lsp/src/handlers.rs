@@ -93,7 +93,8 @@ pub fn capabilities(utf8: bool) -> ServerCapabilities {
             work_done_progress_options: Default::default(),
         })),
         completion_provider: Some(CompletionOptions {
-            // `@` for a directive, and the quotes for the template in `@include('...')`
+            // `@` for a directive, the quotes for the template in `@include('...')`, and `-` for
+            // the component in `<x-`
             trigger_characters: Some(vec![
                 ">".into(),
                 ":".into(),
@@ -102,6 +103,7 @@ pub fn capabilities(utf8: bool) -> ServerCapabilities {
                 "@".into(),
                 "'".into(),
                 "\"".into(),
+                "-".into(),
             ]),
             ..Default::default()
         }),
@@ -661,7 +663,12 @@ pub fn completion(
     if matches!(trigger, Some("@" | "'" | "\"")) && !stir_syntax::is_blade_path(file.path(s.db)) {
         return None;
     }
-    let c = complete::complete(s.db, s.ws, file, map.offset(pos));
+    // this one only starts the name of a component: elsewhere it's a minus, or half of `->`
+    let offset = map.offset(pos);
+    if trigger == Some("-") && !file.text(s.db)[..usize::from(offset)].ends_with("<x-") {
+        return None;
+    }
+    let c = complete::complete(s.db, s.ws, file, offset);
     let range = map.range(c.replace);
     let items = c
         .items
