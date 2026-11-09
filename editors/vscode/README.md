@@ -160,5 +160,5 @@ Commands: **StirPHP: Restart Language Server**, **StirPHP: Check for Updates**. 
 npm ci
 npm run check      # type-check extension.js
 npm run package    # build stirphp-<version>.vsix
-code --install-extension stirphp-0.2.0.vsix
+code --install-extension stirphp-0.3.0.vsix
 ```

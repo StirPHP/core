@@ -1,7 +1,7 @@
 {
   "name": "stirphp-web",
   "description": "StirPHP's language server for PHP in the browser: WebAssembly in a Web Worker, speaking the Language Server Protocol.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "MIT",
   "private": true,
   "type": "module",

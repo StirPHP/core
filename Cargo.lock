@@ -1443,7 +1443,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "stir_checker"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libtest-mimic",
  "rustc-hash 2.1.3",
@@ -1461,7 +1461,7 @@ dependencies = [
 
 [[package]]
 name = "stir_cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -1489,7 +1489,7 @@ dependencies = [
 
 [[package]]
 name = "stir_composer"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "regex",
  "serde_json",
@@ -1498,7 +1498,7 @@ dependencies = [
 
 [[package]]
 name = "stir_db"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "salsa",
  "smol_str",
@@ -1507,14 +1507,14 @@ dependencies = [
 
 [[package]]
 name = "stir_fmt"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "stir_syntax",
 ]
 
 [[package]]
 name = "stir_hir"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "rowan",
  "rustc-hash 2.1.3",
@@ -1528,7 +1528,7 @@ dependencies = [
 
 [[package]]
 name = "stir_lsp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "line-index",
  "ls-types",
@@ -1557,7 +1557,7 @@ dependencies = [
 
 [[package]]
 name = "stir_neon"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "indexmap",
  "insta",
@@ -1568,7 +1568,7 @@ dependencies = [
 
 [[package]]
 name = "stir_phpdoc"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "insta",
  "smol_str",
@@ -1577,7 +1577,7 @@ dependencies = [
 
 [[package]]
 name = "stir_phpstan"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "rustc-hash 2.1.3",
  "rustix",
@@ -1593,7 +1593,7 @@ dependencies = [
 
 [[package]]
 name = "stir_project"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -1616,7 +1616,7 @@ dependencies = [
 
 [[package]]
 name = "stir_script"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "rhai",
  "stacker",
@@ -1625,14 +1625,14 @@ dependencies = [
 
 [[package]]
 name = "stir_stubs"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "stir_syntax",
 ]
 
 [[package]]
 name = "stir_syntax"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "drop_bomb",
  "insta",
@@ -1644,7 +1644,7 @@ dependencies = [
 
 [[package]]
 name = "stir_types"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "pretty_assertions",
  "rustc-hash 2.1.3",
@@ -1653,14 +1653,14 @@ dependencies = [
 
 [[package]]
 name = "stir_vfs"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ignore",
 ]
 
 [[package]]
 name = "stir_wasm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "js-sys",
  "stir_lsp",
