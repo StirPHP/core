@@ -985,7 +985,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                     let ty = exprs_of(&sv)
                         .first()
                         .map(|e| widen_literals(&self.expr(e, None)))
-                        .unwrap_or_else(Ty::null);
+                        // it's `null` the first time only, and whatever was left in it after that
+                        .filter(|t| !t.is_null())
+                        .unwrap_or_else(Ty::untyped);
                     if let Some(v) = sv.token(VARIABLE) {
                         self.declare(&v.text()[1..], ty, LocalKind::Variable, v.text_range());
                     }
