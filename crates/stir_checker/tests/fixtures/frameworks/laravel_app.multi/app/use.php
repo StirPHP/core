@@ -86,6 +86,9 @@ function relations(User $user): void
         $post->nope(); // error: method.notFound
     }
 
+    $user->latestPost?->title();
+    $user->latestPost?->nope(); // error: method.notFound
+
     // what's related isn't known
     $commentable = $user->posts()->first()?->commentable()->first();
     $commentable?->anything(); // error: method.notFound

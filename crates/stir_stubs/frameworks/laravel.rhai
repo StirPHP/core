@@ -403,12 +403,18 @@ fn collection_of_relation(c, name) {
 // what `method_details` says of it.
 fn relation_result(c, m) {
     if m.required_params > 0 { return; }
-    // what the call it returns says is related, when the type says no more than the class
-    let made = relation_made(c, m.name);
+    // what the call it returns says is related, when the type says no more than the class: through
+    // a method of the model if that's said, as `$this->posts()->one()` has just `posts` to go by
+    let said = m.returns_class;
+    let made = if said != () { relation_made(c, m.name) } else { m.returned_call };
     if made != () && !m.returns_generic {
         let many = ["hasMany", "morphMany", "belongsToMany", "morphToMany", "morphedByMany", "hasManyThrough"];
         let one = ["hasOne", "belongsTo", "morphOne", "hasOneThrough"];
         let is_many = made.name in many;
+        if said != () && (is_many || made.name in one) {
+            is_many = said.ends_with("Many") || said.ends_with("ManyThrough");
+            made = #{ name: if is_many { "hasMany" } else { "hasOne" }, args: made.args };
+        }
         if is_many || made.name in one {
             let related = made.args["0"];
             let related = if type_of(related) == "string" { class(related) } else { () };
@@ -664,6 +670,7 @@ fn return_type_targets() {
             "Illuminate\\Contracts\\View\\Factory::make",
             "Illuminate\\Contracts\\View\\Factory::file",
             "Illuminate\\Contracts\\View\\Factory::first",
+            "Illuminate\\Foundation\\Testing\\Concerns\\MakesHttpRequests::followRedirects",
             "Illuminate\\Http\\Client\\PendingRequest::get",
             "Illuminate\\Http\\Client\\PendingRequest::head",
             "Illuminate\\Http\\Client\\PendingRequest::post",
@@ -708,7 +715,8 @@ fn http_result(node, ctx) {
     if !promised { return; }
     let at = node.receiver;
     while at != () && at.kind == "method_call" {
-        if at.name == "async" { return; }
+        // `$pool->as('name')` is an asynchronous request too
+        if at.name == "async" || at.name == "as" { return; }
         at = at.receiver;
     }
     if at != () && at.kind == "static_call" && at.name == "async" { return; }
@@ -740,6 +748,11 @@ fn user_model() {
 }
 
 fn return_type_of_method(node, ctx) {
+    // what a test follows redirects of is what it goes on with, not both of what it could be
+    if node.name == "followRedirects" && node.arguments.len() == 1 {
+        let given = ctx.get_type(node.arguments[0]);
+        if given.is_subtype_of("Illuminate\\Testing\\TestResponse") { return given.to_string(); }
+    }
     let on = ctx.get_type(node.receiver).class_name;
     let c = if on != () { class(on) } else { () };
     if c != () {

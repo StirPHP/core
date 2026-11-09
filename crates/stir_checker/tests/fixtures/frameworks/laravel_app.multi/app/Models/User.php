@@ -37,6 +37,12 @@ class User extends Model
         return $this->posts()->latest();
     }
 
+    // one of them, for all it's made from a relation of many
+    public function latestPost(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->posts()->one();
+    }
+
     public function scopeActive(Builder $query): Builder
     {
         return $query->verified();

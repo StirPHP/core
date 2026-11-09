@@ -14,17 +14,3 @@ namespace Illuminate\Support {
         public function __construct($value) {}
     }
 }
-
-namespace Illuminate\Foundation\Testing\Concerns {
-    trait MakesHttpRequests
-    {
-        /**
-         * What a test follows redirects of is what it goes on with, not both of what it could be.
-         *
-         * @template TResponse of \Illuminate\Http\Response|\Illuminate\Testing\TestResponse
-         * @param TResponse $response
-         * @return TResponse
-         */
-        protected function followRedirects($response) {}
-    }
-}

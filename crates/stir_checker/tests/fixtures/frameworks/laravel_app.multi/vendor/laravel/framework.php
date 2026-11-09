@@ -226,6 +226,18 @@ namespace Illuminate\Database\Eloquent\Relations {
     class HasMany extends Relation
     {
         public function getResults() { return new \Illuminate\Database\Eloquent\Collection(); }
+        /** @return HasOne<TRelatedModel, TDeclaringModel> */
+        public function one() { return new HasOne(); }
+    }
+
+    /**
+     * @template TRelatedModel of \Illuminate\Database\Eloquent\Model
+     * @template TDeclaringModel of \Illuminate\Database\Eloquent\Model
+     * @extends Relation<TRelatedModel, TDeclaringModel, TRelatedModel|null>
+     */
+    class HasOne extends Relation
+    {
+        public function getResults() { return null; }
     }
 
     /**
