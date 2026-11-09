@@ -19,7 +19,7 @@ fn test_case(ctx) {
 }
 
 fn closure_this(declared, ctx) {
-    if declared.class_name != "Pest\\PendingCalls\\TestCall" { return; }
+    if declared.class_name != "Pest\\PendingCalls\\TestCall" || ctx.pest_is_open() { return; }
     // it's `#[AllowDynamicProperties]`: what the file's hooks set, its tests can read
     #{ type: test_case(ctx), properties: ctx.pest_properties() }
 }
@@ -30,7 +30,7 @@ fn return_type_targets() {
 
 // `test()` without a description, inside a test, hands over the test being run, behind a proxy.
 fn return_type_of_function(node, ctx) {
-    if node.arguments.len() == 0 { "Pest\\Support\\HigherOrderTapProxy<" + test_case(ctx) + ">" }
+    if node.arguments.len() == 0 && !ctx.pest_is_open() { "Pest\\Support\\HigherOrderTapProxy<" + test_case(ctx) + ">" }
 }
 
 // Calls that aren't on these pending calls, as in `it('works')->get('/')->assertOk()`, are written

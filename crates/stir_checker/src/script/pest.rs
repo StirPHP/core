@@ -19,6 +19,8 @@ pub struct PestUses {
     classes: Vec<String>,
     /// What `->in()` says, absolute: the file it's in, unless it says.
     targets: Vec<PathBuf>,
+    /// There's a class or trait in it that can't be read, written as anything but `Foo::class`.
+    open: bool,
 }
 
 /// The expressions passed to a call, in order.
@@ -40,31 +42,28 @@ fn name_in(node: &SyntaxNode) -> Option<String> {
         .map(|n| n.text().to_string().trim().to_owned())
 }
 
-/// What's said of test cases in the statement `stmt`, if it's about them.
-fn read_uses(stmt: &SyntaxNode, resolve: &dyn Fn(&str, &SyntaxNode) -> String) -> Option<PestUses> {
-    // the calls from the outermost in, down to `uses()` or `pest()`
-    let mut chain = Vec::new();
-    let mut at = stmt.children().next()?;
-    loop {
-        match at.kind() {
-            METHOD_CALL_EXPR => {
-                let fetch = at.children().next()?;
-                chain.push((name_in(&fetch)?.to_ascii_lowercase(), arguments(&at)));
-                at = fetch.children().next()?;
-            }
-            CALL_EXPR => break,
-            _ => return None,
-        }
-    }
-    let callee = at.children().next()?.text().to_string();
+/// What's said of test cases by the call `call`, of `uses()` or `pest()`, with what's chained on it.
+fn read_uses(call: &SyntaxNode, resolve: &dyn Fn(&str, &SyntaxNode) -> String) -> Option<PestUses> {
+    let callee = call.children().next()?.text().to_string();
     let first = match callee.trim().trim_start_matches('\\') {
-        "uses" => arguments(&at),
+        "uses" => arguments(call),
         "pest" => Vec::new(),
         _ => return None,
     };
+    // the calls made on what it gives, from the first out
+    let mut chain = Vec::new();
+    let mut at = call.clone();
+    while let Some(fetch) = at.parent().filter(|p| p.kind() == PROPERTY_FETCH_EXPR) {
+        let Some(outer) = fetch.parent().filter(|p| p.kind() == METHOD_CALL_EXPR) else {
+            break;
+        };
+        chain.push((name_in(&fetch)?.to_ascii_lowercase(), arguments(&outer)));
+        at = outer;
+    }
     let mut uses = PestUses {
         classes: Vec::new(),
         targets: Vec::new(),
+        open: false,
     };
     let class_of = |arg: &SyntaxNode| -> Option<String> {
         let text = arg.text().to_string();
@@ -72,18 +71,22 @@ fn read_uses(stmt: &SyntaxNode, resolve: &dyn Fn(&str, &SyntaxNode) -> String) -
         Some(resolve(name, arg))
     };
     uses.classes.extend(first.iter().filter_map(class_of));
+    uses.open |= uses.classes.len() != first.len();
     let mut targets = Vec::new();
-    for (name, args) in chain.iter().rev() {
+    for (name, args) in &chain {
         match name.as_str() {
             "extend" | "extends" | "use" | "uses" => {
-                uses.classes.extend(args.iter().filter_map(class_of));
+                let read: Vec<String> = args.iter().filter_map(class_of).collect();
+                uses.open |= read.len() != args.len();
+                uses.classes.extend(read);
             }
             "in" => targets.extend(args.iter().filter_map(target_of)),
             _ => {}
         }
     }
     uses.targets = targets;
-    Some(uses)
+    // `pest()` by itself says nothing of them
+    (uses.open || !uses.classes.is_empty()).then_some(uses)
 }
 
 /// A path as `->in()` is given it, relative to the folder of its file: `'Feature'`, `__DIR__`, or
@@ -153,25 +156,13 @@ fn is_within(file: &Path, target: &Path) -> bool {
     })
 }
 
-fn statements(root: &SyntaxNode) -> Vec<SyntaxNode> {
-    let mut out = Vec::new();
-    for child in root.children() {
-        match child.kind() {
-            EXPR_STMT => out.push(child),
-            NAMESPACE_DECL => {
-                let block = child.children().find(|c| c.kind() == BLOCK);
-                let within = block.as_ref().unwrap_or(&child);
-                out.extend(within.children().filter(|c| c.kind() == EXPR_STMT));
-            }
-            _ => {}
-        }
-    }
-    out
-}
-
 /// What `file` itself says of test cases.
 #[salsa::tracked(returns(ref))]
 pub fn pest_uses_in(db: &dyn Db, file: SourceFile) -> Vec<PestUses> {
+    let text = file.text(db);
+    if !text.contains("uses(") && !text.contains("pest(") {
+        return Vec::new();
+    }
     let root = stir_db::parse(db, file).syntax();
     let items = stir_hir::file_items(db, file);
     let resolve = |name: &str, at: &SyntaxNode| {
@@ -186,9 +177,9 @@ pub fn pest_uses_in(db: &dyn Db, file: SourceFile) -> Vec<PestUses> {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_default();
-    statements(&root)
-        .iter()
-        .filter_map(|stmt| read_uses(stmt, &resolve))
+    root.descendants()
+        .filter(|n| n.kind() == CALL_EXPR)
+        .filter_map(|call| read_uses(&call, &resolve))
         .map(|mut uses| {
             for target in &mut uses.targets {
                 *target = normal(&dir.join(&*target));
@@ -276,6 +267,24 @@ fn uses_of(ctx: &mut ScriptCtx) -> Array {
     .unwrap_or_default()
 }
 
+/// Is there something the test case of `file` is made of that can't be read?
+fn is_open(ctx: &mut ScriptCtx) -> bool {
+    let (ws, file) = ctx.place();
+    stir_db::attached(|db| {
+        let path = normal(file.path(db));
+        let of_config = pest_files(db, ws)
+            .iter()
+            .filter(|c| **c != file)
+            .any(|&config| {
+                pest_uses_in(db, config)
+                    .iter()
+                    .any(|u| u.open && u.targets.iter().any(|t| is_within(&path, t)))
+            });
+        of_config || pest_uses_in(db, file).iter().any(|u| u.open)
+    })
+    .unwrap_or(false)
+}
+
 /// What's set on `$this` in the file's hooks and tests, and in the configuration's hooks.
 fn properties_of(ctx: &mut ScriptCtx) -> Array {
     let (ws, file) = ctx.place();
@@ -333,5 +342,6 @@ pub(super) fn register(engine: &mut Engine) {
     engine
         .register_fn("pest_is_extended", is_extended)
         .register_fn("pest_uses", uses_of)
+        .register_fn("pest_is_open", is_open)
         .register_fn("pest_properties", properties_of);
 }
