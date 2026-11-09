@@ -1104,9 +1104,8 @@ async fn completing_a_components_name() {
 
     // typing the `-` of `<x-` asks for them, and it doesn't anywhere else
     let at = position(&s.text, "<x-\n", 3);
-    let got = s
-        .c
-        .request(
+    let got =
+        s.c.request(
             "textDocument/completion",
             json!({"textDocument": {"uri": s.uri}, "position": at,
                    "context": {"triggerKind": 2, "triggerCharacter": "-"}}),
@@ -1115,9 +1114,8 @@ async fn completing_a_components_name() {
     let first = got["items"][0]["label"].as_str();
     assert_eq!(first, Some("alert"), "{got}");
     let at = position(&s.text, "<x-fo\n", 4);
-    let got = s
-        .c
-        .request(
+    let got =
+        s.c.request(
             "textDocument/completion",
             json!({"textDocument": {"uri": s.uri}, "position": at,
                    "context": {"triggerKind": 2, "triggerCharacter": "-"}}),

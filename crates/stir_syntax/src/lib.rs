@@ -8,8 +8,8 @@ mod syntax_kind;
 
 pub use blade::{
     FlatPart as BladeFlatPart, attr_is_bound as blade_attr_is_bound, attr_key as blade_attr_key,
-    camel as blade_camel, directive_names as blade_directive_names,
-    flat_part as blade_flat_part, is_directive as is_blade_directive,
+    camel as blade_camel, directive_names as blade_directive_names, flat_part as blade_flat_part,
+    is_directive as is_blade_directive,
 };
 pub use lexer::{LexError, Lexed, Token, lex, lex_blade};
 pub use parser::SyntaxError;

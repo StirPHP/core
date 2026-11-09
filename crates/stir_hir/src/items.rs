@@ -998,9 +998,8 @@ impl Lowerer {
             doc_ty: None,
             has_default: p.has_token(EQ),
             has_attribute: p.has_token(ATTR_OPEN)
-                || p.children().any(|c| {
-                    matches!(c.kind(), ATTRIBUTE | ATTRIBUTE_GROUP | ATTRIBUTE_LIST)
-                }),
+                || p.children()
+                    .any(|c| matches!(c.kind(), ATTRIBUTE | ATTRIBUTE_GROUP | ATTRIBUTE_LIST)),
             default_is_null: p.children().any(|c| {
                 c.kind() == NAME_EXPR && c.text().to_string().trim().eq_ignore_ascii_case("null")
             }),
