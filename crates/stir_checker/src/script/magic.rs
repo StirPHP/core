@@ -203,7 +203,14 @@ pub(crate) enum Answer {
     Member { tag: String, origin: Option<Origin> },
     /// What it is, is what the same name is on a value of this type, written in terms of the
     /// type asked about (`static`). `fluent`: a result that's that value is the one asked about.
-    Forward { to: String, fluent: bool },
+    /// `any_visibility`: the call is made past the visibility of what it reaches. `nullable`: what
+    /// it gives can be `null` as well.
+    Forward {
+        to: String,
+        fluent: bool,
+        any_visibility: bool,
+        nullable: bool,
+    },
 }
 
 /// Asks `script`'s `magic_method` or `magic_property` about `name` on a value of the type that
@@ -237,9 +244,12 @@ pub(crate) fn ask_member(
         let fluent = map
             .get("fluent")
             .is_some_and(|f| f.as_bool().unwrap_or(false));
+        let flag = |key: &str| map.get(key).is_some_and(|f| f.as_bool().unwrap_or(false));
         return Ok(Some(Answer::Forward {
             to: checked_text(&wrong, &to, true)?,
             fluent,
+            any_visibility: flag("any_visibility"),
+            nullable: flag("nullable"),
         }));
     }
     let (tag, origin) = match kind {

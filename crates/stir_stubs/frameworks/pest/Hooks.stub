@@ -1,0 +1,51 @@
+<?php
+
+// Closures run as a test, like those Pest's own functions take, though these don't say so.
+
+namespace Pest\PendingCalls {
+    final class TestCall
+    {
+        /**
+         * @param-closure-this TestCall $closure
+         * @return $this
+         */
+        public function after(?\Closure $closure = null) {}
+    }
+
+    final class UsesCall
+    {
+        /**
+         * @param-closure-this TestCall $hook
+         */
+        public function beforeEach(\Closure $hook): self {}
+
+        /**
+         * @param-closure-this TestCall $hook
+         */
+        public function afterEach(\Closure $hook): self {}
+    }
+}
+
+namespace Pest\Support {
+    /**
+     * @template TTarget
+     */
+    final class HigherOrderTapProxy
+    {
+    }
+}
+
+namespace Pest {
+    final class Configuration
+    {
+        /**
+         * @param-closure-this PendingCalls\TestCall $hook
+         */
+        public function beforeEach(\Closure $hook): PendingCalls\UsesCall {}
+
+        /**
+         * @param-closure-this PendingCalls\TestCall $hook
+         */
+        public function afterEach(\Closure $hook): PendingCalls\UsesCall {}
+    }
+}

@@ -279,6 +279,11 @@ impl ScriptCtx {
         }
     }
 
+    /// The file it's for, and its workspace.
+    pub(crate) fn place(&self) -> (Workspace, SourceFile) {
+        (self.shared.ws, self.shared.file)
+    }
+
     /// This context, reporting at `at`.
     pub(crate) fn at(&self, at: TextRange) -> Self {
         ScriptCtx { at, ..self.clone() }

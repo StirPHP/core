@@ -372,9 +372,14 @@ fn magic_property(type, name) {
 ```
 
 `magic_method` answers like a method in `magic_members`, and `magic_property` like a property, or either with
-`#{ forward_to, fluent }`: the member of that name on that type. With `fluent: true`, a call that gives back the value it
-was forwarded to gives back the original one, as a relation does with its query. `global_type(name)` gives the type of a
-global variable, for `global $name;`.
+`#{ forward_to, fluent, nullable, any_visibility }`: the member of that name on that type. With `fluent: true`, a call that
+gives back the value it was forwarded to gives back the original one, as a relation does with its query. With
+`nullable: true` what it gives can be `null` too, and `any_visibility: true` is for a proxy that gets there by reflection.
+`global_type(name)` gives the type of a global variable, for `global $name;`.
+
+`closure_this(declared, ctx)` says what a closure passed for a `@param-closure-this` parameter really runs bound to, given
+the type that declares: a PHPDoc type, or `#{ type, properties }` with the names of properties that are set on it without
+being declared. Private and protected members of that type are in reach from the closure.
 
 Scripts see the project's classes with `class("App\\Post")`, which is `()` for one that isn't there. A class has `name`,
 `kind`, `parent`, `type`, `type_params`, `is_abstract`, `is_subtype_of("..")` (traits count), `ancestors()`, `methods()`,
@@ -423,12 +428,12 @@ error[SPHP0061]: PHP 8.4 added `array_find()`, but this project targets PHP 8.2
 
 ## Frameworks
 
-StirPHP ships support for Laravel, Symfony and WordPress: scripts like the ones above, inside the binary, with native code
+StirPHP ships support for Laravel, Pest, Symfony and WordPress: scripts like the ones above, inside the binary, with native code
 where reading many files would be slow in a script. They're ours, so they run without anyone being asked, in editors too,
 and they're never read from disk, so no file of a project can stand in for one. A project's own scripts come first and can
 override what they say.
 
-Each is on when the project uses that framework: `laravel/framework`, `symfony/framework-bundle`, `symfony/symfony` or
+Each is on when the project uses that framework: `laravel/framework`, `pestphp/pest`, `symfony/framework-bundle`, `symfony/symfony` or
 `symfony/dependency-injection` (unless the project is built on Laravel or Drupal), and for WordPress
 `johnpbloch/wordpress-core`, `roots/wordpress`, `php-stubs/wordpress-stubs`, a `wp-config.php` or `wp-content` folder, or
 a plugin's `Plugin Name:` header. `parameters.stirphp.frameworks` turns one off or on: `{laravel: false, wordpress: true}`.
@@ -451,6 +456,13 @@ a plugin's `Plugin Name:` header. `parameters.stirphp.frameworks` turns one off 
 - In an editor, these complete, hover and lead to where they're declared: a relation's property to its method, a scope to its
   `scopeX` method. Going to the definition of `route('name')` finds `->name('name')` in `routes/`, and of `view('a.b')`
   the template in `resources/views`.
+
+**Pest**: Pest writes a class for each test file at runtime and runs its closures bound to it, so in `test()`, `it()`,
+`beforeEach()` and `afterEach()`, `$this` is the test case that file's `uses()` and `tests/Pest.php`'s `->in()` name, with
+their traits and Pest's own (`PHPUnit\Framework\TestCase` if they name none), and its protected members are in reach.
+Properties it's given by `$this->name = ..` in the file or `tests/Pest.php` can be read, as `mixed`; others are reported.
+`test()` without a description is a proxy of the test being run. What's called on a pending test, as in
+`it('works')->get('/')->assertOk()`, is made later on whatever's there by then, so it can't be checked.
 
 **Symfony and Doctrine**, after phpstan-symfony and phpstan-doctrine: services and parameters come from the compiled
 container, `parameters.symfony.containerXmlPath` or else one in `var/cache/`, the `dev` environment's first, so

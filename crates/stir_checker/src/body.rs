@@ -71,6 +71,8 @@ struct LoopExits {
 struct ClosureBind<'db> {
     this: Option<Ty>,
     class: Option<Rc<ClassModel<'db>>>,
+    /// What scripts say is set on `this` without being declared, if they said what it's bound to.
+    properties: Option<Rc<Vec<SmolStr>>>,
 }
 
 /// What a call that came with `@phpstan-assert`s went to.
@@ -129,13 +131,16 @@ pub struct Checker<'a, 'db> {
     dynamic_vars_fn: Option<usize>,
     frames: Vec<FxHashMap<SmolStr, Local>>,
     fns: Vec<FnCx>,
-    class: Option<Rc<ClassModel<'db>>>,
+    pub(crate) class: Option<Rc<ClassModel<'db>>>,
     lower_cx: LowerCx,
     in_ctor: bool,
     /// Calls to something with `@phpstan-assert`s, by the range of the call.
     call_targets: FxHashMap<TextRange, CallAsserts>,
     /// What the next closure checked is bound to.
     closure_bind: Option<ClosureBind<'db>>,
+    /// The properties set on the `$this` of the closure being checked, for one bound to an object
+    /// that takes any.
+    this_properties: Option<Rc<Vec<SmolStr>>>,
     /// `@var` tags of a `foreach` about to bind its variables.
     pending_var_tags: Vec<(Option<SmolStr>, Ty)>,
     /// How the last checked call solved its templates.
@@ -286,6 +291,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             in_ctor: false,
             call_targets: FxHashMap::default(),
             closure_bind: None,
+            this_properties: None,
             pending_var_tags: Vec::new(),
             last_solved: FxHashMap::default(),
             types: FxHashMap::default(),
@@ -4563,9 +4569,27 @@ impl<'a, 'db> Checker<'a, 'db> {
             let pty = assigned[i].map(|p| subst_cls(&sig.params[p].ty));
             let exp = pty.as_ref().map(|t| inf.apply(t));
             if let Some(this) = assigned[i].and_then(|p| sig.params[p].closure_this.as_ref()) {
-                self.closure_bind = Some(ClosureBind {
-                    this: Some(inf.apply(&subst_cls(this))),
-                    class: self.class.clone(),
+                let this = inf.apply(&subst_cls(this));
+                self.closure_bind = Some(match self.closure_this_hook(call, &this) {
+                    // what it's really bound to says what's accessible from it, too
+                    Some((this, properties)) => ClosureBind {
+                        class: match self
+                            .class_using_traits(&this)
+                            .unwrap_or(this.clone())
+                            .kind()
+                        {
+                            TyKind::Class { name, .. } => self.ctx.class(name),
+                            _ => None,
+                        }
+                        .or_else(|| self.class.clone()),
+                        this: Some(this),
+                        properties: Some(Rc::new(properties)),
+                    },
+                    None => ClosureBind {
+                        this: Some(this),
+                        class: self.class.clone(),
+                        properties: None,
+                    },
                 });
             }
             let t = self.expr(&v, exp.as_ref());
@@ -5082,11 +5106,30 @@ impl<'a, 'db> Checker<'a, 'db> {
                 let found = ms.iter().find(|m| {
                     let bound = self.bound_of(m);
                     !matches!(bound.kind(), TyKind::Param { .. }) && has(self, &class_of(&bound))
-                })?;
-                Some(self.bound_of(found))
+                });
+                match found {
+                    Some(found) => Some(self.bound_of(found)),
+                    None => self.class_using_traits(ty),
+                }
             }
             _ => None,
         }
+    }
+
+    /// The class of an intersection with traits in it, which says what a class is made of: it's
+    /// the class that has whatever the traits don't, and what's missing is missing from it.
+    pub(crate) fn class_using_traits(&self, ty: &Ty) -> Option<Ty> {
+        let TyKind::Intersection(ms) = ty.kind() else {
+            return None;
+        };
+        let is_trait = |m: &&Ty| {
+            matches!(m.kind(), TyKind::Class { name, .. }
+                if self.ctx.class(name).is_some_and(|c| c.kind() == ClassKind::Trait))
+        };
+        if !ms.iter().any(|m| is_trait(&m)) {
+            return None;
+        }
+        ms.iter().find(|m| !is_trait(m)).cloned()
     }
 
     pub(crate) fn member_type(&mut self, recv: &Ty, name: &str, range: TextRange) -> Ty {
@@ -5143,6 +5186,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                         if let Some(t) = self.magic_property(&cls, name, range) {
                             return t;
                         }
+                        if self.this_has_property(recv, name) {
+                            return Ty::untyped();
+                        }
                         // PHPStan's `reportMagicProperties`: fine at level 0, but from level 1
                         // a property only `__get` knows of has to be declared with `@property`
                         if self.has_magic(&cls, "__get") {
@@ -5189,6 +5235,17 @@ impl<'a, 'db> Checker<'a, 'db> {
                 Ty::error()
             }
         }
+    }
+
+    /// Is `name` set on `recv` without being declared, for the `$this` of a closure bound to an
+    /// object that takes any property?
+    fn this_has_property(&self, recv: &Ty, name: &str) -> bool {
+        self.this_properties
+            .as_ref()
+            .is_some_and(|known| known.iter().any(|p| p == name))
+            && self.lookup("this").is_some_and(|this| {
+                this.ty == *recv || self.class_using_traits(&this.ty).as_ref() == Some(recv)
+            })
     }
 
     /// `->name` and, on a backed enum, `->value`.
@@ -5274,12 +5331,25 @@ impl<'a, 'db> Checker<'a, 'db> {
                 owner.kind() == ClassKind::Trait
                     || self.class.as_ref().is_some_and(|c| c.key == owner.key)
             }
-            Visibility::Protected => self.class.as_ref().is_some_and(|c| {
-                c.key == owner.key
-                    || self.ctx.is_subclass(&c.name, &owner.name)
-                    || self.ctx.is_subclass(&owner.name, &c.name)
-            }),
+            Visibility::Protected => {
+                self.class.as_ref().is_some_and(|c| {
+                    c.key == owner.key
+                        || self.ctx.is_subclass(&c.name, &owner.name)
+                        || self.ctx.is_subclass(&owner.name, &c.name)
+                }) || self.this_uses_trait(owner)
+            }
         }
+    }
+
+    /// Is `owner` a trait the class `$this` is an instance of uses, by the intersection that says
+    /// so? What a closure's bound to can be said that way, having no class of its own to name.
+    fn this_uses_trait(&self, owner: &Rc<ClassModel<'db>>) -> bool {
+        owner.kind() == ClassKind::Trait
+            && self.lookup("this").is_some_and(|this| {
+                matches!(this.ty.kind(), TyKind::Intersection(members) if members.iter().any(|m| {
+                    matches!(m.kind(), TyKind::Class { name, .. } if name.eq_ignore_ascii_case(&owner.name))
+                }))
+            })
     }
 
     fn check_visibility(
@@ -5719,6 +5789,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         self.closure_bind = Some(ClosureBind {
             this: this_ty,
             class,
+            properties: None,
         });
     }
 
@@ -6182,6 +6253,10 @@ impl<'a, 'db> Checker<'a, 'db> {
             .as_ref()
             .and_then(|b| b.class.clone())
             .map(|c| self.class.replace(c));
+        let saved_properties = self.this_properties.clone();
+        if let Some(properties) = bound.as_ref().and_then(|b| b.properties.clone()) {
+            self.this_properties = Some(properties);
+        }
         let outer_open = self.open_vars();
         let saved = std::mem::replace(&mut self.frames, vec![frame]);
         let saved_dead = std::mem::replace(&mut self.dead, false);
@@ -6310,6 +6385,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
         self.dead = saved_dead;
         self.loops = saved_loops;
+        self.this_properties = saved_properties;
         if let Some(c) = saved_class {
             self.class = c;
         }

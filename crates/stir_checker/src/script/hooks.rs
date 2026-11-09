@@ -1,18 +1,20 @@
 //! Scripts answering for the checker: the return types of calls.
 
 use rustc_hash::FxHashMap;
+use smol_str::SmolStr;
 use stir_db::ScriptFile;
 use stir_hir::doc::{Aliases, DocCx};
 use stir_hir::name::Scope;
 use stir_phpdoc::TypeKind;
 use stir_script::ScriptError;
-use stir_script::rhai::Dynamic;
+use stir_script::rhai::{Array, Dynamic, Map};
 use stir_syntax::{SyntaxNode, TextSize};
 use stir_types::{Ty, TyKind};
 
+use super::facade::TypeFacade;
 use super::{
-    ENGINE, Node, RETURN_TYPE_OF_FUNCTION, RETURN_TYPE_OF_METHOD, RETURN_TYPE_OF_STATIC_METHOD,
-    ScriptCtx, ScriptFailure, compiled_script, node,
+    CLOSURE_THIS, ENGINE, Node, RETURN_TYPE_OF_FUNCTION, RETURN_TYPE_OF_METHOD,
+    RETURN_TYPE_OF_STATIC_METHOD, ScriptCtx, ScriptFailure, compiled_script, node,
 };
 use crate::Ctx;
 use crate::body::Checker;
@@ -145,6 +147,79 @@ impl Checker<'_, '_> {
             }
         }
         ret
+    }
+
+    /// What the scripts say a closure passed in the call `node` runs bound to, given that the
+    /// parameter's `@param-closure-this` says `declared`: its `$this`, and the properties that are
+    /// known to be set on it without being declared.
+    pub(crate) fn closure_this_hook(
+        &mut self,
+        node: &SyntaxNode,
+        declared: &Ty,
+    ) -> Option<(Ty, Vec<SmolStr>)> {
+        let db = self.ctx.db;
+        let ws = self.ctx.ws;
+        for &script in &self.ctx.scripts.closure_this {
+            if self.scripts_off.contains(&(script, CLOSURE_THIS)) {
+                continue;
+            }
+            let Some(ast) = &compiled_script(db, script).ast else {
+                continue;
+            };
+            let ctx = ScriptCtx::for_call(
+                ws,
+                self.file,
+                FxHashMap::default(),
+                node.text_range(),
+                declared.clone(),
+            );
+            let args = vec![
+                Dynamic::from(TypeFacade::new(declared.clone(), ws)),
+                Dynamic::from(ctx),
+            ];
+            let answer = stir_script::call(&ENGINE, ast, CLOSURE_THIS, args);
+            let read = answer.and_then(|a| self.closure_this_answer(a));
+            match read {
+                Ok(Some(found)) => return Some(found),
+                Ok(None) => {}
+                Err(error) => {
+                    let path = Some(self.path.clone());
+                    self.script_failures.push(ScriptFailure::new(
+                        script,
+                        CLOSURE_THIS,
+                        error,
+                        path,
+                    ));
+                    self.scripts_off.insert((script, CLOSURE_THIS));
+                }
+            }
+        }
+        None
+    }
+
+    /// What `closure_this` answered: a PHPDoc type, or `#{ type, properties }`, or nothing.
+    fn closure_this_answer(
+        &self,
+        answer: Dynamic,
+    ) -> Result<Option<(Ty, Vec<SmolStr>)>, ScriptError> {
+        let (ty, properties) = if answer.is::<Map>() {
+            let mut map = answer.cast::<Map>();
+            let ty = map.remove("type").unwrap_or(Dynamic::UNIT);
+            let names = map
+                .remove("properties")
+                .and_then(|p| p.try_cast::<Array>())
+                .unwrap_or_default();
+            let names = names
+                .into_iter()
+                .filter_map(|n| n.into_string().ok())
+                .map(SmolStr::new)
+                .collect();
+            (ty, names)
+        } else {
+            (answer, Vec::new())
+        };
+        let ty = self.answered_type(ty, None, CLOSURE_THIS)?;
+        Ok(ty.map(|t| (t, properties)))
     }
 
     /// What's known of the receiver and arguments of the call `node`.

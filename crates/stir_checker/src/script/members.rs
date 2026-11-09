@@ -145,7 +145,7 @@ impl<'db> Ctx<'db> {
     }
 }
 
-impl Checker<'_, '_> {
+impl<'db> Checker<'_, 'db> {
     /// What a property scripts declare takes, for `$object->name = ..`, if that's not its type.
     pub(crate) fn magic_write_type(&self, lhs: &SyntaxNode) -> Option<Ty> {
         if lhs.kind() != stir_syntax::SyntaxKind::PROPERTY_FETCH_EXPR
@@ -228,15 +228,42 @@ impl Checker<'_, '_> {
                 let ret = self.check_args(node, &sig, &map, expected, &[]);
                 return Some(crate::body::resolve_self(&ret, recv));
             }
-            Some(Answer::Forward { to, fluent }) => {
+            Some(Answer::Forward {
+                to,
+                fluent,
+                any_visibility,
+                nullable,
+            }) => {
                 let to = super::hooks::parse_type(self.ctx, &to, Some(cls)).ok()?;
                 let to = crate::body::resolve_self(&to, cls);
-                return self.forward_call(node, recv, &to, fluent, name, range, expected);
+                // what reaches a method by reflection isn't held back by its visibility
+                let scope = any_visibility.then(|| self.forwarding_scope(&to)).flatten();
+                let saved = scope.map(|c| self.class.replace(c));
+                let t = self.forward_call(node, recv, &to, fluent, name, range, expected);
+                if let Some(saved) = saved {
+                    self.class = saved;
+                }
+                let t = t?;
+                return Some(if nullable {
+                    Ty::union([t, Ty::null()])
+                } else {
+                    t
+                });
             }
             None => {}
         }
         let to = self.ctx.forwarded_calls(cls)?;
         self.forward_call(node, recv, &to, false, name, range, expected)
+    }
+
+    /// The class a call forwarded to `to` is as good as being made from, to reach what's private to
+    /// it.
+    fn forwarding_scope(&self, to: &Ty) -> Option<std::rc::Rc<crate::model::ClassModel<'db>>> {
+        let class = self.class_using_traits(to).unwrap_or_else(|| to.clone());
+        match class.kind() {
+            TyKind::Class { name, .. } => self.ctx.class(name.as_str()),
+            _ => None,
+        }
     }
 
     /// The call of `name` made on `to` instead, unless `to` hasn't got it either: then nothing,
@@ -311,7 +338,7 @@ impl Checker<'_, '_> {
                     cls,
                 ))
             }
-            Answer::Forward { to, .. } => {
+            Answer::Forward { to, nullable, .. } => {
                 let to = super::hooks::parse_type(self.ctx, &to, Some(cls)).ok()?;
                 let to = crate::body::resolve_self(&to, cls);
                 let before = self.diags.len();
@@ -329,7 +356,11 @@ impl Checker<'_, '_> {
                     self.diags.truncate(before);
                     return None;
                 }
-                Some(t)
+                Some(if nullable {
+                    Ty::union([t, Ty::null()])
+                } else {
+                    t
+                })
             }
         }
     }

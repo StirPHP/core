@@ -45,6 +45,15 @@ pub const FRAMEWORKS: &[Framework] = &[
         ],
     },
     Framework {
+        name: "pest",
+        script_name: "pest.rhai",
+        script: include_str!("../frameworks/pest.rhai"),
+        stubs: &[(
+            "override/frameworks/pest/Hooks.stub",
+            include_str!("../frameworks/pest/Hooks.stub"),
+        )],
+    },
+    Framework {
         name: "symfony",
         script_name: "symfony.rhai",
         script: include_str!("../frameworks/symfony.rhai"),
