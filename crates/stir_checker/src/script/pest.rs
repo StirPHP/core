@@ -290,8 +290,48 @@ fn properties_of(ctx: &mut ScriptCtx) -> Array {
     .unwrap_or_default()
 }
 
+/// The expectations the project adds, `expect()->extend('toBeOne', ..)`, in lowercase.
+#[salsa::tracked(returns(ref))]
+pub fn pest_expectations(db: &dyn Db, ws: Workspace) -> Vec<String> {
+    let mut out = Vec::new();
+    for &file in ws.files(db) {
+        if file.origin(db) != FileOrigin::Source || !file.text(db).contains("expect()->") {
+            continue;
+        }
+        let root = stir_db::parse(db, file).syntax();
+        for call in root.descendants().filter(|n| n.kind() == METHOD_CALL_EXPR) {
+            let Some(fetch) = call.children().next() else {
+                continue;
+            };
+            let on_expect = fetch
+                .children()
+                .next()
+                .is_some_and(|r| r.text().to_string().trim() == "expect()");
+            if !on_expect || name_in(&fetch).as_deref() != Some("extend") {
+                continue;
+            }
+            let name = arguments(&call)
+                .first()
+                .filter(|a| a.kind() == STRING_LITERAL)
+                .map(|a| stir_hir::type_ref::unquote(a.text().to_string().trim()));
+            out.extend(name.map(|n| n.to_ascii_lowercase()));
+        }
+    }
+    out
+}
+
+fn is_extended(name: &str) -> bool {
+    stir_db::attached(|db| {
+        let ws = Workspace::try_get(db)?;
+        Some(pest_expectations(db, ws).contains(&name.to_ascii_lowercase()))
+    })
+    .flatten()
+    .unwrap_or(false)
+}
+
 pub(super) fn register(engine: &mut Engine) {
     engine
+        .register_fn("pest_is_extended", is_extended)
         .register_fn("pest_uses", uses_of)
         .register_fn("pest_properties", properties_of);
 }

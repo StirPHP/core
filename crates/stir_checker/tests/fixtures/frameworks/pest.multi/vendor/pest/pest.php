@@ -53,7 +53,31 @@ namespace Pest\PendingCalls {
     }
 }
 
+namespace Pest\Mixins {
+    /**
+     * @template TValue
+     */
+    final class Expectation
+    {
+        /** @return self<TValue> */
+        public function toHaveCount(int $count): self { return $this; }
+        public function __call(string $name, array $arguments): mixed { return null; }
+    }
+}
+
 namespace Pest {
+    /**
+     * @template TValue
+     * @mixin Mixins\Expectation<TValue>
+     */
+    final class Expectation
+    {
+        public function __call(string $name, array $arguments): mixed { return null; }
+        public function __get(string $name): mixed { return null; }
+        /** @param-closure-this self $extend */
+        public function extend(string $name, \Closure $extend): void {}
+    }
+
     final class Configuration
     {
         public function in(string ...$targets): PendingCalls\UsesCall { return new PendingCalls\UsesCall(); }
@@ -82,6 +106,13 @@ namespace {
     {
         return new TestCall();
     }
+
+    /**
+     * @template TValue
+     * @param TValue $value
+     * @return \Pest\Expectation<TValue>
+     */
+    function expect(mixed $value = null): \Pest\Expectation { return new \Pest\Expectation(); }
 
     /** @param-closure-this TestCall $closure */
     function it(string $description, ?Closure $closure = null): TestCall { return new TestCall(); }

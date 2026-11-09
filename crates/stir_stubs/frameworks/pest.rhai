@@ -55,11 +55,27 @@ fn magic_method(type, name, is_static) {
         return;
     }
     if higher_order(class_name) { return "$this"; }
+    if class_name == "Pest\\Expectation" || class_name == "Pest\\Mixins\\Expectation" {
+        return expectation_method(type, name);
+    }
+}
+
+// What `expect($value)` hasn't got itself: an expectation added with `expect()->extend()`, or a
+// method of the value, whose result the expectations go on with. That can't be told apart further.
+fn expectation_method(type, name) {
+    if pest_is_extended(name) { return "Pest\\Expectation<mixed>"; }
+    let args = type.type_args;
+    if args.len() == 0 || args[0].is_unknown() { return "Pest\\Expectation<mixed>"; }
+    if args[0].without_null().has_method(name) { return "Pest\\Expectation<mixed>"; }
 }
 
 fn magic_property(type, name) {
     let class_name = type.class_name;
     if class_name == () { return; }
+    // `expect($user)->name->toBe('..')`, on what the property holds
+    if class_name == "Pest\\Expectation" || class_name == "Pest\\Mixins\\Expectation" {
+        return "Pest\\Expectation<mixed>";
+    }
     if class_name == "Pest\\Support\\HigherOrderTapProxy" {
         let args = type.type_args;
         if args.len() > 0 { return #{ forward_to: args[0].to_string() }; }
