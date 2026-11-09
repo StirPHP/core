@@ -1,16 +1,30 @@
 <?php
 
-namespace Illuminate\Support;
-
-/**
- * What it's an optional of says what can be called on it, by `optional()`.
- *
- * @template TValue
- */
-class Optional
-{
+namespace Illuminate\Support {
     /**
-     * @param TValue $value
+     * What it's an optional of says what can be called on it, by `optional()`.
+     *
+     * @template TValue
      */
-    public function __construct($value) {}
+    class Optional
+    {
+        /**
+         * @param TValue $value
+         */
+        public function __construct($value) {}
+    }
+}
+
+namespace Illuminate\Foundation\Testing\Concerns {
+    trait MakesHttpRequests
+    {
+        /**
+         * What a test follows redirects of is what it goes on with, not both of what it could be.
+         *
+         * @template TResponse of \Illuminate\Http\Response|\Illuminate\Testing\TestResponse
+         * @param TResponse $response
+         * @return TResponse
+         */
+        protected function followRedirects($response) {}
+    }
 }

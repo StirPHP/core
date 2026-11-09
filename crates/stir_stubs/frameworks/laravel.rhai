@@ -651,6 +651,13 @@ fn return_type_targets() {
             "Illuminate\\Contracts\\View\\Factory::make",
             "Illuminate\\Contracts\\View\\Factory::file",
             "Illuminate\\Contracts\\View\\Factory::first",
+            "Illuminate\\Http\\Client\\PendingRequest::get",
+            "Illuminate\\Http\\Client\\PendingRequest::head",
+            "Illuminate\\Http\\Client\\PendingRequest::post",
+            "Illuminate\\Http\\Client\\PendingRequest::patch",
+            "Illuminate\\Http\\Client\\PendingRequest::put",
+            "Illuminate\\Http\\Client\\PendingRequest::delete",
+            "Illuminate\\Http\\Client\\PendingRequest::send",
             "Illuminate\\Database\\Eloquent\\Factories\\Factory::create",
             "Illuminate\\Database\\Eloquent\\Factories\\Factory::make",
             "Illuminate\\Database\\Eloquent\\Factories\\Factory::createOne",
@@ -668,8 +675,31 @@ fn return_type_targets() {
             "Illuminate\\Support\\Facades\\View::file",
             "Illuminate\\Support\\Facades\\View::first",
             "Illuminate\\Database\\Eloquent\\Model::factory",
+            "Illuminate\\Support\\Facades\\Http::get",
+            "Illuminate\\Support\\Facades\\Http::head",
+            "Illuminate\\Support\\Facades\\Http::post",
+            "Illuminate\\Support\\Facades\\Http::patch",
+            "Illuminate\\Support\\Facades\\Http::put",
+            "Illuminate\\Support\\Facades\\Http::delete",
+            "Illuminate\\Support\\Facades\\Http::send",
         ],
     }
+}
+
+// An HTTP client's call gives a response, or a promise of one after `async()` on the way to it, as
+// far as it can be seen. Its own PHPDoc says both, having no way to say which.
+fn http_result(node, ctx) {
+    let declared = ctx.declared_return_type;
+    let promised = false;
+    for t in declared.types() { if t.class_name == "GuzzleHttp\\Promise\\PromiseInterface" { promised = true; } }
+    if !promised { return; }
+    let at = node.receiver;
+    while at != () && at.kind == "method_call" {
+        if at.name == "async" { return; }
+        at = at.receiver;
+    }
+    if at != () && at.kind == "static_call" && at.name == "async" { return; }
+    "Illuminate\\Http\\Client\\Response"
 }
 
 // The view Laravel's factory makes, which is more than the contract it's declared to return.
@@ -713,6 +743,7 @@ fn return_type_of_method(node, ctx) {
             return;
         }
         if c.is_subtype_of("Illuminate\\Contracts\\View\\Factory") { return made_view(ctx); }
+        if c.name == "Illuminate\\Http\\Client\\PendingRequest" { return http_result(node, ctx); }
     }
     let user = user_model();
     if user == () { return; }
@@ -731,6 +762,7 @@ fn return_type_of_static_method(node, ctx) {
         return;
     }
     if name == "make" || name == "file" || name == "first" { return made_view(ctx); }
+    if name != "user" { return http_result(node, ctx); }
     let user = user_model();
     if user == () { return; }
     "?" + user

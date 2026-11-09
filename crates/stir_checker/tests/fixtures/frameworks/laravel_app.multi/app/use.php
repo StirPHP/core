@@ -144,6 +144,16 @@ function alias(): void
     \Event::nope(); // error: staticMethod.notFound
 }
 
+function http(): void
+{
+    // the client's calls give a response, unless it's asked not to wait for one
+    \Illuminate\Support\Facades\Http::get('a')->json();
+    \Illuminate\Support\Facades\Http::withToken('a')->get('a')->json();
+    \Illuminate\Support\Facades\Http::get('a')->nope(); // error: method.notFound
+    \Illuminate\Support\Facades\Http::async()->get('a')->json(); // error: method.notFound
+    \Illuminate\Support\Facades\Http::async()->withToken('a')->get('a')->json(); // error: method.notFound
+}
+
 function static_variables(): void
 {
     static $once;

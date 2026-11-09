@@ -95,6 +95,39 @@ namespace Illuminate\Support\Facades {
     }
 }
 
+namespace GuzzleHttp\Promise {
+    interface PromiseInterface {}
+}
+
+namespace Illuminate\Http\Client {
+    class Response
+    {
+        public function json(): mixed { return null; }
+    }
+
+    class PendingRequest
+    {
+        /** @return $this */
+        public function withToken(string $token) { return $this; }
+        /** @return $this */
+        public function async() { return $this; }
+        /** @return Response|\GuzzleHttp\Promise\PromiseInterface */
+        public function get(string $url) { return new Response(); }
+    }
+}
+
+namespace Illuminate\Support\Facades {
+    /**
+     * @method static \Illuminate\Http\Client\PendingRequest withToken(string $token)
+     * @method static \Illuminate\Http\Client\PendingRequest async()
+     * @method static \Illuminate\Http\Client\Response|\GuzzleHttp\Promise\PromiseInterface get(string $url)
+     */
+    class Http extends Facade
+    {
+        protected static function getFacadeAccessor() { return \Illuminate\Http\Client\PendingRequest::class; }
+    }
+}
+
 namespace Illuminate\Routing {
     class Router
     {
