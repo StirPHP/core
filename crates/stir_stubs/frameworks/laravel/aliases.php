@@ -20,6 +20,7 @@ class Crypt extends \Illuminate\Support\Facades\Crypt {}
 class Date extends \Illuminate\Support\Facades\Date {}
 class DB extends \Illuminate\Support\Facades\DB {}
 abstract class Eloquent extends \Illuminate\Database\Eloquent\Model {}
+class Event extends \Illuminate\Support\Facades\Event {}
 class File extends \Illuminate\Support\Facades\File {}
 class Gate extends \Illuminate\Support\Facades\Gate {}
 class Hash extends \Illuminate\Support\Facades\Hash {}

@@ -205,9 +205,15 @@ pub fn def_index(db: &dyn Db, ws: Workspace) -> Arc<DefIndex> {
     }
     // a class is declared where it's declared, and only without that by a stub
     let overlaid = |l: &ItemLoc| stir_db::is_overlay(l.file.path(db));
+    // and what a framework makes of a name, like Laravel's class aliases, is what's there rather
+    // than the class of an extension by that name, such as `\Event`
+    let of_framework = |l: &ItemLoc| l.file.path(db).starts_with("stubs://frameworks");
     for locs in index.classes.values_mut() {
         if !locs.iter().all(overlaid) {
             locs.retain(|l| !overlaid(l));
+        }
+        if locs.len() > 1 && locs.iter().any(of_framework) {
+            locs.sort_by_key(|l| (DefIndex::rank(l.file.origin(db)), !of_framework(l)));
         }
     }
     Arc::new(index)
