@@ -50,6 +50,7 @@ pub enum Framework {
     Laminas,
     Laravel,
     Magento,
+    Mockery,
     Pest,
     Slim,
     Symfony,
@@ -70,6 +71,7 @@ const FRAMEWORK_PACKAGES: &[(&str, Framework)] = &[
     ("magento/product-community-edition", Framework::Magento),
     ("magento/framework", Framework::Magento),
     // what a plugin or theme is checked against
+    ("mockery/mockery", Framework::Mockery),
     ("pestphp/pest", Framework::Pest),
     ("php-stubs/wordpress-stubs", Framework::WordPress),
     ("roots/wordpress", Framework::WordPress),

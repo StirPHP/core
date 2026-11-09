@@ -45,6 +45,12 @@ pub const FRAMEWORKS: &[Framework] = &[
         ],
     },
     Framework {
+        name: "mockery",
+        script_name: "mockery.rhai",
+        script: include_str!("../frameworks/mockery.rhai"),
+        stubs: &[],
+    },
+    Framework {
         name: "pest",
         script_name: "pest.rhai",
         script: include_str!("../frameworks/pest.rhai"),

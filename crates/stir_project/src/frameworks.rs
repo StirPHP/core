@@ -23,6 +23,7 @@ pub fn frameworks_of(
     let has = |f: Found| found.contains(&f);
     let uses = |name: &str| match name {
         "laravel" => has(Found::Laravel),
+        "mockery" => has(Found::Mockery),
         "pest" => has(Found::Pest),
         // a project made of Symfony's components, but not one built on another framework
         "symfony" => {

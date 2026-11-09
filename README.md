@@ -428,7 +428,7 @@ error[SPHP0061]: PHP 8.4 added `array_find()`, but this project targets PHP 8.2
 
 ## Frameworks
 
-StirPHP ships support for Laravel, Pest, Symfony and WordPress: scripts like the ones above, inside the binary, with native code
+StirPHP ships support for Laravel, Pest, Mockery, Symfony and WordPress: scripts like the ones above, inside the binary, with native code
 where reading many files would be slow in a script. They're ours, so they run without anyone being asked, in editors too,
 and they're never read from disk, so no file of a project can stand in for one. A project's own scripts come first and can
 override what they say.
@@ -463,6 +463,8 @@ their traits and Pest's own (`PHPUnit\Framework\TestCase` if they name none), an
 Properties it's given by `$this->name = ..` in the file or `tests/Pest.php` can be read, as `mixed`; others are reported.
 `test()` without a description is a proxy of the test being run. What's called on a pending test, as in
 `it('works')->get('/')->assertOk()`, is made later on whatever's there by then, so it can't be checked.
+
+**Mockery**: `Mockery::mock(Foo::class)` and `spy()`, and a Laravel test's `$this->mock()`, are a `Foo` as well as a mock.
 
 **Symfony and Doctrine**, after phpstan-symfony and phpstan-doctrine: services and parameters come from the compiled
 container, `parameters.symfony.containerXmlPath` or else one in `var/cache/`, the `dev` environment's first, so
