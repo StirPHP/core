@@ -79,6 +79,13 @@ function relations(User $user): void
     $user->posts()->verified(); // error: method.notFound
     $user->drafts()->published()->first();
 
+    wants_post($user->viaVariable()->first()); // error: argument.type
+    $user->viaVariable()->first()?->nope(); // error: method.notFound
+    $user->viaMethod()->first()?->nope(); // error: method.notFound
+    foreach ($user->viaMethod as $post) {
+        $post->nope(); // error: method.notFound
+    }
+
     // what's related isn't known
     $commentable = $user->posts()->first()?->commentable()->first();
     $commentable?->anything(); // error: method.notFound

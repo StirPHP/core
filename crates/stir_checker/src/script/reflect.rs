@@ -598,6 +598,28 @@ impl MethodFacade {
             let Some(mut expr) = self.returned(ctx, owner, m) else {
                 return Dynamic::UNIT;
             };
+            // `$x = $this->hasMany(..); return $x;`
+            if expr.kind() == VARIABLE_EXPR {
+                let assigned = expr
+                    .ancestors()
+                    .find(|a| a.kind() == BLOCK)
+                    .into_iter()
+                    .flat_map(|b| b.children().collect::<Vec<_>>())
+                    .filter(|s| s.kind() == EXPR_STMT)
+                    .filter_map(|s| s.children().next())
+                    .filter(|a| a.kind() == ASSIGN_EXPR)
+                    .filter(|a| {
+                        a.children().next().is_some_and(|t| {
+                            t.text().to_string().trim() == expr.text().to_string().trim()
+                        })
+                    })
+                    .last()
+                    .and_then(|a| a.children().last());
+                match assigned {
+                    Some(value) => expr = value,
+                    None => return Dynamic::UNIT,
+                }
+            }
             // down the chain to the call whose receiver is `$this`
             loop {
                 if expr.kind() != METHOD_CALL_EXPR {

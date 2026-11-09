@@ -24,6 +24,19 @@ class User extends Model
         return $this->hasMany(Post::class)->latest();
     }
 
+    // as it's read: through a variable, and through a method of its own
+    public function viaVariable(): HasMany
+    {
+        $relation = $this->hasMany(Post::class);
+
+        return $relation;
+    }
+
+    public function viaMethod(): HasMany
+    {
+        return $this->posts()->latest();
+    }
+
     public function scopeActive(Builder $query): Builder
     {
         return $query->verified();

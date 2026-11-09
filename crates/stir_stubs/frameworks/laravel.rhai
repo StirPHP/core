@@ -241,7 +241,7 @@ fn model_members(c) {
         let name = m.name;
         // relations: a property of the same name holds what they get
         if m.visibility == "public" {
-            let result = relation_result(m);
+            let result = relation_result(c, m);
             if result != () {
                 properties[name] = #{ type: result, read_only: true, declared_at: m.class + "::" + name };
                 continue;
@@ -336,12 +336,25 @@ fn scope_name(m) {
     }
 }
 
+// The call of a model's method that makes a relation, by what it returns, through its own methods:
+// `return $this->extracted()->latest();` with `return $this->hasMany(..)` in that.
+fn relation_made(c, name) {
+    let at = name;
+    for i in 0..4 {
+        let found = c.method_details([at]);
+        if found.len() == 0 { return; }
+        let made = found[0].returned_call;
+        if made == () { return; }
+        let next = c.method(made.name);
+        if next == () || from_eloquent(next) { return made; }
+        at = made.name;
+    }
+}
+
 // What a relation method says it returns, with what its body says is related, when the method says
 // just the class: `articles(): HasMany` with `return $this->hasMany(Article::class)`.
 fn relation_with_models(c, name, relation) {
-    let found = c.method_details([name]);
-    if found.len() == 0 { return; }
-    let made = found[0].returned_call;
+    let made = relation_made(c, name);
     if made == () { return; }
     let related = made.args["0"];
     let related = if type_of(related) == "string" { class(related) } else { () };
@@ -380,7 +393,7 @@ fn collection_of_relation(c, name) {
     if relation == () { return; }
     let from = c.method_details([relation]);
     if from.len() == 0 { return; }
-    let result = relation_result(from[0]);
+    let result = relation_result(c, from[0]);
     if type_of(result) == "string" && result.starts_with("Illuminate\\Database\\Eloquent\\Collection<") {
         return result;
     }
@@ -388,10 +401,10 @@ fn collection_of_relation(c, name) {
 
 // What a relation method's property holds, as a PHPDoc type: what `getResults()` gives. `m` is
 // what `method_details` says of it.
-fn relation_result(m) {
+fn relation_result(c, m) {
     if m.required_params > 0 { return; }
     // what the call it returns says is related, when the type says no more than the class
-    let made = m.returned_call;
+    let made = relation_made(c, m.name);
     if made != () && !m.returns_generic {
         let many = ["hasMany", "morphMany", "belongsToMany", "morphToMany", "morphedByMany", "hasManyThrough"];
         let one = ["hasOne", "belongsTo", "morphOne", "hasOneThrough"];

@@ -388,8 +388,9 @@ Scripts see the project's classes with `class("App\\Post")`, which is `()` for o
 `kind`, `parent`, `type`, `type_params`, `is_abstract`, `is_subtype_of("..")` (traits count), `ancestors()`, `methods()`,
 `method("..")`, `properties()`, `property("..")`, `constant("..")` and `attributes()`, as `#{ name, args }` with arguments
 by position (`"0"`) and by name. A method has `name`, `class`, `is_static`, `is_magic`, `visibility`, `return_type`,
-`params`, `params_text(skip)` (as a `@method` tag writes them), `attributes()`, `returned_value()` and `returned_call()`,
-the first call on `$this` of what it returns, such as `#{ name: "hasMany", args: #{ "0": "App\\Comment" } }`. A property
+`params`, `params_text(skip)` (as a `@method` tag writes them), `attributes()`, `returned_value()`, `returned_class()` (the
+class named at the start of what it returns), `returned_property()` (the `posts` of `return $this->posts;`) and
+`returned_call()`, the first call on `$this` of what it returns, such as `#{ name: "hasMany", args: #{ "0": "App\\Comment" } }`. A property
 has `name`, `class`, `type`, `is_static`, `visibility` and `default_value`. Values are only what's written out literally:
 strings, numbers, booleans, `null`, arrays of them, `Foo::class` as the class's name, and constants with such values.
 Nothing's inferred from code, so that a class's members never depend on checking the code that uses them. Asking about many
