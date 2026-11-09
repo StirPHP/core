@@ -166,12 +166,6 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
-    /// Is this in a template, where one of these types says nothing of what it holds? Relations
-    /// often come out as Eloquent's `Model`, with the class meant being lost.
-    pub(super) fn unreliable_in_template(&self, ty: &Ty) -> bool {
-        self.template.is_some() && ty.members().iter().any(crate::views::is_unreliable)
-    }
-
     /// Is `name` one that some of what renders this template gives, and not all? Then to ask if
     /// it's there may well be answered no.
     pub(super) fn given_if_at_all(&self, name: &str) -> bool {

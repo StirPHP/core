@@ -589,9 +589,6 @@ impl<'a, 'db> Checker<'a, 'db> {
             return;
         }
         if let Err(m) = stir_types::check_assignable(self.ctx, from, to) {
-            if self.unreliable_in_template(from) {
-                return;
-            }
             let mut msg = format!("type mismatch in {what}: {m}");
             if from.is_untyped() {
                 msg.push_str(
@@ -5194,16 +5191,12 @@ impl<'a, 'db> Checker<'a, 'db> {
                         // PHPStan's `reportMagicProperties`: fine at level 0, but from level 1
                         // a property only `__get` knows of has to be declared with `@property`
                         if self.has_magic(&cls, "__get") {
-                            // a template's `$errors->login` and `$post->comments_count`: that's
-                            // how it reads what it's given, which may have been added by a query
-                            if self.template.is_none() {
-                                self.error(
-                                    range,
-                                    codes::PROPERTY_NOT_FOUND,
-                                    format!("`{recv}` has no property `{name}`, only `__get`"),
-                                );
-                                self.tag_level(1);
-                            }
+                            self.error(
+                                range,
+                                codes::PROPERTY_NOT_FOUND,
+                                format!("`{recv}` has no property `{name}`, only `__get`"),
+                            );
+                            self.tag_level(1);
                             return Ty::untyped();
                         }
                         if self.limited_member(
@@ -5533,10 +5526,6 @@ impl<'a, 'db> Checker<'a, 'db> {
         // PHPStan's `reportMagicMethods`: fine at level 0, but from level 1 a method only
         // `__call` knows of has to be declared with `@method`
         if matches!(cls.kind(), TyKind::Class { .. }) && self.has_magic(&cls, "__call") {
-            if self.unreliable_in_template(&cls) {
-                self.check_args_untyped(node);
-                return Ty::untyped();
-            }
             self.error(
                 range,
                 codes::METHOD_NOT_FOUND,
@@ -5591,10 +5580,6 @@ impl<'a, 'db> Checker<'a, 'db> {
         } else {
             codes::METHOD_NON_OBJECT
         };
-        if self.unreliable_in_template(recv) {
-            self.check_args_untyped(node);
-            return Ty::untyped();
-        }
         if has.is_empty() {
             self.check_args_untyped(node);
             self.error(range, code, format!("`{recv}` has no method `{name}`"));

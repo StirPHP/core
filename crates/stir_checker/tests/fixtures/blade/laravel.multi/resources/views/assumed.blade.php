@@ -9,6 +9,8 @@
     {{ $thing->title }}
     {{ $thing->nothing }} // error: property.notFound
 @endforeach
-{{-- what a query added to a model is read like this, but a method that isn't there is a typo --}}
-{{ (new \App\Models\Magic)->comments_count }}
+{{-- it's an object of no model's: what `__get` has is as much in question as anywhere else --}}
+{{ (new \App\Models\Magic)->comments_count }} // error: property.notFound
+{{-- a named form's messages --}}
+{{ $errors->login->first('email') }}
 {{ (new \App\Models\Magic)->nothing() }} // error: method.notFound

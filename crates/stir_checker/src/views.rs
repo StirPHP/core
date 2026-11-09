@@ -2496,8 +2496,7 @@ pub(crate) fn given_type(ty: &Ty) -> Ty {
         TyKind::SelfType { class, .. } => class.clone(),
         _ => ty,
     };
-    let mut usable = !matches!(ty.kind(), TyKind::Error | TyKind::Mixed)
-        && !ty.members().iter().any(is_unreliable);
+    let mut usable = !matches!(ty.kind(), TyKind::Error | TyKind::Mixed);
     ty.walk(&mut |t| {
         if matches!(t.kind(), TyKind::Param { .. } | TyKind::SelfType { .. }) {
             usable = false;
@@ -2505,16 +2504,6 @@ pub(crate) fn given_type(ty: &Ty) -> Ty {
         usable
     });
     if usable { ty } else { Ty::untyped() }
-}
-
-/// What's known to come out wrong of relations and `optional()`, for which reading anything of it
-/// in a template would be a false alarm: Eloquent's `Model` where a relation's class was meant, and
-/// `Optional`, which forwards everything. A variable that's one of these isn't typed at all, and
-/// what's read through it elsewhere, out of a collection of them, is taken on trust.
-pub(crate) fn is_unreliable(ty: &Ty) -> bool {
-    matches!(ty.kind(), TyKind::Class { name, .. } if
-        name.eq_ignore_ascii_case("Illuminate\\Database\\Eloquent\\Model")
-            || name.eq_ignore_ascii_case("Illuminate\\Support\\Optional"))
 }
 
 /// The fields of a type that's an array of known keys: `None` for anything else.
