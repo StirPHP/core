@@ -3224,6 +3224,28 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
+    /// The value of `node` if it names a constant that's written out as a whole number.
+    fn int_constant(&self, node: &SyntaxNode) -> Option<Ty> {
+        if node.kind() != NAME_EXPR {
+            return None;
+        }
+        let scope = self.scope(node);
+        let resolved = scope.resolve_const(&text_of(node));
+        let loc = self.ctx.constant(resolved.primary.as_str()).or_else(|| {
+            let fallback = resolved.fallback.as_ref()?;
+            self.ctx.constant(fallback.as_str())
+        })?;
+        let items = self.ctx.items(loc.file);
+        let ptr = items.consts[loc.index as usize].value.as_ref()?;
+        let root = stir_db::parse(self.ctx.db, loc.file).syntax();
+        let value = ptr.to_node(&root);
+        if value.kind() != LITERAL {
+            return None;
+        }
+        let int = stir_hir::type_ref::parse_int(text_of(&value).trim())?;
+        Some(Ty::literal(LitValue::Int(int)))
+    }
+
     fn const_type(&mut self, loc: stir_hir::ItemLoc) -> Ty {
         let items = self.ctx.items(loc.file);
         let c = &items.consts[loc.index as usize];
@@ -4679,10 +4701,12 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
         // what a conditional return type is about
         for (index, id) in &sig.conditional_on {
-            let given = assigned
-                .iter()
-                .position(|p| *p == Some(*index))
-                .and_then(|a| arg_tys[a].clone());
+            let at = assigned.iter().position(|p| *p == Some(*index));
+            // which constant it is can say which way it goes, like `parse_url()` with `PHP_URL_PORT`
+            let given = at
+                .and_then(|a| value_of(&args[a]))
+                .and_then(|v| self.int_constant(&v))
+                .or_else(|| at.and_then(|a| arg_tys[a].clone()));
             let param = &sig.params[*index];
             let t = given
                 .or_else(|| param.default.clone())

@@ -534,3 +534,23 @@ class Generator
     /** @return TKey */
     public function key() {}
 }
+
+/**
+ * @param int $component
+ * @return ($component is -1
+ *     ? array{scheme?: string, host?: string, port?: int, user?: string, pass?: string, path?: string, query?: string, fragment?: string}|false
+ *     : ($component is 2 ? int|false|null : string|false|null))
+ */
+function parse_url(string $url, int $component = -1): array|string|int|false|null {}
+
+/**
+ * @template K of array-key
+ * @param array<K, mixed> $array
+ * @return ($num is 1 ? K : list<K>)
+ */
+function array_rand(array $array, int $num = 1): array|string|int {}
+
+/**
+ * @return ($array is array<array-key, int> ? int : int|float)
+ */
+function array_sum(array $array): int|float {}

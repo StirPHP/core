@@ -1410,6 +1410,10 @@ fn literal_type_ref(node: &SyntaxNode) -> Option<TypeRef> {
         LITERAL => TypeRefKind::Literal(crate::type_ref::Literal::Int(crate::type_ref::parse_int(
             text,
         )?)),
+        PREFIX_EXPR if text.starts_with('-') => {
+            let positive = crate::type_ref::parse_int(text[1..].trim())?;
+            TypeRefKind::Literal(crate::type_ref::Literal::Int(-positive))
+        }
         _ => return None,
     };
     Some(TypeRef {
