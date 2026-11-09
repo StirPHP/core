@@ -138,7 +138,12 @@ function createClient(command) {
     run: { command, args: ['lsp'] },
     debug: { command, args: ['lsp'], options: { env: { ...process.env, STIRPHP_LOG: 'debug' } } },
   };
-  const documentSelector = [{ scheme: 'file', language: 'php' }];
+  // by language for PHP; by name for templates, as another extension may give them a language of its own
+  const documentSelector = [
+    { scheme: 'file', language: 'php' },
+    { scheme: 'file', language: 'blade' },
+    { scheme: 'file', pattern: '**/*.blade.php' },
+  ];
   /** @type {import('vscode-languageclient/node').LanguageClientOptions} */
   const clientOptions = {
     documentSelector,

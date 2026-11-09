@@ -1,7 +1,7 @@
 {
   "name": "stirphp",
   "displayName": "StirPHP",
-  "description": "Type checking, completion and navigation for PHP, from the StirPHP language server.",
+  "description": "Type checking, completion and navigation for PHP and Laravel's Blade templates, from the StirPHP language server.",
   "version": "0.2.0",
   "publisher": "stirphp",
   "license": "MIT",
@@ -16,7 +16,8 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "onLanguage:php"
+    "onLanguage:php",
+    "onLanguage:blade"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -30,6 +31,31 @@
     }
   },
   "contributes": {
+    "languages": [
+      {
+        "id": "blade",
+        "aliases": [
+          "Blade",
+          "blade"
+        ],
+        "extensions": [
+          ".blade.php"
+        ],
+        "configuration": "./grammars/blade.language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "blade",
+        "scopeName": "text.html.blade.stirphp",
+        "path": "./grammars/blade.tmLanguage.json",
+        "embeddedLanguages": {
+          "source.php": "php",
+          "source.js": "javascript",
+          "source.css": "css"
+        }
+      }
+    ],
     "configuration": {
       "title": "StirPHP",
       "properties": {
@@ -186,12 +212,78 @@
             "constant.other.class.php"
           ]
         }
+      },
+      {
+        "language": "blade",
+        "scopes": {
+          "namespace": [
+            "entity.name.type.namespace.php"
+          ],
+          "type": [
+            "keyword.other.type.php"
+          ],
+          "typeParameter": [
+            "support.class.php"
+          ],
+          "class": [
+            "support.class.php"
+          ],
+          "class.declaration": [
+            "entity.name.type.class.php"
+          ],
+          "class.defaultLibrary": [
+            "support.class.builtin.php"
+          ],
+          "interface": [
+            "support.class.php"
+          ],
+          "interface.declaration": [
+            "entity.name.type.interface.php"
+          ],
+          "enum": [
+            "support.class.php"
+          ],
+          "enum.declaration": [
+            "entity.name.type.enum.php"
+          ],
+          "enumMember": [
+            "constant.enum.php"
+          ],
+          "function": [
+            "entity.name.function.php"
+          ],
+          "function.defaultLibrary": [
+            "support.function.basic_functions.php"
+          ],
+          "method": [
+            "entity.name.function.php"
+          ],
+          "parameter": [
+            "variable.other.php"
+          ],
+          "variable": [
+            "variable.other.php"
+          ],
+          "variable.readonly": [
+            "constant.other.php"
+          ],
+          "property": [
+            "variable.other.property.php"
+          ],
+          "property.static": [
+            "variable.other.class.php"
+          ],
+          "property.readonly.static": [
+            "constant.other.class.php"
+          ]
+        }
       }
     ]
   },
   "scripts": {
     "check": "tsc --noEmit -p .",
-    "package": "vsce package --allow-missing-repository"
+    "package": "vsce package --allow-missing-repository",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "fflate": "0.8.3",
@@ -202,6 +294,8 @@
     "@types/node": "^22.0.0",
     "@types/vscode": "~1.100.0",
     "@vscode/vsce": "^3.6.0",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "vscode-oniguruma": "2.0.1",
+    "vscode-textmate": "9.2.0"
   }
 }

@@ -1,7 +1,7 @@
 # StirPHP for VS Code
 
-Type checking and code navigation for PHP files, from the StirPHP language server. It starts when you open a PHP
-file, and a Composer project needs no configuration.
+Type checking and code navigation for PHP files and Laravel's Blade templates, from the StirPHP language server. It
+starts when you open a PHP file or a template, and a Composer project needs no configuration.
 
 - diagnostics, updated as you type, and PHPStan's on save for a project that has it
 - hover with types and doc comments
@@ -10,6 +10,8 @@ file, and a Composer project needs no configuration.
 - find references, highlights and rename
 - quick fixes and refactorings in the light bulb and **Refactor...** menus, and **Organize Imports**
 - semantic highlighting on top of VS Code's PHP grammar, outline, folding and selection ranges
+- a `blade` language for `*.blade.php`, with a grammar of its own for directives, `{{ }}`, `{!! !!}`, `{{-- --}}`, `@php`
+  and `<x-...>` tags, and everything above for the PHP inside a template
 
 If a project declares Composer packages that aren't installed, a notice tells you to run `composer install`. Until you
 do, errors about what those packages would declare are held back.
@@ -44,6 +46,13 @@ To leave these to StirPHP, add this to your settings, for the workspace or for y
 ```
 
 Any other PHP language extension you have enabled also adds its own results.
+
+## Other Blade extensions
+
+Another Blade extension can stay enabled. If it declares the same `blade` language, VS Code uses one of the two grammars, by
+the order extensions load, so the colours may be that extension's. StirPHP's diagnostics, hover and
+completion work either way. If another extension gives `.blade.php` files a language of its own, StirPHP still attaches
+to them once a PHP file has started it.
 
 ## The language server
 

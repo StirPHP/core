@@ -1,0 +1,124 @@
+{
+  "comments": {
+    "blockComment": [
+      "{{--",
+      "--}}"
+    ]
+  },
+  "brackets": [
+    [
+      "<!--",
+      "-->"
+    ],
+    [
+      "{{--",
+      "--}}"
+    ],
+    [
+      "{!!",
+      "!!}"
+    ],
+    [
+      "{{",
+      "}}"
+    ],
+    [
+      "<",
+      ">"
+    ],
+    [
+      "{",
+      "}"
+    ],
+    [
+      "[",
+      "]"
+    ],
+    [
+      "(",
+      ")"
+    ]
+  ],
+  "autoClosingPairs": [
+    {
+      "open": "{{--",
+      "close": " --}}"
+    },
+    {
+      "open": "{!!",
+      "close": " !!}"
+    },
+    {
+      "open": "{",
+      "close": "}"
+    },
+    {
+      "open": "[",
+      "close": "]"
+    },
+    {
+      "open": "(",
+      "close": ")"
+    },
+    {
+      "open": "\"",
+      "close": "\"",
+      "notIn": [
+        "string"
+      ]
+    },
+    {
+      "open": "'",
+      "close": "'",
+      "notIn": [
+        "string",
+        "comment"
+      ]
+    },
+    {
+      "open": "<!--",
+      "close": "-->",
+      "notIn": [
+        "comment",
+        "string"
+      ]
+    }
+  ],
+  "surroundingPairs": [
+    [
+      "{",
+      "}"
+    ],
+    [
+      "[",
+      "]"
+    ],
+    [
+      "(",
+      ")"
+    ],
+    [
+      "\"",
+      "\""
+    ],
+    [
+      "'",
+      "'"
+    ],
+    [
+      "<",
+      ">"
+    ]
+  ],
+  "wordPattern": "(-?\\d*\\.\\d\\w*)|([^\\-\\`\\~\\!\\@\\#\\%\\^\\&\\*\\(\\)\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)",
+  "indentationRules": {
+    "increaseIndentPattern": {
+      "pattern": "^\\s*(@(?:if|elseif|else|unless|isset|empty|for|foreach|forelse|while|switch|case|default|section|auth|guest|can|cannot|canany|php|once|push|prepend|error|session|verbatim|fragment|env|production|hassection|sectionmissing|component|slot)\\b(?!.*@end)|<(?!\\?|[^>]*/>)([-_\\.A-Za-z0-9]+)(?=\\s|>)\\b[^>]*>(?!.*</\\2>)).*$",
+      "flags": "i"
+    },
+    "decreaseIndentPattern": {
+      "pattern": "^\\s*(@(?:end\\w+|else|elseif|elseauth|elsecan|elsecannot|elsecanany|elseguest|empty|stop|show|overwrite|append)\\b|</[-_\\.A-Za-z0-9]+\\b[^>]*>)",
+      "flags": "i"
+    }
+  }
+}

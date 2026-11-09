@@ -22,6 +22,21 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
+  # The VS Code extension: its types, and the Blade grammar
+  vscode:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Check and test
+        working-directory: editors/vscode
+        run: |
+          npm ci
+          npm run check
+          npm test
+
   # The language server for the browser (`editors/web`), built as the docs use it and spoken to in Node
   web:
     runs-on: ubuntu-24.04
