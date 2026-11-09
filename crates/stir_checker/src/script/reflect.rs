@@ -527,6 +527,65 @@ impl MethodFacade {
         })
     }
 
+    /// The name of what it returns, if that's a property of `$this`: `posts` of `return $this->posts;`.
+    fn returned_property(&self) -> Dynamic {
+        with_ctx(|ctx| {
+            self.with_in(ctx, |ctx, owner, m, _| {
+                let Some(expr) = self.returned(ctx, owner, m) else {
+                    return Dynamic::UNIT;
+                };
+                let on_this = expr.kind() == PROPERTY_FETCH_EXPR
+                    && expr
+                        .children()
+                        .next()
+                        .is_some_and(|r| r.text().to_string().trim() == "$this");
+                if !on_this {
+                    return Dynamic::UNIT;
+                }
+                expr.children()
+                    .find(|c| c.kind() == NAME)
+                    .map_or(Dynamic::UNIT, |n| {
+                        n.text().to_string().trim().to_owned().into()
+                    })
+            })
+        })
+    }
+
+    /// The class that what it returns starts from, by the name of a class written there: `Foo` of
+    /// `return Foo::new()->state([]);` and of `return new Foo;`.
+    fn returned_class(&self) -> Dynamic {
+        with_ctx(|ctx| {
+            self.with_in(ctx, |ctx, owner, m, _| {
+                let Some(mut expr) = self.returned(ctx, owner, m) else {
+                    return Dynamic::UNIT;
+                };
+                while expr.kind() == METHOD_CALL_EXPR {
+                    let receiver = expr.children().next().and_then(|f| f.children().next());
+                    let Some(receiver) = receiver else {
+                        return Dynamic::UNIT;
+                    };
+                    expr = receiver;
+                }
+                if !matches!(expr.kind(), STATIC_CALL_EXPR | NEW_EXPR) {
+                    return Dynamic::UNIT;
+                }
+                let named = match expr.kind() {
+                    STATIC_CALL_EXPR => expr.children().next().and_then(|f| f.children().next()),
+                    _ => expr
+                        .children()
+                        .find(|c| matches!(c.kind(), NAME_EXPR | NAME_REF)),
+                };
+                let Some(named) = named else {
+                    return Dynamic::UNIT;
+                };
+                let scope = scope_at(ctx, owner.file, &expr);
+                let name = scope.resolve_class(named.text().to_string().trim());
+                ctx.class(name.as_str())
+                    .map_or(Dynamic::UNIT, |c| c.name.to_string().into())
+            })
+        })
+    }
+
     /// The first call on `$this` that what it returns is made from, as `#{ name, args }`, such as
     /// the `hasMany` of `return $this->hasMany(Post::class)->latest();`. The arguments are their
     /// values where they're written out literally.
@@ -954,6 +1013,10 @@ pub(super) fn register(engine: &mut Engine) {
             m.params_text(skip)
         })
         .register_fn("returned_value", |m: &mut MethodFacade| m.returned_value())
+        .register_fn("returned_class", |m: &mut MethodFacade| m.returned_class())
+        .register_fn("returned_property", |m: &mut MethodFacade| {
+            m.returned_property()
+        })
         .register_fn("returned_call", |m: &mut MethodFacade| m.returned_call());
     engine
         .register_type_with_name::<PropertyFacade>("Property")

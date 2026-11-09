@@ -1,0 +1,16 @@
+<?php
+
+namespace Illuminate\Support;
+
+/**
+ * What it's an optional of says what can be called on it, by `optional()`.
+ *
+ * @template TValue
+ */
+class Optional
+{
+    /**
+     * @param TValue $value
+     */
+    public function __construct($value) {}
+}

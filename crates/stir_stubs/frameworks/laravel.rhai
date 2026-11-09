@@ -125,6 +125,104 @@ fn facade_members(c) {
 
 // ---------------------------------------------------------------------------------------- models
 
+// ----------------------------------------------------------------------------------- factories
+
+fn factory_class() { "Illuminate\\Database\\Eloquent\\Factories\\Factory" }
+
+// The factory of a model, as `HasFactory::factory()` finds it: `$factory`, `#[UseFactory]`, then
+// by name (`Factory::resolveFactoryName()`), as nothing declares it without `@use`.
+fn factory_of(model) {
+    let found = ();
+    let declared = model.property("factory");
+    if declared != () && type_of(declared.default_value) == "string" { found = class(declared.default_value); }
+    if found == () {
+        for a in model.attributes() {
+            if a.name == "Illuminate\\Database\\Eloquent\\Attributes\\UseFactory" {
+                let named = a.args["0"];
+                if type_of(named) == "string" { found = class(named); }
+            }
+        }
+    }
+    if found == () {
+        // `newFactory()` a model has itself, which is usually just this
+        let method = model.method("newFactory");
+        if method != () && !from_eloquent(method) {
+            let t = method.return_type;
+            if t.class_name != () && t.class_name != factory_class() { found = class(t.class_name); }
+            if found == () {
+                let named = method.returned_class();
+                if named != () { found = class(named); }
+            }
+        }
+    }
+    if found == () {
+        let name = model.name;
+        for app in ["App\\Models\\", "App\\"] {
+            if name.starts_with(app) {
+                name = name.sub_string(app.len());
+                break;
+            }
+        }
+        found = class("Database\\Factories\\" + name + "Factory");
+    }
+    if found != () && found.is_subtype_of(factory_class()) { found }
+}
+
+// The model of a factory: what its `@extends` says, `$model`, then by name (`Factory::modelName()`).
+fn model_of_factory(factory) {
+    let made = factory.type.method_type("newModel");
+    if made != () && made.class_name != () && made.class_name != model_class() { return class(made.class_name); }
+    let declared = factory.property("model");
+    if declared != () && type_of(declared.default_value) == "string" {
+        let model = class(declared.default_value);
+        if model != () { return model; }
+    }
+    let name = factory.name;
+    if !name.ends_with("Factory") { return; }
+    name = name.sub_string(0, name.len() - 7);
+    if name.starts_with("Database\\Factories\\") { name = name.sub_string(19); }
+    for app in ["App\\Models\\", "App\\"] {
+        let model = class(app + name);
+        if model != () { return model; }
+    }
+}
+
+// Has a `count()` been asked for on the way to this factory, as far as it can be seen? One that's
+// been passed around is taken to have none, as most haven't.
+fn makes_many(node) {
+    let at = node.receiver;
+    while at != () {
+        let args = at.arguments;
+        if at.kind == "method_call" && (at.name == "count" || at.name == "times") {
+            return args.len() > 0 && args[0].text.to_lower() != "null";
+        }
+        if at.kind == "static_call" && at.name == "times" { return true; }
+        if at.kind == "static_call" && at.name == "factory" {
+            // a number, rather than the state that can be given here too
+            if args.len() == 0 { return false; }
+            let first = args[0];
+            return !(first.kind in ["array", "closure", "arrow_function"]) && first.text.to_lower() != "null";
+        }
+        if at.kind != "method_call" { return false; }
+        at = at.receiver;
+    }
+    false
+}
+
+// What a factory's method that makes models gives: its `create()` and `make()` say either a model
+// or a collection of them, for it depends on `count()`.
+fn factory_result(node, factory) {
+    let model = model_of_factory(factory);
+    if model == () { return; }
+    let many = "Illuminate\\Database\\Eloquent\\Collection<int, " + model.name + ">";
+    let name = node.name.to_lower();
+    if name in ["createone", "makeone", "createonequietly"] { return model.name; }
+    if name in ["createmany", "createmanyquietly"] { return many; }
+    if name in ["create", "make", "createquietly"] {
+        return if makes_many(node) { many } else { model.name };
+    }
+}
+
 // Declared by Eloquent itself, on `Model` and the traits it's made of, rather than by a model.
 fn from_eloquent(m) {
     m.class.starts_with("Illuminate\\Database\\Eloquent\\")
@@ -238,6 +336,56 @@ fn scope_name(m) {
     }
 }
 
+// What a relation method says it returns, with what its body says is related, when the method says
+// just the class: `articles(): HasMany` with `return $this->hasMany(Article::class)`.
+fn relation_with_models(c, name, relation) {
+    let found = c.method_details([name]);
+    if found.len() == 0 { return; }
+    let made = found[0].returned_call;
+    if made == () { return; }
+    let related = made.args["0"];
+    let related = if type_of(related) == "string" { class(related) } else { () };
+    if related == () { return; }
+    let through = made.args["1"];
+    let args = [];
+    for param in relation.type_params {
+        if param == "TRelatedModel" {
+            args.push(related.name);
+        } else if param == "TDeclaringModel" {
+            args.push("$this");
+        } else if param == "TIntermediateModel" && type_of(through) == "string" && class(through) != () {
+            args.push(class(through).name);
+        } else if param == "TIntermediateModel" {
+            args.push(model_class());
+        } else {
+            // what comes after has a default
+            break;
+        }
+    }
+    if args.len() == 0 { return; }
+    relation.name + "<" + args.reduce(|sum, v| if sum == () { v } else { sum + ", " + v }) + ">"
+}
+
+// What a model's method says it returns, when it says a collection and not of what, with what its
+// body gets it from: `replies(): Collection` with `return $this->repliesRelation;`, or
+// `return $this->repliesRelation()->latest()->get();`.
+fn collection_of_relation(c, name) {
+    let found = c.method_details([name]);
+    if found.len() == 0 { return; }
+    let relation = found[0].method.returned_property();
+    if relation == () {
+        let made = found[0].returned_call;
+        if made != () { relation = made.name; }
+    }
+    if relation == () { return; }
+    let from = c.method_details([relation]);
+    if from.len() == 0 { return; }
+    let result = relation_result(from[0]);
+    if type_of(result) == "string" && result.starts_with("Illuminate\\Database\\Eloquent\\Collection<") {
+        return result;
+    }
+}
+
 // What a relation method's property holds, as a PHPDoc type: what `getResults()` gives. `m` is
 // what `method_details` says of it.
 fn relation_result(m) {
@@ -341,6 +489,24 @@ fn magic_method(type, name, is_static) {
     }
     let c = class(class_name);
     if c == () { return; }
+    if class_name == "Illuminate\\Support\\Optional" {
+        // given something, it calls the method on it, and gives `null` for what isn't an object
+        let args = type.type_args;
+        if args.len() > 0 && !args[0].is_unknown() {
+            return #{ forward_to: args[0].to_string(), nullable: true };
+        }
+        return "mixed";
+    }
+    if class_name == "Illuminate\\Support\\HigherOrderTapProxy" {
+        // whatever its method gives, what comes back is what's being tapped
+        let args = type.type_args;
+        if args.len() > 0 && args[0].has_method(name) { return args[0].to_string(); }
+        return;
+    }
+    if c.is_subtype_of(factory_class()) && !is_static {
+        let found = factory_magic(c, name);
+        if found != () { return found; }
+    }
     // a relation forwards what it hasn't got to a query of its related models, and gives back
     // itself where that would be the query
     if c.is_subtype_of(relation_class()) {
@@ -351,10 +517,21 @@ fn magic_method(type, name, is_static) {
     if class_name == "Illuminate\\Database\\Query\\Builder" && is_dynamic_where(name) {
         return "$this";
     }
-    // a macro the project adds, `Collection::macro('toUpper', ..)`: what it is isn't followed
+    // a macro the project or a package adds, `Collection::macro('toUpper', ..)`: what it is isn't
+    // followed
     if c.is_subtype_of("Illuminate\\Support\\Traits\\Macroable") {
         for ancestor in c.ancestors() {
             if name in laravel_macros(ancestor) { return "mixed"; }
+        }
+    }
+    // on a facade, it's on what's behind it, and can be added through it as well
+    if c.is_subtype_of("Illuminate\\Support\\Facades\\Facade") {
+        if name in laravel_macros(class_name) { return "mixed"; }
+        let members = facade_members(c);
+        if members != () && class(members.forward_calls) != () {
+            for ancestor in class(members.forward_calls).ancestors() {
+                if name in laravel_macros(ancestor) { return "mixed"; }
+            }
         }
     }
     // `$query->orWhere->active()`: a scope of whichever model it's a query of
@@ -363,11 +540,29 @@ fn magic_method(type, name, is_static) {
     }
 }
 
+// `hasPosts()` and `forUser()` on a factory make the related models, if the model has that relation.
+fn factory_magic(factory, name) {
+    if name == "trashed" { return "$this"; }
+    if name.len() <= 3 || !(name.starts_with("has") || name.starts_with("for")) { return; }
+    let model = model_of_factory(factory);
+    if model == () { return "$this"; }
+    let relation = name.sub_string(3, 1).to_lower() + name.sub_string(4);
+    if model.method(relation) != () { return "$this"; }
+}
+
 // What a query of models has from the model: its scopes, and the query methods it declares itself,
 // such as `withTrashed` for one that's soft deleted.
 fn builder_method(type, name) {
     let args = type.type_args;
-    if args.len() > 0 {
+    // of a model nothing says, as with a parameter of just `Builder`: any model's scope can be called
+    // on it, as a scope's own `$query` shows, and it's only known that it could be such a query
+    if args.len() == 0 || args[0].class_name == model_class() {
+        if laravel_has_scope(name) { return "$this"; }
+        if name in ["withTrashed", "withoutTrashed", "onlyTrashed", "restore", "restoreOrCreate", "createOrRestore"]
+            && class("Illuminate\\Database\\Eloquent\\SoftDeletes") != () {
+            return "$this";
+        }
+    } else {
         // of each model a query can be of, for `Builder<Page|Chapter>`
         let found = ();
         for model in args[0].types() {
@@ -419,11 +614,23 @@ fn magic_property(type, name) {
     let class_name = type.class_name;
     if class_name == () { return; }
     if class_name == model_class() { return "mixed"; }
+    if class_name == "Illuminate\\Support\\Optional" {
+        let args = type.type_args;
+        if args.len() > 0 && !args[0].is_unknown() {
+            return #{ forward_to: args[0].to_string(), nullable: true };
+        }
+        return "mixed";
+    }
     let c = class(class_name);
     if c == () { return; }
     if c.is_subtype_of(model_class()) { return "mixed"; }
     // a request's input, by name
     if c.is_subtype_of("Illuminate\\Http\\Request") { return "mixed"; }
+    // `$errors->login`, the messages of a named form
+    if class_name == "Illuminate\\Support\\ViewErrorBag" {
+        let bag = type.method_type("getBag");
+        if bag != () { return bag.to_string(); }
+    }
     // `$users->map->name`: each value's, as the values have it
     if class_name == "Illuminate\\Support\\HigherOrderCollectionProxy" {
         let args = type.type_args;
@@ -435,14 +642,49 @@ fn magic_property(type, name) {
 
 fn return_type_targets() {
     #{
+        functions: ["optional", "view"],
         methods: [
             "Illuminate\\Contracts\\Auth\\Guard::user",
             "Illuminate\\Auth\\SessionGuard::user",
             "Illuminate\\Auth\\AuthManager::user",
             "Illuminate\\Http\\Request::user",
+            "Illuminate\\Contracts\\View\\Factory::make",
+            "Illuminate\\Contracts\\View\\Factory::file",
+            "Illuminate\\Contracts\\View\\Factory::first",
+            "Illuminate\\Database\\Eloquent\\Factories\\Factory::create",
+            "Illuminate\\Database\\Eloquent\\Factories\\Factory::make",
+            "Illuminate\\Database\\Eloquent\\Factories\\Factory::createOne",
+            "Illuminate\\Database\\Eloquent\\Factories\\Factory::makeOne",
+            "Illuminate\\Database\\Eloquent\\Factories\\Factory::createMany",
+            "Illuminate\\Database\\Eloquent\\Factories\\Factory::createQuietly",
+            "Illuminate\\Database\\Eloquent\\Factories\\Factory::createOneQuietly",
+            "Illuminate\\Database\\Eloquent\\Factories\\Factory::createManyQuietly",
+            // what a model's own method returns, when it says a class and not of what
+            "Illuminate\\Database\\Eloquent\\Model::*",
         ],
-        static_methods: ["Illuminate\\Support\\Facades\\Auth::user"],
+        static_methods: [
+            "Illuminate\\Support\\Facades\\Auth::user",
+            "Illuminate\\Support\\Facades\\View::make",
+            "Illuminate\\Support\\Facades\\View::file",
+            "Illuminate\\Support\\Facades\\View::first",
+            "Illuminate\\Database\\Eloquent\\Model::factory",
+        ],
     }
+}
+
+// The view Laravel's factory makes, which is more than the contract it's declared to return.
+fn made_view(ctx) {
+    if ctx.declared_return_type.class_name == "Illuminate\\Contracts\\View\\View" { return "Illuminate\\View\\View"; }
+}
+
+fn return_type_of_function(node, ctx) {
+    if node.name == "view" { return made_view(ctx); }
+    // `optional($value)`, knowing what it's the optional of
+    let args = node.arguments;
+    if args.len() != 1 { return; }
+    let value = ctx.get_type(args[0]);
+    if value.is_unknown() || value.is_null() { return; }
+    "Illuminate\\Support\\Optional<" + value.without_null().to_string() + ">"
 }
 
 // The user model of the project's configuration, for what gives the user signed in.
@@ -455,12 +697,40 @@ fn user_model() {
 }
 
 fn return_type_of_method(node, ctx) {
+    let on = ctx.get_type(node.receiver).class_name;
+    let c = if on != () { class(on) } else { () };
+    if c != () {
+        if c.is_subtype_of(factory_class()) { return factory_result(node, c); }
+        if c.is_subtype_of(model_class()) {
+            let declared = ctx.declared_return_type.class_name;
+            if declared == "Illuminate\\Database\\Eloquent\\Collection" {
+                return collection_of_relation(c, node.name);
+            }
+            let relation = class(declared);
+            if relation != () && relation.is_subtype_of(relation_class()) {
+                return relation_with_models(c, node.name, relation);
+            }
+            return;
+        }
+        if c.is_subtype_of("Illuminate\\Contracts\\View\\Factory") { return made_view(ctx); }
+    }
     let user = user_model();
     if user == () { return; }
     "?" + user
 }
 
 fn return_type_of_static_method(node, ctx) {
+    let name = node.name.to_lower();
+    if name == "factory" {
+        // what a model's `@use HasFactory<ItsFactory>` says already says more
+        if ctx.declared_return_type.class_name != factory_class() { return; }
+        let model = class(ctx.get_type(node.receiver).class_name);
+        if model == () { return; }
+        let factory = factory_of(model);
+        if factory != () { return factory.name; }
+        return;
+    }
+    if name == "make" || name == "file" || name == "first" { return made_view(ctx); }
     let user = user_model();
     if user == () { return; }
     "?" + user

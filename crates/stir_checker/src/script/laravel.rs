@@ -4,7 +4,7 @@
 //! project's own files, as written: nothing is run, so a migration that builds its columns in a
 //! loop, or a configuration value computed at runtime, isn't known.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use stir_db::{Db, FileOrigin, SourceFile, Workspace};
 use stir_script::rhai::{Array, Dynamic, Engine, Map};
@@ -483,39 +483,136 @@ fn config(key: &str) -> Dynamic {
     .unwrap_or(Dynamic::UNIT)
 }
 
-/// The macros the project's code adds, `Collection::macro('toUpper', ..)`: by the class's
-/// lowercase name, the macros' names.
+/// The macros that the project's code and its packages add, `Collection::macro('toUpper', ..)` and
+/// `Collection::mixin(new Helpers)`: by the class's lowercase name, the macros' names.
 #[salsa::tracked(returns(ref))]
 pub fn laravel_macros(db: &dyn Db, ws: Workspace) -> BTreeMap<String, Vec<String>> {
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut add = |class: &str, name: String| {
+        let names = out.entry(class.to_ascii_lowercase()).or_default();
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    };
+    let ctx = Ctx::new(db, ws);
     for &file in ws.files(db) {
-        if file.origin(db) != FileOrigin::Source || !file.text(db).contains("macro(") {
+        if !matches!(file.origin(db), FileOrigin::Source | FileOrigin::Vendor) {
+            continue;
+        }
+        let text = file.text(db);
+        if !text.contains("macro(") && !text.contains("::mixin(") {
             continue;
         }
         let root = stir_db::parse(db, file).syntax();
         let items = stir_hir::file_items(db, file);
-        for call in root.descendants().filter(|n| n.kind() == STATIC_CALL_EXPR) {
+        for call in root
+            .descendants()
+            .filter(|n| matches!(n.kind(), STATIC_CALL_EXPR | METHOD_CALL_EXPR))
+        {
             let Some(fetch) = call.children().next() else {
                 continue;
             };
-            if name_of(&fetch).as_deref() != Some("macro") {
-                continue;
-            }
-            let Some(class) = fetch.children().next().filter(|c| c.kind() == NAME_EXPR) else {
+            let Some(method) = name_of(&fetch) else {
                 continue;
             };
-            let Some(name) = arguments(&call).first().and_then(string_value) else {
+            if method != "macro" && method != "mixin" {
+                continue;
+            }
+            let Some(receiver) = fetch.children().next() else {
                 continue;
             };
             let scope = items.scope_at(call.text_range().start());
-            let class = scope.resolve_class(class.text().to_string().trim());
-            let names = out.entry(class.as_str().to_ascii_lowercase()).or_default();
-            if !names.contains(&name) {
-                names.push(name);
+            let class = if call.kind() == STATIC_CALL_EXPR {
+                if receiver.kind() != NAME_EXPR {
+                    continue;
+                }
+                let name = receiver.text().to_string();
+                scope.resolve_class(name.trim()).as_str().to_owned()
+            } else if receiver.text().to_string().trim() == "$router" {
+                // the one object of Laravel's that has this done to it, by what's in the container
+                "Illuminate\\Routing\\Router".to_owned()
+            } else {
+                continue;
+            };
+            let args = arguments(&call);
+            let Some(first) = args.first() else {
+                continue;
+            };
+            if method == "macro" {
+                if let Some(name) = string_value(first) {
+                    add(&class, name);
+                }
+                continue;
+            }
+            // what a mixin has, public or protected, gives back the closure of a macro by that name
+            let Some(mixin) = first
+                .children()
+                .find(|c| matches!(c.kind(), NAME_EXPR | NAME_REF | NAME))
+                .filter(|_| first.kind() == NEW_EXPR)
+            else {
+                continue;
+            };
+            let mixin = scope.resolve_class(mixin.text().to_string().trim());
+            let Some(mixin) = ctx.class(mixin.as_str()) else {
+                continue;
+            };
+            for m in &mixin.def.methods {
+                if m.mods.visibility != stir_hir::Visibility::Private && !m.name.starts_with("__") {
+                    add(&class, m.name.to_string());
+                }
             }
         }
     }
     out
+}
+
+/// The names of the scopes the project's models have, in lowercase, for a query of a model nothing
+/// says: `scopeActive` and `#[Scope] active` are `active`.
+#[salsa::tracked(returns(ref))]
+pub fn laravel_scopes(db: &dyn Db, ws: Workspace) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for &file in ws.files(db) {
+        if file.origin(db) != FileOrigin::Source {
+            continue;
+        }
+        let text = file.text(db);
+        let attributes = text.contains("Scope]") || text.contains("Attributes\\Scope");
+        if !text.contains("function scope") && !attributes {
+            continue;
+        }
+        let root = stir_db::parse(db, file).syntax();
+        for method in root.descendants().filter(|n| n.kind() == METHOD_DECL) {
+            let Some(name) = name_of(&method) else {
+                continue;
+            };
+            if let Some(scope) = name.strip_prefix("scope")
+                && scope.starts_with(char::is_uppercase)
+            {
+                out.insert(scope.to_ascii_lowercase());
+            } else if attributes
+                && method
+                    .children()
+                    .filter(|c| c.kind() == ATTRIBUTE_LIST)
+                    .any(|a| {
+                        let text = a.text().to_string();
+                        text.contains("[Scope") || text.contains("\\Scope")
+                    })
+            {
+                out.insert(name.to_ascii_lowercase());
+            }
+        }
+    }
+    out
+}
+
+/// `laravel_has_scope(name)`: is that a scope of some model of the project?
+fn has_scope(name: &str) -> bool {
+    stir_db::attached(|db| {
+        let ws = Workspace::try_get(db)?;
+        Some(laravel_scopes(db, ws).contains(&name.to_ascii_lowercase()))
+    })
+    .flatten()
+    .unwrap_or(false)
 }
 
 /// `laravel_macros(class)`: the names of the macros the project adds to `class` itself.
@@ -534,7 +631,8 @@ pub(super) fn register(engine: &mut Engine) {
     engine
         .register_fn("laravel_columns", columns)
         .register_fn("laravel_config", config)
-        .register_fn("laravel_macros", macros);
+        .register_fn("laravel_macros", macros)
+        .register_fn("laravel_has_scope", has_scope);
 }
 
 #[cfg(test)]

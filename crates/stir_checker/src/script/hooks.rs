@@ -87,7 +87,13 @@ impl Checker<'_, '_> {
         if targets.is_empty() {
             return ret;
         }
-        let Some(targets) = targets.get(name.to_ascii_lowercase().as_str()) else {
+        let named = targets.get(name.to_ascii_lowercase().as_str());
+        // a target of `Class::*` is for what says the class it returns, and no more
+        let Some(targets) = named.or_else(|| {
+            matches!(ret.kind(), TyKind::Class { args, .. } if args.is_empty())
+                .then(|| targets.get("*"))
+                .flatten()
+        }) else {
             return ret;
         };
         let TyKind::Class {

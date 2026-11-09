@@ -356,6 +356,9 @@ hasn't got, on an object or statically, are made on a value of that type instead
 a model forwarding to its query builder. `static` in it is the class the call is made on. Completion offers that type's
 public methods too.
 
+A method target can be `"App\\Model::*"`: `return_type_of_method` is then asked of any of that class's methods that gives a
+class without saying its type arguments, for what the method's own code says of them.
+
 What depends on a type's arguments, or on the name itself, is answered one name at a time. These run only where nothing
 else has the member, `@mixin` types included, just before `__call` and `__get` would be reported:
 
@@ -433,7 +436,7 @@ where reading many files would be slow in a script. They're ours, so they run wi
 and they're never read from disk, so no file of a project can stand in for one. A project's own scripts come first and can
 override what they say.
 
-Each is on when the project uses that framework: `laravel/framework`, `pestphp/pest`, `symfony/framework-bundle`, `symfony/symfony` or
+Each is on when the project uses that framework: `laravel/framework`, `pestphp/pest`, `mockery/mockery`, `symfony/framework-bundle`, `symfony/symfony` or
 `symfony/dependency-injection` (unless the project is built on Laravel or Drupal), and for WordPress
 `johnpbloch/wordpress-core`, `roots/wordpress`, `php-stubs/wordpress-stubs`, a `wp-config.php` or `wp-content` folder, or
 a plugin's `Plugin Name:` header. `parameters.stirphp.frameworks` turns one off or on: `{laravel: false, wordpress: true}`.
@@ -446,11 +449,21 @@ a plugin's `Plugin Name:` header. `parameters.stirphp.frameworks` turns one off 
   converts it. An attribute nothing declares is `mixed` rather than an error, as migrations aren't always the whole story.
 - Scopes (`scopeActive()` and `#[Scope]`) are on the model and its queries, with their parameters. Calls a model hasn't got,
   statically or not, go to `Builder<Model>`, and a relation's go to a query of its related model; `where{Column}()` works
-  on both, and so do query methods a model declares, such as `withTrashed()` from `SoftDeletes`.
+  on both, and so do query methods a model declares, such as `withTrashed()` from `SoftDeletes`. On a `Builder` that says
+  no model, such as a scope's own `$query`, a scope of any of the project's models can be called, and others are reported.
+- A model's method that says just `HasMany` or `Collection` and returns `$this->hasMany(Post::class)` or `$this->posts` is
+  what's in it: a relation of `Post`, a collection of `Post`.
+- `User::factory()` is the model's factory, by `$factory`, `#[UseFactory]`, `newFactory()` or its name, and what it makes is
+  by `$model`, `@extends` or its name. `create()` and `make()` give the model, or a collection after `count()`, `times()`
+  or `factory(3)` on the way to them; a factory that's been passed around is taken to have no count. `hasPosts()` and
+  `forAuthor()` need the model to have that relation.
+- `optional($value)` has what its value has, each giving `null` as well, and `tap($value)` has what its value has too.
+  `view('name')` is an `Illuminate\View\View`, which is what Laravel's factory makes.
 - Facades forward to what their accessor names, by class or by the container's names for Laravel's services, and contracts
   such as `Illuminate\Contracts\Auth\Factory` to the class Laravel binds them to. `auth()->user()`, `Auth::user()` and
   `$request->user()` give the user model `config/auth.php` names. Laravel's class aliases, such as `\DB`, are there.
-- Macros the project adds with `Foo::macro('name', ..)` aren't reported, though what they return isn't known.
+- Macros the project and its packages add with `Foo::macro('name', ..)` and `Foo::mixin(new Bar)` aren't reported, though
+  what they return isn't known.
 - In a closure given to `Artisan::command()` or the console kernel's `command()`, `$this` is the `ClosureCommand` Laravel
   binds it to, so `$this->comment()` and `$this->argument()` resolve; not in a static closure, which PHP can't bind.
 - In an editor, these complete, hover and lead to where they're declared: a relation's property to its method, a scope to its
