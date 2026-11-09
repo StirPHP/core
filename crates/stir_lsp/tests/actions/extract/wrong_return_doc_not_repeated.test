@@ -1,0 +1,31 @@
+=== action: Extract method
+=== level: 5
+=== input
+<?php
+interface Page {}
+function page(): Page { throw new Exception(); }
+class A {
+    /**
+     * @return int[]
+     */
+    public static function get(): Page {
+        ⟦return page();⟧
+    }
+}
+=== output
+<?php
+interface Page {}
+function page(): Page { throw new Exception(); }
+class A {
+    /**
+     * @return int[]
+     */
+    public static function get(): Page {
+        return self::extracted();
+    }
+
+    private static function extracted(): Page
+    {
+        return page();
+    }
+}

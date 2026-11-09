@@ -1,0 +1,23 @@
+=== action: Extract method
+=== php: 8.1
+=== input
+<?php
+function stop(int $code): never { throw new Exception(); }
+class A {
+    public function run(): int {
+        ⟦stop(500);⟧
+    }
+}
+=== output
+<?php
+function stop(int $code): never { throw new Exception(); }
+class A {
+    public function run(): int {
+        self::extracted();
+    }
+
+    private static function extracted(): never
+    {
+        stop(500);
+    }
+}

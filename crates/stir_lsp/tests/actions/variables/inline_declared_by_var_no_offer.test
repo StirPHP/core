@@ -1,0 +1,12 @@
+=== action: Inline `$thing`
+=== input
+<?php
+class Wide {}
+class Narrow extends Wide { public function run(): void {} }
+function get(): Wide { return new Narrow; }
+function go(): void {
+    /** @var Narrow $thing */
+    $th‸ing = get();
+    $thing->run();
+}
+=== no-offer

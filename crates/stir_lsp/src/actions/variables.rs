@@ -685,6 +685,13 @@ pub fn inline_offers<'c>(cx: &'c Cx<'c>, out: &mut Vec<Offer<'c>>) {
     if reads.is_empty() || reads.iter().any(|r| r.text_range().start() < assign_end) {
         return;
     }
+    // `@var` on it says more than the value does, and that would go with it
+    if assign
+        .doc_comment()
+        .is_some_and(|d| d.text().contains("@var"))
+    {
+        return;
+    }
     // the value's own variable isn't what's being replaced
     if value
         .descendants_with_tokens()

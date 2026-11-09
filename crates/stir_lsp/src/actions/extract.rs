@@ -780,7 +780,20 @@ fn input_type(
         return None;
     }
     let value = only.children().nth(1)?;
-    let ty = cx.typed().types.get(&value.text_range())?;
+    // `@var` on it says what it is, whatever the value says
+    let declared = statement
+        .doc_comment()
+        .is_some_and(|d| d.text().contains("@var"));
+    let ty = if declared {
+        selection
+            .nodes
+            .iter()
+            .flat_map(|n| n.descendants())
+            .find(|n| n.kind() == VARIABLE_EXPR && n.text().to_string().trim() == name)
+            .and_then(|read| cx.typed().types.get(&read.text_range()))?
+    } else {
+        cx.typed().types.get(&value.text_range())?
+    };
     written_of(cx, namer, ty)
 }
 
@@ -790,7 +803,9 @@ fn written_of(cx: &Cx<'_>, namer: &mut Namer<'_>, ty: &Ty) -> Option<(String, Op
         return None;
     }
     let w = native(cx, namer, ty)?;
-    (!matches!(w.native.as_str(), "void" | "never" | "null")).then_some((w.native, w.doc))
+    // an array that's empty so far says nothing of what it's for: `array`, not `list<never>`
+    let doc = w.doc.filter(|d| !d.contains("<never>"));
+    (!matches!(w.native.as_str(), "void" | "never" | "null")).then_some((w.native, doc))
 }
 
 /// Is `node` a plain or compound assignment of the variable `name`?
@@ -1003,7 +1018,16 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
         .flat_map(|n| std::iter::once(n.clone()).chain(super::fix_types::own_nodes(n)))
         .filter(|n| n.kind() == RETURN_STMT)
         .collect();
-    let leaves = !selection.expression && selection.nodes.iter().any(always_leaves);
+    // it can be a call of what never comes back, too, like `abort()`
+    let ends_in_never = selection.nodes.last().is_some_and(|n| {
+        n.kind() == EXPR_STMT
+            && n.children()
+                .next()
+                .and_then(|e| cx.typed().types.get(&e.text_range()).cloned())
+                .is_some_and(|t| t.is_never())
+    });
+    let leaves =
+        !selection.expression && (selection.nodes.iter().any(always_leaves) || ends_in_never);
     // what comes after isn't run once this has left: nothing it sets is wanted there
     if leaves {
         outputs.clear();
@@ -1032,7 +1056,11 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
         .and_then(|f| f.child(RETURN_TYPE))
         .and_then(|r| written_type(&r))
         .map(|t| t.text().to_string().trim().to_owned());
-    let declared_doc = function.as_ref().and_then(return_tag);
+    // what the function says of itself that the checker has an issue with isn't worth repeating
+    let declared_doc = function
+        .as_ref()
+        .filter(|f| !return_doc_is_wrong(cx, f))
+        .and_then(return_tag);
     let (return_type, doc_return) = match returning {
         Returning::Value => match declared_return {
             Some(t) => (Some(t), declared_doc),
@@ -1171,6 +1199,14 @@ fn plan(cx: &Cx<'_>, selection: &Selection) -> Result<Plan, Refusal> {
         name,
         function,
     })
+}
+
+/// Is what `function`'s doc comment says it returns reported as not fitting its native type?
+fn return_doc_is_wrong(cx: &Cx<'_>, function: &SyntaxNode) -> bool {
+    let range = function.text_range();
+    stir_checker::check_file(cx.db, cx.ws, cx.file)
+        .iter()
+        .any(|d| d.code == "return.phpDocType" && range.contains_range(d.range))
 }
 
 /// What a function's doc comment says it returns, as the tag is written: `@return T`.

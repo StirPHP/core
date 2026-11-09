@@ -1,0 +1,21 @@
+=== action: Extract function
+=== input
+<?php
+function go(): void {
+    $found = [];
+    ⟦$found[] = 1;⟧
+    echo count($found);
+}
+=== output
+<?php
+function go(): void {
+    $found = [];
+    $found = extracted($found);
+    echo count($found);
+}
+
+function extracted(array $found)
+{
+    $found[] = 1;
+    return $found;
+}

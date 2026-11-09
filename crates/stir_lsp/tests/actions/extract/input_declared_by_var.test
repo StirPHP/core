@@ -1,0 +1,26 @@
+=== action: Extract function
+=== input
+<?php
+class Wide {}
+class Narrow extends Wide { public function run(): void {} }
+function get(): Wide { return new Narrow; }
+function go(): void {
+    /** @var Narrow $thing */
+    $thing = get();
+    ⟦$thing->run();⟧
+}
+=== output
+<?php
+class Wide {}
+class Narrow extends Wide { public function run(): void {} }
+function get(): Wide { return new Narrow; }
+function go(): void {
+    /** @var Narrow $thing */
+    $thing = get();
+    extracted($thing);
+}
+
+function extracted(Narrow $thing): void
+{
+    $thing->run();
+}
