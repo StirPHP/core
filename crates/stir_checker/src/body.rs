@@ -194,6 +194,7 @@ fn is_stmt_kind(k: SyntaxKind) -> bool {
             | CONST_DECL
             | HALT_COMPILER_STMT
             | BLADE_DIRECTIVE
+            | BLADE_TAG
     )
 }
 
@@ -964,6 +965,7 @@ impl<'a, 'db> Checker<'a, 'db> {
             LABEL_STMT => self.dead = false,
             EMPTY_STMT | INLINE_HTML_STMT | USE_DECL | HALT_COMPILER_STMT => {}
             BLADE_DIRECTIVE => self.blade_directive(node),
+            BLADE_TAG => self.blade_tag(node),
             TRY_STMT => self.try_stmt(node),
             GLOBAL_STMT => {
                 for v in node.descendants().filter(|d| d.kind() == VARIABLE_EXPR) {

@@ -1,1 +1,1 @@
-{{ $anything }} {{ $slot }}
+{{ $anything }} {{ $slot }} // error: variable.undefined

@@ -131,7 +131,7 @@ fn attribute(p: &mut Parser<'_>) {
         attribute_php(p);
     } else if p.eat(EQ) {
         let quoted = p.eat(BLADE_ATTR_QUOTE);
-        if blade::attr_is_bound(&spelled) {
+        if blade::attr_is_bound(spelled) {
             if !at_attribute_end(p) {
                 attribute_php(p);
             }

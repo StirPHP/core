@@ -58,8 +58,11 @@ impl Template {
         if !stir_syntax::is_blade_path(&checker.path) {
             return None;
         }
+        let (db, ws) = (checker.ctx.db, checker.ctx.ws);
+        let view = crate::views::view_data(db, ws, checker.file).clone();
         let path = checker.path.to_string_lossy().replace('\\', "/");
-        let is_component = path.contains("/components/")
+        let is_component = view.component
+            || path.contains("/components/")
             || root
                 .descendants()
                 .filter(|n| n.kind() == BLADE_DIRECTIVE)
@@ -79,8 +82,6 @@ impl Template {
                 }
             }
         }
-        let (db, ws) = (checker.ctx.db, checker.ctx.ws);
-        let view = crate::views::view_data(db, ws, checker.file).clone();
         // which only matters where something's made of what's defined here
         let directive_variables =
             if view.is_closed() || view.open == Some(crate::views::OpenReason::ErrorPage) {
@@ -300,6 +301,15 @@ impl<'a, 'db> Checker<'a, 'db> {
                 (name.clone(), ty, local.maybe_undefined)
             })
             .collect();
+        // what a component has, as nothing has to have read them yet
+        if self.template.as_ref().is_some_and(|t| t.is_component) {
+            for name in ["slot", "attributes", "component"] {
+                if !scope.iter().any(|(n, ..)| n == name) {
+                    let ty = self.implicit_variable(name).unwrap_or_else(Ty::untyped);
+                    scope.push((SmolStr::new(name), given_type(&ty), false));
+                }
+            }
+        }
         scope.sort_by(|a, b| a.0.cmp(&b.0));
         ViewFlow {
             scope,
@@ -560,7 +570,8 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
         match name.as_str() {
             "unset" => return self.unset(&values),
-            "props" | "aware" => self.declare_named_by_array(&values),
+            "props" => self.declare_named_by_array(&values, true),
+            "aware" => self.declare_named_by_array(&values, false),
             "inject" => self.inject(&values),
             _ => {
                 for value in &values {
@@ -589,9 +600,10 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
-    /// `@props(['title', 'kind' => 'info'])`: each is a variable, of whatever its component is
-    /// given, which the default says nothing of. `@aware` is the same for those of a parent.
-    fn declare_named_by_array(&mut self, values: &[SyntaxNode]) {
+    /// `@props(['title', 'kind' => 'info'])`: each is a variable, of what its component is given
+    /// where that's known, and of its default if there may be nothing given. `@aware` is the same
+    /// for what's given to a parent, which isn't looked at: that's anything.
+    fn declare_named_by_array(&mut self, values: &[SyntaxNode], typed: bool) {
         for value in values {
             if value.kind() != ARRAY_EXPR {
                 self.expr(value, None);
@@ -600,17 +612,241 @@ impl<'a, 'db> Checker<'a, 'db> {
             for elem in value.children_of(ARRAY_ELEM) {
                 let parts = exprs_of(&elem);
                 let Some(name) = parts.first() else { continue };
-                if parts.len() > 1 {
-                    for default in &parts[1..] {
-                        self.expr(default, None);
-                    }
-                }
+                let default: Vec<Ty> = parts[1..]
+                    .iter()
+                    .map(|default| self.expr(default, None))
+                    .collect();
                 let Some(variable) = plain_string(name) else {
                     self.expr(name, None);
                     continue;
                 };
-                self.declare_implicit(&variable, Ty::untyped(), name.text_range());
+                let ty = if typed {
+                    self.prop_type(&variable, default.first())
+                } else {
+                    Ty::untyped()
+                };
+                self.declare_implicit(&variable, ty, name.text_range());
             }
+        }
+    }
+
+    /// What a variable of `@props` holds: `$name = $name ?? $default`, as Laravel compiles it. A
+    /// default of `null`, which is to say it may not be given, isn't made part of it: the same is
+    /// said for all that's given to a component if it's asked, and no more.
+    fn prop_type(&self, name: &str, default: Option<&Ty>) -> Ty {
+        let Some(template) = &self.template else {
+            return Ty::untyped();
+        };
+        if !template.view.is_closed() || template.view.spread {
+            return Ty::untyped();
+        }
+        let default = default
+            .map(given_type)
+            .filter(|d| !d.is_null() && !d.is_untyped());
+        match (template.view.vars.get(name), default) {
+            (Some(given), None) => given.ty.clone(),
+            (Some(given), Some(default)) => {
+                if given.ty.is_untyped() {
+                    return Ty::untyped();
+                }
+                let without_null = stir_types::without_null(&given.ty);
+                let may_be_left_out = given.optional || without_null != given.ty;
+                if may_be_left_out {
+                    Ty::union(vec![without_null, default])
+                } else {
+                    given.ty.clone()
+                }
+            }
+            (None, Some(default)) => default,
+            (None, None) => Ty::untyped(),
+        }
+    }
+
+    /// `<x-name ...>`: what's in it is checked where it is, and what's in between it and its end
+    /// is in the same scope as it, so there's nothing to do for that.
+    pub(super) fn blade_tag(&mut self, tag: &SyntaxNode) {
+        let name = crate::views::tag_name(tag);
+        for echo in tag.children_of(BLADE_ATTR_ECHO) {
+            for e in exprs_of(&echo) {
+                self.expr(&e, None);
+            }
+        }
+        for directive in tag.children_of(BLADE_DIRECTIVE) {
+            self.blade_directive(&directive);
+        }
+        let is_slot = crate::views::tag_is_slot(tag);
+        let class = if is_slot {
+            None
+        } else {
+            self.project_component_class(&name)
+        };
+        let signature = class.as_deref().and_then(|class| {
+            let model = self.ctx.class(class)?;
+            let (owner, method, _) = self.ctx.find_method(&model.self_ty(), "__construct")?;
+            Some(self.ctx.method_sig(&owner, method))
+        });
+        for attr in tag.children_of(BLADE_ATTR) {
+            for echo in attr.children_of(BLADE_ATTR_ECHO) {
+                for e in exprs_of(&echo) {
+                    self.expr(&e, None);
+                }
+            }
+        }
+        let attributes = crate::views::tag_attributes(tag);
+        for attr in &attributes {
+            let key = stir_syntax::blade_camel(&attr.key);
+            let param = signature
+                .as_ref()
+                .and_then(|sig| sig.params.iter().find(|p| p.name == key.as_str()));
+            let given = match &attr.php {
+                Some(php) => {
+                    let ty = self.expr(php, param.map(|p| &p.ty));
+                    // the rest of them, in the rare case of there being some
+                    if let Some(parent) = php.parent() {
+                        for rest in exprs_of(&parent) {
+                            if &rest != php {
+                                self.expr(&rest, None);
+                            }
+                        }
+                    }
+                    Some((ty, php.text_range()))
+                }
+                None if attr.bare => Some((Ty::bool(), attr.name_range)),
+                None => attr
+                    .text
+                    .as_ref()
+                    .map(|words| {
+                        (
+                            Ty::literal(LitValue::String(SmolStr::new(words))),
+                            attr.name_range,
+                        )
+                    })
+                    .or_else(|| attr.echoes.then(|| (Ty::string(), attr.name_range))),
+            };
+            if let (Some((ty, range)), Some(param)) = (given, param) {
+                self.check_tag_attribute(&name, &key, range, &ty, &param.ty);
+            }
+        }
+        if let (Some(class), Some(signature)) = (&class, &signature) {
+            self.check_required_of_component(tag, &name, class, signature, &attributes);
+        }
+    }
+
+    /// The class a tag stands for, if it's the project's: a package's are left alone.
+    fn project_component_class(&self, tag: &str) -> Option<String> {
+        let (db, ws) = (self.ctx.db, self.ctx.ws);
+        let crate::views::ComponentTarget::Class(class) =
+            crate::views::resolve_component(db, ws, tag)
+        else {
+            return None;
+        };
+        let model = self.ctx.class(&class)?;
+        (model.origin == stir_db::FileOrigin::Source).then_some(class)
+    }
+
+    /// A value for a parameter of a component's constructor. Laravel's call of it never has strict
+    /// types, whatever the template or the class has, and what can be coerced is.
+    fn check_tag_attribute(&mut self, tag: &str, key: &str, range: TextRange, ty: &Ty, want: &Ty) {
+        let what = format!("attribute `{key}` of `<x-{tag}>`");
+        if accepts_php_scalars(want) {
+            let rest: Vec<Ty> = ty
+                .members()
+                .iter()
+                .filter(|m| !coerces_to(m, want) && !self.is_stringable_for(m, want))
+                .cloned()
+                .collect();
+            // what's only maybe wrong is no more than that of what a template is given
+            if rest.len() < ty.members().len() {
+                return;
+            }
+        }
+        self.check_assign(range, ty, want, &what, codes::ARGUMENT_TYPE);
+    }
+
+    /// A parameter of the constructor nothing in the tag gives, which Laravel can't fill in. That
+    /// comes down to `Container::resolvePrimitive`: a parameter that's a class is made by the
+    /// container, and one with a default or `null` to fall back on gets that. A parent's
+    /// `$attributes` also go to the constructor, so it has to be known there are none.
+    fn check_required_of_component(
+        &mut self,
+        tag: &SyntaxNode,
+        name: &str,
+        class: &str,
+        signature: &crate::model::FnSig,
+        attributes: &[crate::views::TagAttribute],
+    ) {
+        let Some(template) = &self.template else {
+            return;
+        };
+        if !template.view.is_closed()
+            || template.is_component
+            || template.view.vars.contains_key("attributes")
+            || self.lookup("attributes").is_some()
+        {
+            return;
+        }
+        let (db, ws) = (self.ctx.db, self.ctx.ws);
+        let Some(model) = self.ctx.class(class) else {
+            return;
+        };
+        // its own way of being made
+        let made_as_usual = self
+            .ctx
+            .find_method(&model.self_ty(), "resolve")
+            .is_some_and(|(owner, ..)| owner.key == crate::views::COMPONENT.to_ascii_lowercase());
+        if !made_as_usual || model.def.mods.is_abstract || *crate::views::container_is_told(db, ws)
+        {
+            return;
+        }
+        let Some((_, method, _)) = self.ctx.find_method(&model.self_ty(), "__construct") else {
+            return;
+        };
+        let mut missing = Vec::new();
+        for (param, native) in signature.params.iter().zip(&method.sig.params) {
+            let given = attributes
+                .iter()
+                .any(|a| stir_syntax::blade_camel(&a.key) == param.name.as_str());
+            if given || param.optional || param.variadic {
+                continue;
+            }
+            let builtin_only = match &native.ty {
+                None => true,
+                Some(_) => {
+                    !stir_types::is_nullable(self.ctx, &param.ty)
+                        && !param.ty.is_untyped()
+                        && param.ty.members().iter().all(|m| {
+                            matches!(
+                                m.kind(),
+                                TyKind::Int
+                                    | TyKind::Float
+                                    | TyKind::String
+                                    | TyKind::Bool
+                                    | TyKind::Array { .. }
+                                    | TyKind::List { .. }
+                            )
+                        })
+                }
+            };
+            // `#[Config('..')]` and the like make it for itself
+            if builtin_only && !native.has_attribute {
+                missing.push(param.name.clone());
+            }
+        }
+        if missing.is_empty() {
+            return;
+        }
+        let range = tag
+            .token(BLADE_TAG_NAME)
+            .map_or_else(|| tag.text_range(), |t| t.text_range());
+        for param in missing {
+            self.error(
+                range,
+                codes::ARGUMENTS_COUNT,
+                format!(
+                    "`<x-{name}>` has nothing for `${param}` of the constructor of `{}`, which Laravel can't fill in itself",
+                    model.name
+                ),
+            );
         }
     }
 

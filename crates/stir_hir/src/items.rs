@@ -71,6 +71,8 @@ pub struct ParamDef {
     pub closure_this: Option<TypeRef>,
     pub variadic: bool,
     pub by_ref: bool,
+    /// Has an attribute, which something could give it its value by.
+    pub has_attribute: bool,
     /// Constructor promotion: `private int $x`.
     pub promoted: Option<PromotedProperty>,
     pub range: TextRange,
@@ -228,6 +230,7 @@ pub fn magic_members(
                         doc_ty: mp.ty.as_ref().map(|t| dcx.lower(t)),
                         has_default: mp.default.is_some(),
                         default_is_null: false,
+                        has_attribute: false,
                         default_ty: None,
                         out_ty: None,
                         closure_this: None,
@@ -836,6 +839,7 @@ impl Lowerer {
                 doc_ty: None,
                 has_default: true,
                 default_is_null: false,
+                has_attribute: false,
                 default_ty: None,
                 out_ty: None,
                 closure_this: None,
@@ -993,6 +997,10 @@ impl Lowerer {
             ty: first_type(p).map(|t| self.ctx(names).lower(&t)),
             doc_ty: None,
             has_default: p.has_token(EQ),
+            has_attribute: p.has_token(ATTR_OPEN)
+                || p.children().any(|c| {
+                    matches!(c.kind(), ATTRIBUTE | ATTRIBUTE_GROUP | ATTRIBUTE_LIST)
+                }),
             default_is_null: p.children().any(|c| {
                 c.kind() == NAME_EXPR && c.text().to_string().trim().eq_ignore_ascii_case("null")
             }),

@@ -45,7 +45,8 @@ const UNION_LIMIT: usize = 32;
 pub enum OpenReason {
     /// Not in `resources/views`, not a Laravel application, or not all of the project is looked at.
     ProjectNotKnown,
-    /// A component: `@props`, `@aware`, under `components/` or given through `@component`.
+    /// The view of a class that's looked at here as a component without being known for one, as
+    /// in Livewire's `render()`, or that has more for its template than its public members.
     Component,
     /// Under `errors/`: rendered by Laravel's exception handler.
     ErrorPage,
@@ -89,13 +90,18 @@ pub struct ViewData {
     /// Why there may be more than this: none means it's closed.
     pub open: Option<OpenReason>,
     pub vars: BTreeMap<SmolStr, ViewVar>,
+    /// It's rendered as a component: `$slot` and `$attributes` are there, whatever its name.
+    pub component: bool,
+    /// `{{ $attributes }}` passes on to it what can't be seen: there's no saying what its `@props`
+    /// are given.
+    pub spread: bool,
 }
 
 impl ViewData {
     fn opened(reason: OpenReason) -> ViewData {
         ViewData {
             open: Some(reason),
-            vars: BTreeMap::new(),
+            ..ViewData::default()
         }
     }
 
@@ -115,6 +121,25 @@ enum DataPart {
     FromType(TextRange),
     /// A key that's worked out, or the like.
     NotUnderstood,
+    /// An attribute that's data of an anonymous component. If it's in its `$attributes` for all
+    /// that's known, `@props` takes that variable away again, unless it says it's one of its own.
+    Attribute {
+        name: SmolStr,
+        value: AttributeValue,
+        kept_by_props: bool,
+    },
+    /// `<x-slot:name>` or `@slot('name')`.
+    Slot(SmolStr),
+    /// `{{ $attributes }}` or `:attributes="$bag"` in a tag.
+    AttributeBag,
+}
+
+/// What an attribute of a component's tag holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AttributeValue {
+    Php(TextRange),
+    Text,
+    True,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,6 +157,12 @@ enum SiteKind {
         /// The class this is in, if the receiver is `$this`, or for `Content`.
         class: Option<String>,
     },
+    /// `<x-name>`, or `@component`, which give it what's given and no more. `names` of the first
+    /// are left to find later, by what the workspace has.
+    Component { tag: Option<String> },
+    /// `view()` in a class. If that's a component's, it's its view, by whichever method, with what
+    /// its class has. A `render()` method of anything else is likely to be another such thing.
+    ComponentView { class: Option<String>, render: bool },
 }
 
 /// A place that renders a template by name.
@@ -162,13 +193,214 @@ pub struct ViewSites {
     custom_directives: Vec<(String, DirectiveVars)>,
     /// The variables `View::share` is known to add.
     shared: Vec<SmolStr>,
-    /// Of a template: has `@props` or `@aware`, or `$this`.
-    component: bool,
+    /// Of a template: has `$this`.
     uses_this: bool,
     /// Of a template: the `@name`s in it, in lower case, that a project could have defined.
     at_names: Vec<String>,
     /// Those of them with something in parentheses, which could name a variable.
     at_calls: Vec<String>,
+    /// Of a template: what `@props` declares, if it's all written out and comes before anything is
+    /// read, and so is what's taken away.
+    props: Option<Vec<SmolStr>>,
+    /// What's registered for component tags in this file.
+    registrations: Vec<Registration>,
+    /// The names of slots with no component around them in this file, as in a template that's
+    /// included in one, or in a component this can't tell which that is.
+    stray_slots: Vec<SmolStr>,
+}
+
+/// `Blade::component` and the like, as written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Registration {
+    /// A tag for a class, by its name, or a view.
+    Alias(String, ComponentTarget),
+    /// `Blade::componentNamespace('Ns\\Components', 'prefix')`.
+    ClassNamespace(String, String),
+    /// `Blade::anonymousComponentNamespace('dir', 'prefix')`.
+    ViewNamespace(String, String),
+}
+
+/// What a component's tag stands for.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ComponentTarget {
+    /// A class, by its name as written where it's found.
+    Class(String),
+    /// A template, by its dotted name.
+    View(String),
+    /// `<x-dynamic-component>`: it could be any.
+    Dynamic,
+    /// A package's, or what can't be told.
+    Unknown,
+}
+
+/// An attribute of a component's tag.
+pub(crate) struct TagAttribute {
+    /// As Laravel has it, without what says how it's read.
+    pub(crate) key: String,
+    /// Where its name is.
+    pub(crate) name_range: TextRange,
+    /// Its PHP.
+    pub(crate) php: Option<SyntaxNode>,
+    /// All of its text, if it's nothing but that.
+    pub(crate) text: Option<String>,
+    /// Has an echo in its text.
+    pub(crate) echoes: bool,
+    /// No value: it's `true`.
+    pub(crate) bare: bool,
+}
+
+/// The attributes in a tag.
+pub(crate) fn tag_attributes(tag: &SyntaxNode) -> Vec<TagAttribute> {
+    let mut out = Vec::new();
+    for attr in tag.children().filter(|c| c.kind() == BLADE_ATTR) {
+        let Some(name) = attr.token(BLADE_ATTR_NAME) else {
+            continue;
+        };
+        let php = attr
+            .children()
+            .find(|c| crate::body::is_expr_kind(c.kind()));
+        let spelled = name.text();
+        let key = if spelled == ":" {
+            // `:$name`
+            let Some(variable) = &php else { continue };
+            text(variable).trim_start_matches('$').to_owned()
+        } else {
+            stir_syntax::blade_attr_key(spelled).to_owned()
+        };
+        let bound = spelled == ":" || stir_syntax::blade_attr_is_bound(spelled);
+        let echoes = attr.children().any(|c| c.kind() == BLADE_ATTR_ECHO);
+        let words: String = attr
+            .tokens()
+            .iter()
+            .filter(|t| t.kind() == BLADE_ATTR_TEXT)
+            .map(|t| t.text().to_owned())
+            .collect();
+        out.push(TagAttribute {
+            key,
+            name_range: name.text_range(),
+            php: if bound { php } else { None },
+            text: (!bound && !echoes).then_some(words),
+            echoes,
+            bare: !attr.has_token(EQ) && spelled != ":",
+        });
+    }
+    out
+}
+
+/// The name in a tag.
+pub(crate) fn tag_name(tag: &SyntaxNode) -> String {
+    tag.token(BLADE_TAG_NAME)
+        .map(|t| t.text().to_owned())
+        .unwrap_or_default()
+}
+
+/// Is this tag a slot, by what Laravel looks for first? One that closes itself isn't.
+pub(crate) fn tag_is_slot(tag: &SyntaxNode) -> bool {
+    let name = tag_name(tag);
+    (name == "slot" || name.starts_with("slot:"))
+        && tag.token(BLADE_TAG_END).is_none_or(|t| t.text() == ">")
+}
+
+/// Is this a name that a template could read as a variable?
+fn is_variable_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes
+        .next()
+        .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
+/// What a tag with these attributes gives its component: see [`DataPart::Attribute`].
+fn read_tag_data(tag: &SyntaxNode, out: &mut Vec<DataPart>) {
+    if tag.children().any(|c| c.kind() == BLADE_ATTR_ECHO) {
+        out.push(DataPart::AttributeBag);
+    }
+    for attr in tag_attributes(tag) {
+        if attr.key == "attributes" {
+            out.push(DataPart::AttributeBag);
+            continue;
+        }
+        let value = match &attr.php {
+            Some(php) => AttributeValue::Php(php.text_range()),
+            None if attr.bare => AttributeValue::True,
+            None => AttributeValue::Text,
+        };
+        // the data has it by this name, while it's by the other in `$attributes`, so that
+        // `@props` doesn't get to what's a different variable
+        let camel = stir_syntax::blade_camel(&attr.key);
+        if is_variable_name(&camel) {
+            out.push(DataPart::Attribute {
+                name: SmolStr::new(&camel),
+                value: value.clone(),
+                kept_by_props: camel != attr.key,
+            });
+        }
+        if camel != attr.key && is_variable_name(&attr.key) {
+            out.push(DataPart::Attribute {
+                name: SmolStr::new(&attr.key),
+                value,
+                kept_by_props: false,
+            });
+        }
+    }
+}
+
+/// `<x-slot:name>`, `<x-slot name="name">`, `<x-slot :name="'name'">`: `Err` if it's worked out.
+fn slot_name(tag: &SyntaxNode) -> Result<Option<SmolStr>, ()> {
+    let name = tag_name(tag);
+    if let Some(inline) = name.strip_prefix("slot:") {
+        return Ok(Some(SmolStr::new(stir_syntax::blade_camel(inline))));
+    }
+    let attrs = tag_attributes(tag);
+    let Some(attr) = attrs.iter().find(|a| a.key == "name") else {
+        return Ok(None);
+    };
+    match (&attr.php, &attr.text) {
+        (Some(php), _) => plain_string(php).map(|s| Some(SmolStr::new(&s))).ok_or(()),
+        (None, Some(words)) => Ok(Some(SmolStr::new(words))),
+        _ => Err(()),
+    }
+}
+
+/// Laravel's `formatClassName`: `forms.text-input` is `Forms\\TextInput`.
+fn component_class_path(tag: &str) -> String {
+    let mut out = String::new();
+    for piece in tag.split('.') {
+        if !out.is_empty() {
+            out.push('\\');
+        }
+        let camel = stir_syntax::blade_camel(piece);
+        let mut chars = camel.chars();
+        if let Some(first) = chars.next() {
+            out.extend(first.to_uppercase());
+            out.push_str(chars.as_str());
+        }
+    }
+    out
+}
+
+/// Laravel's `Str::kebab`.
+fn kebab(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 2);
+    for (i, c) in name.chars().enumerate() {
+        if c.is_uppercase() {
+            if i > 0 {
+                out.push('-');
+            }
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Laravel's alias for a class that wasn't given one.
+fn default_alias(class: &str) -> String {
+    if let Some((_, rest)) = class.split_once("\\View\\Components\\") {
+        return rest.split('\\').map(kebab).collect::<Vec<_>>().join(":");
+    }
+    kebab(class.rsplit('\\').next().unwrap_or(class))
 }
 
 /// The variables a template gets from a custom directive it uses, as far as they can be read from
@@ -179,7 +411,7 @@ pub(crate) type DirectiveVars = Option<Vec<SmolStr>>;
 fn might_name_views(text: &str) -> bool {
     const NEEDLES: &[&str] = &[
         "view", "View", "markdown", "Mail::", "Content", "composer", "creator", "Blade::",
-        "layout", "Layout", "template", "Template",
+        "layout", "Layout", "template", "Template", "omponent",
     ];
     NEEDLES.iter().any(|n| text.contains(n))
 }
@@ -712,6 +944,9 @@ struct Reader<'a> {
     out: ViewSites,
     /// The strings that have been read as what they are.
     consumed: Vec<TextRange>,
+    /// The components open at this point: the site of each, or nothing for one that doesn't
+    /// have one, which its slots are lost to.
+    open_components: Vec<Option<usize>>,
 }
 
 impl Reader<'_> {
@@ -761,24 +996,19 @@ impl Reader<'_> {
         if matches!(target.kind(), CLOSURE_EXPR | ARROW_FN_EXPR) {
             return;
         }
-        if enclosing_method(call).as_deref() == Some("render") {
-            let mut targets = Vec::new();
-            read_targets(&target, &mut targets, &mut self.consumed);
-            self.add_opens(targets, OpenReason::Component);
-            return;
-        }
+        let class = enclosing_class(self.db, self.file, call);
+        let render = enclosing_method(call).as_deref() == Some("render");
+        let kind = if render || class.is_some() {
+            SiteKind::ComponentView { class, render }
+        } else {
+            SiteKind::Plain { mail: false }
+        };
         let mut data = Vec::new();
         if let Some(given) = &given {
             read_data(given, &mut data);
         }
         let escapes = read_view_chain(call, &mut data);
-        self.add_site(
-            &target,
-            SiteKind::Plain { mail: false },
-            data,
-            escapes,
-            call.text_range(),
-        );
+        self.add_site(&target, kind, data, escapes, call.text_range());
     }
 
     fn factory_method(&mut self, call: &SyntaxNode, name: &str) -> bool {
@@ -926,6 +1156,11 @@ impl Reader<'_> {
                 self.add_site(&target, SiteKind::Plain { mail: true }, data, false, range);
             }
             ("Blade", "directive" | "if") => self.directive_declared(call, method == "if"),
+            ("Blade", "component" | "components") => self.component_registered(call, &method),
+            ("Blade", "componentnamespace" | "anonymouscomponentnamespace") => {
+                self.namespace_registered(call, &method);
+            }
+            ("Blade", "anonymouscomponentpath") => self.component_path_registered(call),
             ("Blade", "extend" | "precompiler" | "preparestringsforcompilationusing") => {
                 self.add_opens(
                     vec![Target::Pattern("*".into())],
@@ -933,6 +1168,215 @@ impl Reader<'_> {
                 );
             }
             _ => {}
+        }
+    }
+
+    /// What this says the class or view is, if it's written out.
+    fn component_named(&mut self, expr: &SyntaxNode) -> Option<ComponentTarget> {
+        if let Some(name) = plain_string(expr) {
+            self.consumed.push(expr.text_range());
+            return Some(if name.contains('\\') {
+                ComponentTarget::Class(name.trim_start_matches('\\').to_owned())
+            } else {
+                ComponentTarget::View(normal_view_name(&name))
+            });
+        }
+        if expr.kind() == CLASS_CONST_FETCH_EXPR {
+            let class = expr.first_child()?;
+            let items = stir_hir::file_items(self.db, self.file);
+            let resolved = items
+                .scope_at(expr.text_range().start())
+                .resolve_class(&text(&class));
+            return Some(ComponentTarget::Class(resolved.as_str().to_owned()));
+        }
+        None
+    }
+
+    /// `Blade::component(Alert::class, 'alert')`, `Blade::component('alert', Alert::class)`,
+    /// `Blade::component(Alert::class)`, `Blade::components([...])`, as Laravel reads them.
+    fn component_registered(&mut self, call: &SyntaxNode, method: &str) {
+        let not_read = |reader: &mut Self| {
+            // what's made of it isn't known: any template may be rendered this way
+            reader.add_opens(vec![Target::Pattern("*".into())], OpenReason::Component);
+        };
+        if method == "components" {
+            let Some(mut args) = args_by_param(call, &["components", "prefix"]) else {
+                return not_read(self);
+            };
+            let Some(list) = args[0].take().filter(|a| a.kind() == ARRAY_EXPR) else {
+                return not_read(self);
+            };
+            let prefix = args[1].as_ref().map_or(Some(String::new()), plain_string);
+            for elem in list.children().filter(|c| c.kind() == ARRAY_ELEM) {
+                let parts: Vec<_> = elem
+                    .children()
+                    .filter(|c| crate::body::is_expr_kind(c.kind()))
+                    .collect();
+                match parts.as_slice() {
+                    [class] => self.alias_of(class, None, prefix.as_deref()),
+                    [class, alias] => self.alias_of(class, Some(alias), prefix.as_deref()),
+                    _ => not_read(self),
+                }
+            }
+            return;
+        }
+        let Some(mut args) = args_by_param(call, &["class", "alias", "prefix"]) else {
+            return not_read(self);
+        };
+        let Some(class) = args[0].take() else { return };
+        let prefix = args[2].as_ref().map_or(Some(String::new()), plain_string);
+        self.alias_of(&class, args[1].as_ref(), prefix.as_deref());
+    }
+
+    fn alias_of(&mut self, class: &SyntaxNode, alias: Option<&SyntaxNode>, prefix: Option<&str>) {
+        let alias_text = alias.and_then(plain_string);
+        let swapped = alias_text.as_deref().is_some_and(|a| a.contains('\\'))
+            || alias.is_some_and(|a| a.kind() == CLASS_CONST_FETCH_EXPR);
+        let (target, name) = if swapped {
+            (
+                alias.and_then(|a| self.component_named(a)),
+                plain_string(class),
+            )
+        } else {
+            (self.component_named(class), alias_text)
+        };
+        let (Some(target), Some(prefix)) = (target, prefix) else {
+            self.add_opens(vec![Target::Pattern("*".into())], OpenReason::Component);
+            return;
+        };
+        let name = match (name, &target, alias) {
+            (Some(name), ..) => name,
+            (None, ComponentTarget::Class(class), None) => default_alias(class),
+            (None, ComponentTarget::View(view), None) => default_alias(view),
+            _ => {
+                self.add_opens(vec![Target::Pattern("*".into())], OpenReason::Component);
+                return;
+            }
+        };
+        let name = if prefix.is_empty() {
+            name
+        } else {
+            format!("{prefix}-{name}")
+        };
+        self.out
+            .registrations
+            .push(Registration::Alias(name, target));
+    }
+
+    /// `Blade::componentNamespace('Ns', 'prefix')`, `Blade::anonymousComponentNamespace('dir', 'prefix')`.
+    fn namespace_registered(&mut self, call: &SyntaxNode, method: &str) {
+        let args = if method == "componentnamespace" {
+            args_by_param(call, &["namespace", "prefix"])
+        } else {
+            args_by_param(call, &["directory", "prefix"])
+        };
+        let read = args.and_then(|a| {
+            let from = a[0].as_ref().and_then(plain_string)?;
+            match &a[1] {
+                Some(prefix) => Some((from, plain_string(prefix)?)),
+                None => Some((from.clone(), from)),
+            }
+        });
+        let Some((from, prefix)) = read else {
+            self.add_opens(vec![Target::Pattern("*".into())], OpenReason::Component);
+            return;
+        };
+        if method == "componentnamespace" {
+            self.out
+                .registrations
+                .push(Registration::ClassNamespace(prefix, from));
+        } else {
+            let directory = normal_view_name(from.trim_matches(['.', ' ', '/']));
+            self.out
+                .registrations
+                .push(Registration::ViewNamespace(prefix, directory));
+        }
+    }
+
+    /// `Blade::anonymousComponentPath(..)`: what's there is rendered in a way that isn't followed,
+    /// so it's open if it's in the project's views, and otherwise anything may be.
+    fn component_path_registered(&mut self, call: &SyntaxNode) {
+        let written = call
+            .descendants()
+            .find(|n| n.kind() == STRING_LITERAL)
+            .and_then(|l| plain_string(&l));
+        let under_views = written.as_deref().and_then(|w| {
+            let views = w.replace('\\', "/");
+            let (_, rest) = views.rsplit_once("views/")?;
+            Some(normal_view_name(rest.trim_matches('/')))
+        });
+        let target = match under_views {
+            Some(dir) if !dir.is_empty() => format!("{dir}.*"),
+            _ => "*".to_owned(),
+        };
+        self.add_opens(vec![Target::Pattern(target)], OpenReason::Component);
+    }
+
+    /// `$this->loadViewComponentsAs('prefix', [Alert::class])`, which is a package's.
+    fn view_components_loaded(&mut self, call: &SyntaxNode) {
+        let Some(args) = args_by_param(call, &["prefix", "components"]) else {
+            return;
+        };
+        let Some(prefix) = args[0].as_ref().and_then(plain_string) else {
+            return;
+        };
+        let Some(list) = args[1].as_ref().filter(|a| a.kind() == ARRAY_EXPR) else {
+            return;
+        };
+        for elem in list.children().filter(|c| c.kind() == ARRAY_ELEM) {
+            let parts: Vec<_> = elem
+                .children()
+                .filter(|c| crate::body::is_expr_kind(c.kind()))
+                .collect();
+            match parts.as_slice() {
+                [class] => self.alias_of(class, None, Some(&prefix)),
+                [alias, class] => self.alias_of(class, Some(alias), Some(&prefix)),
+                _ => {}
+            }
+        }
+    }
+
+    /// `<x-name ...>`.
+    fn tag(&mut self, tag: &SyntaxNode) {
+        if tag_is_slot(tag) {
+            match slot_name(tag) {
+                Ok(Some(name)) => self.slot(DataPart::Slot(name)),
+                Ok(None) => {}
+                Err(()) => self.slot(DataPart::NotUnderstood),
+            }
+            return;
+        }
+        let mut data = Vec::new();
+        read_tag_data(tag, &mut data);
+        let index = self.out.sites.len();
+        self.out.sites.push(Site {
+            names: Vec::new(),
+            kind: SiteKind::Component {
+                tag: Some(tag_name(tag)),
+            },
+            data,
+            escapes: false,
+            range: tag.text_range(),
+        });
+        if tag.token(BLADE_TAG_END).is_some_and(|t| t.text() == ">") {
+            self.open_components.push(Some(index));
+        }
+    }
+
+    /// A slot of what's the current component here.
+    fn slot(&mut self, part: DataPart) {
+        match self.open_components.last().copied().flatten() {
+            Some(index) => self.out.sites[index].data.push(part),
+            None => match part {
+                DataPart::Slot(name) | DataPart::Pair(name, _) => {
+                    self.out.stray_slots.push(name);
+                }
+                // that could be anything of any component: nothing to go by there
+                _ => self.add_opens(
+                    vec![Target::Pattern("*".into())],
+                    OpenReason::SourceNotUnderstood,
+                ),
+            },
         }
     }
 
@@ -986,6 +1430,32 @@ impl Reader<'_> {
         if lower == "directive" {
             self.directive_declared(call, false);
             return;
+        }
+        if lower == "loadviewcomponentsas" {
+            self.view_components_loaded(call);
+            return;
+        }
+        // `$blade->component(..)`, for whichever name the compiler goes by there
+        let says_blade = {
+            let receiver = spelled.to_ascii_lowercase();
+            receiver.contains("blade") || receiver.contains("compiler")
+        };
+        if says_blade {
+            match lower.as_str() {
+                "component" | "components" => {
+                    self.component_registered(call, &lower);
+                    return;
+                }
+                "componentnamespace" | "anonymouscomponentnamespace" => {
+                    self.namespace_registered(call, &lower);
+                    return;
+                }
+                "anonymouscomponentpath" => {
+                    self.component_path_registered(call);
+                    return;
+                }
+                _ => {}
+            }
         }
         if looks_like_factory(&spelled)
             && lower != "composer"
@@ -1094,8 +1564,28 @@ impl Reader<'_> {
             .map(|l| l.children().filter(|a| a.kind() == ARG).collect())
             .unwrap_or_default();
         let value = |i: usize| args.get(i).and_then(|a| a.children().last());
-        if name == "props" || name == "aware" {
-            self.out.component = true;
+        match name.as_str() {
+            "slot" => {
+                let part = match (value(0), value(1)) {
+                    (Some(slot), content) => match plain_string(&slot) {
+                        Some(slot) => match content {
+                            Some(content) => {
+                                DataPart::Pair(SmolStr::new(&slot), content.text_range())
+                            }
+                            None => DataPart::Slot(SmolStr::new(&slot)),
+                        },
+                        None => DataPart::NotUnderstood,
+                    },
+                    (None, _) => return,
+                };
+                self.slot(part);
+                return;
+            }
+            "endcomponent" | "endcomponentfirst" | "endcomponentclass" => {
+                self.open_components.pop();
+                return;
+            }
+            _ => {}
         }
         if name == "each" {
             let range = node.text_range();
@@ -1127,15 +1617,18 @@ impl Reader<'_> {
             return;
         };
         let Some(target) = value(at) else { return };
-        if name.starts_with("component") {
-            let mut targets = Vec::new();
-            read_targets(&target, &mut targets, &mut self.consumed);
-            self.add_opens(targets, OpenReason::Component);
-            return;
-        }
         let mut data = Vec::new();
         if let Some(given) = value(given_at) {
             read_data(&given, &mut data);
+        }
+        if name.starts_with("component") {
+            let index = self.out.sites.len();
+            let kind = SiteKind::Component { tag: None };
+            self.add_site(&target, kind, data, false, node.text_range());
+            // a class's or a package's has no site, nor anything that can be said of its slots
+            self.open_components
+                .push((self.out.sites.len() > index).then_some(index));
+            return;
         }
         let kind = SiteKind::Include {
             inherits: name != "includeisolated",
@@ -1172,7 +1665,45 @@ impl Reader<'_> {
         self.out.at_names.dedup();
         self.out.at_calls.sort();
         self.out.at_calls.dedup();
+        self.out.props = declared_props(root);
     }
+}
+
+/// What the file's `@props` declares, if that's known and nothing comes before it to see the
+/// variables it takes away.
+fn declared_props(root: &SyntaxNode) -> Option<Vec<SmolStr>> {
+    let directive = root
+        .children()
+        .find(|n| n.kind() == BLADE_DIRECTIVE && directive_name(n).as_deref() == Some("props"))?;
+    let read_before = root
+        .descendants_with_tokens()
+        .any(|e| e.kind() == VARIABLE && e.text_range().end() <= directive.text_range().start());
+    let again = root
+        .descendants()
+        .filter(|n| n.kind() == BLADE_DIRECTIVE && directive_name(n).as_deref() == Some("props"))
+        .count()
+        > 1;
+    if read_before || again {
+        return None;
+    }
+    let args = directive.child(ARG_LIST)?;
+    let array = args
+        .children()
+        .filter(|a| a.kind() == ARG)
+        .find_map(|a| a.children().find(|c| c.kind() == ARRAY_EXPR))?;
+    let mut names = Vec::new();
+    for elem in array.children().filter(|c| c.kind() == ARRAY_ELEM) {
+        if elem.has_token(ELLIPSIS) {
+            return None;
+        }
+        let name = elem
+            .children()
+            .find(|c| crate::body::is_expr_kind(c.kind()))
+            .as_ref()
+            .and_then(plain_string)?;
+        names.push(SmolStr::new(&name));
+    }
+    Some(names)
 }
 
 /// What a chain of calls starts from.
@@ -1242,6 +1773,7 @@ pub fn view_sites(db: &dyn Db, ws: Workspace, file: SourceFile) -> ViewSites {
         file,
         out: ViewSites::default(),
         consumed: Vec::new(),
+        open_components: Vec::new(),
     };
     for node in root.descendants() {
         match node.kind() {
@@ -1250,6 +1782,10 @@ pub fn view_sites(db: &dyn Db, ws: Workspace, file: SourceFile) -> ViewSites {
             STATIC_CALL_EXPR => reader.static_call(&node),
             NEW_EXPR => reader.new_expr(&node),
             BLADE_DIRECTIVE => reader.directive(&node),
+            BLADE_TAG => reader.tag(&node),
+            BLADE_TAG_CLOSE if !tag_name(&node).starts_with("slot") => {
+                reader.open_components.pop();
+            }
             _ => {}
         }
     }
@@ -1288,9 +1824,68 @@ pub struct ViewIndex {
     package_directives: FxHashSet<String>,
     /// On a cycle of templates including each other.
     recursive: FxHashSet<String>,
+    /// The slots given to each class's component, by its name in lower case, with whether there's
+    /// one that's worked out.
+    class_slots: FxHashMap<String, (Vec<SmolStr>, bool)>,
+    /// The slots that can't be told what they're given to, and might be any component's.
+    stray_slots: Vec<SmolStr>,
+    /// `<x-dynamic-component>` is used, which goes with whatever it's given to any component.
+    dynamic_components: bool,
+}
+
+/// The templates a site renders.
+fn site_names(site: &Site, components: &ComponentIndex) -> Vec<String> {
+    if let SiteKind::Component { tag: Some(tag) } = &site.kind {
+        return match components.resolve(tag) {
+            ComponentTarget::View(view) => vec![view],
+            _ => Vec::new(),
+        };
+    }
+    site.names.clone()
 }
 
 impl ViewIndex {
+    /// What a tag that's for a class, or for what can't be told, gives by its slots.
+    fn note_tag_slots(&mut self, site: &Site, components: &ComponentIndex) {
+        let SiteKind::Component { tag } = &site.kind else {
+            return;
+        };
+        let target = match tag {
+            Some(tag) => components.resolve(tag),
+            None => ComponentTarget::View(String::new()),
+        };
+        let class = match target {
+            ComponentTarget::View(_) => return,
+            ComponentTarget::Class(class) => Some(class.to_ascii_lowercase()),
+            ComponentTarget::Dynamic => {
+                self.dynamic_components = true;
+                None
+            }
+            ComponentTarget::Unknown => None,
+        };
+        for part in &site.data {
+            let name = match part {
+                DataPart::Slot(name) | DataPart::Pair(name, _) => Some(name.clone()),
+                DataPart::NotUnderstood => None,
+                _ => continue,
+            };
+            match (&class, name) {
+                (Some(class), Some(name)) => {
+                    self.class_slots
+                        .entry(class.clone())
+                        .or_default()
+                        .0
+                        .push(name);
+                }
+                (Some(class), None) => {
+                    self.class_slots.entry(class.clone()).or_default().1 = true;
+                }
+                (None, Some(name)) => self.stray_slots.push(name),
+                (None, None) => self.dynamic_components = true,
+            }
+        }
+    }
+
     fn open_reason(&self, name: &str) -> Option<OpenReason> {
         self.opens
             .iter()
@@ -1316,6 +1911,12 @@ pub struct PackageViews {
     calls: FxHashMap<String, Vec<ViewCall>>,
     /// The variables it shares with all templates.
     shared: Vec<SmolStr>,
+    /// What it registers for component tags.
+    registrations: Vec<Registration>,
+    /// The tags its templates have, none of them of a package by name: `app-layout`.
+    tags: Vec<String>,
+    /// The names of slots in those.
+    tag_slots: Vec<SmolStr>,
 }
 
 /// See [`PackageViews`]: `view('auth.login')` from a controller's trait, read as it's written, as
@@ -1331,9 +1932,25 @@ pub fn package_views(db: &dyn Db, ws: Workspace) -> PackageViews {
             continue;
         }
         let source = file.text(db);
+        // a package's template that's written for an application's component
+        if stir_syntax::is_blade_path(file.path(db)) {
+            if source.contains("<x") {
+                let root = stir_db::parse(db, file).syntax();
+                for tag in root.descendants().filter(|n| n.kind() == BLADE_TAG) {
+                    let name = tag_name(&tag);
+                    if tag_is_slot(&tag) {
+                        out.tag_slots.extend(slot_name(&tag).ok().flatten());
+                    } else if !name.contains("::") {
+                        out.tags.push(name);
+                    }
+                }
+            }
+            continue;
+        }
         let renders =
             !names.is_empty() && (source.contains("view(") || source.contains("View::make("));
-        if !renders && !source.contains("directive(") && !source.contains("share(") {
+        let registers = source.contains("omponent");
+        if !renders && !registers && !source.contains("directive(") && !source.contains("share(") {
             continue;
         }
         let root = stir_db::parse(db, file).syntax();
@@ -1342,6 +1959,7 @@ pub fn package_views(db: &dyn Db, ws: Workspace) -> PackageViews {
             file,
             out: ViewSites::default(),
             consumed: Vec::new(),
+            open_components: Vec::new(),
         };
         for node in root.descendants() {
             match node.kind() {
@@ -1357,11 +1975,24 @@ pub fn package_views(db: &dyn Db, ws: Workspace) -> PackageViews {
                         && receiver_of(&node).is_some_and(|r| looks_like_factory(&text(&r)))
                     {
                         reader.factory_method(&node, &method);
+                    } else if method.eq_ignore_ascii_case("loadViewComponentsAs") {
+                        reader.view_components_loaded(&node);
+                    } else if method_says_a_compiler(&node) {
+                        match method.to_ascii_lowercase().as_str() {
+                            lower @ ("component" | "components") => {
+                                reader.component_registered(&node, lower);
+                            }
+                            lower @ ("componentnamespace" | "anonymouscomponentnamespace") => {
+                                reader.namespace_registered(&node, lower);
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 _ => {}
             }
         }
+        out.registrations.extend(reader.out.registrations);
         for (name, vars) in reader.out.custom_directives {
             match vars {
                 Some(vars) => out.directives.push((name, vars)),
@@ -1388,13 +2019,13 @@ pub fn package_views(db: &dyn Db, ws: Workspace) -> PackageViews {
             if known.is_empty() {
                 continue;
             }
-            let mut call = ViewCall {
-                names: known.clone(),
-                open: None,
-                vars: BTreeMap::new(),
-            };
+            let mut call = ViewCall::of(known.clone());
             if site.escapes {
                 call.open = Some(OpenReason::RenderedByPackage);
+            }
+            // a package's component, or the like: its class says the rest
+            if matches!(site.kind, SiteKind::ComponentView { render: true, .. }) {
+                call.open = Some(OpenReason::Component);
             }
             for part in &site.data {
                 match part {
@@ -1404,6 +2035,10 @@ pub fn package_views(db: &dyn Db, ws: Workspace) -> PackageViews {
                     DataPart::FromType(_) | DataPart::NotUnderstood => {
                         call.open = Some(OpenReason::RenderedByPackage);
                     }
+                    DataPart::Attribute { name, .. } | DataPart::Slot(name) => {
+                        give(&mut call.vars, name, &Ty::untyped(), false);
+                    }
+                    DataPart::AttributeBag => call.open = Some(OpenReason::RenderedByPackage),
                 }
             }
             for name in known {
@@ -1416,12 +2051,179 @@ pub fn package_views(db: &dyn Db, ws: Workspace) -> PackageViews {
     out
 }
 
+/// `$blade->component(..)`, as a package may have it.
+fn method_says_a_compiler(call: &SyntaxNode) -> bool {
+    receiver_of(call).is_some_and(|r| {
+        let receiver = text(&r).to_ascii_lowercase();
+        receiver.contains("blade") || receiver.contains("compiler")
+    })
+}
+
+/// What the workspace has for tags to stand for.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ComponentIndex {
+    /// The classes in `app/View/Components`, by the path under it: `Forms\\Input`.
+    classes: BTreeMap<String, String>,
+    /// `Blade::component`, by the tag it's for.
+    aliases: BTreeMap<String, ComponentTarget>,
+    /// `Blade::componentNamespace`: its prefix and namespace.
+    class_namespaces: BTreeMap<String, String>,
+    /// `Blade::anonymousComponentNamespace`: its prefix and directory, as a view's name.
+    view_namespaces: BTreeMap<String, String>,
+    /// The names of templates under `components/`.
+    views: FxHashSet<String>,
+}
+
+/// See [`ComponentIndex`].
+#[salsa::tracked(returns(ref))]
+pub fn component_index(db: &dyn Db, ws: Workspace) -> ComponentIndex {
+    let mut index = ComponentIndex {
+        views: view_names(db, ws).clone(),
+        ..ComponentIndex::default()
+    };
+    let packages = package_views(db, ws);
+    for registration in &packages.registrations {
+        index.register(registration);
+    }
+    for &file in ws.files(db) {
+        if file.origin(db) != FileOrigin::Source {
+            continue;
+        }
+        let path = file.path(db).to_string_lossy().replace('\\', "/");
+        if let Some((_, under)) = path.rsplit_once("/app/View/Components/")
+            && let Some(under) = under.strip_suffix(".php")
+        {
+            let items = stir_hir::file_items(db, file);
+            let base = under.rsplit('/').next().unwrap_or(under);
+            let class = items.classes.iter().find(|c| c.name.short() == base);
+            if let Some(class) = class {
+                index
+                    .classes
+                    .insert(under.replace('/', "\\"), class.name.as_str().to_owned());
+            }
+        }
+        for registration in &view_sites(db, ws, file).registrations {
+            index.register(registration);
+        }
+    }
+    index
+}
+
+impl ComponentIndex {
+    fn register(&mut self, registration: &Registration) {
+        match registration {
+            Registration::Alias(tag, target) => {
+                self.aliases.insert(tag.clone(), target.clone());
+            }
+            Registration::ClassNamespace(prefix, namespace) => {
+                self.class_namespaces
+                    .insert(prefix.clone(), namespace.clone());
+            }
+            Registration::ViewNamespace(prefix, directory) => {
+                self.view_namespaces
+                    .insert(prefix.clone(), directory.clone());
+            }
+        }
+    }
+
+    /// The first template there is for `name` in `directory`, in the order Laravel looks for them.
+    fn view_in(&self, directory: &str, name: &str) -> Option<String> {
+        let plain = format!("{directory}.{name}");
+        let last = name.rsplit(['.', ':']).next().unwrap_or(name);
+        [
+            plain.clone(),
+            format!("{plain}.index"),
+            format!("{plain}.{last}"),
+        ]
+        .into_iter()
+        .find(|candidate| self.views.contains(candidate))
+    }
+
+    /// `ComponentTagCompiler::componentClass`, up to what can be known without running anything.
+    fn resolve(&self, tag: &str) -> ComponentTarget {
+        if tag == "dynamic-component" && !self.aliases.contains_key(tag) {
+            return ComponentTarget::Dynamic;
+        }
+        if let Some(target) = self.aliases.get(tag) {
+            return target.clone();
+        }
+        if let Some((prefix, rest)) = tag.split_once("::") {
+            if let Some(namespace) = self.class_namespaces.get(prefix) {
+                // it may be there, by a package's autoloading: that's for who looks at the class
+                return ComponentTarget::Class(format!(
+                    "{namespace}\\{}",
+                    component_class_path(rest)
+                ));
+            }
+            if let Some(directory) = self.view_namespaces.get(prefix)
+                && let Some(view) = self.view_in(directory, rest)
+            {
+                return ComponentTarget::View(view);
+            }
+            return ComponentTarget::Unknown;
+        }
+        let path = component_class_path(tag);
+        let last = path.rsplit('\\').next().unwrap_or(&path);
+        let class = self
+            .classes
+            .get(&path)
+            .or_else(|| self.classes.get(&format!("{path}\\{last}")));
+        if let Some(class) = class {
+            return ComponentTarget::Class(class.clone());
+        }
+        match self.view_in("components", tag) {
+            Some(view) => ComponentTarget::View(view),
+            None => ComponentTarget::Unknown,
+        }
+    }
+
+    /// What a tag can be written as, for completing it.
+    pub fn tag_names(&self) -> Vec<String> {
+        let mut out: Vec<String> = self.aliases.keys().cloned().collect();
+        for path in self.classes.keys() {
+            out.push(path.split('\\').map(kebab).collect::<Vec<_>>().join("."));
+        }
+        for view in &self.views {
+            let Some(name) = view.strip_prefix("components.") else {
+                continue;
+            };
+            let name = name.strip_suffix(".index").unwrap_or(name);
+            let name = match name.rsplit_once('.') {
+                Some((dir, last)) if dir.rsplit('.').next() == Some(last) => dir,
+                _ => name,
+            };
+            out.push(name.to_owned());
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+}
+
+/// Does the project tell the container how to make something by hand, as a parameter's value?
+/// `when(X::class)->needs('$name')->give(..)`, and `Component::resolveComponentsUsing`.
+#[salsa::tracked]
+pub(crate) fn container_is_told(db: &dyn Db, ws: Workspace) -> bool {
+    ws.files(db).iter().any(|file| {
+        file.origin(db) == FileOrigin::Source && {
+            let text = file.text(db);
+            text.contains("->needs(") || text.contains("resolveComponentsUsing")
+        }
+    })
+}
+
+/// What the tag `tag` stands for.
+pub fn resolve_component(db: &dyn Db, ws: Workspace, tag: &str) -> ComponentTarget {
+    component_index(db, ws).resolve(tag)
+}
+
 /// See [`ViewIndex`].
 #[salsa::tracked(returns(ref))]
 pub fn view_index(db: &dyn Db, ws: Workspace) -> ViewIndex {
     let mut index = ViewIndex::default();
     let mut edges: FxHashMap<&str, Vec<String>> = FxHashMap::default();
     let mut template_names: Vec<(SourceFile, String)> = Vec::new();
+    let components = component_index(db, ws);
     for &file in ws.files(db) {
         if file.origin(db) != FileOrigin::Source {
             continue;
@@ -1441,24 +2243,37 @@ pub fn view_index(db: &dyn Db, ws: Workspace) -> ViewIndex {
         if let Some(name) = &own_name {
             template_names.push((file, name.clone()));
         }
+        index.stray_slots.extend(sites.stray_slots.iter().cloned());
         for site in &sites.sites {
-            for name in &site.names {
-                let files = index.sources.entry(name.clone()).or_default();
+            for name in site_names(site, components) {
+                let files = index.sources.entry(name).or_default();
                 if files.last() != Some(&file) {
                     files.push(file);
                 }
             }
+            index.note_tag_slots(site, components);
         }
     }
     for (file, name) in &template_names {
         let sites = view_sites(db, ws, *file);
         let to = edges.entry(name.as_str()).or_default();
         for site in &sites.sites {
-            to.extend(site.names.iter().cloned());
+            to.extend(site_names(site, components).into_iter());
         }
     }
     index.recursive = on_cycles(&edges);
     let packages = package_views(db, ws);
+    index.stray_slots.extend(packages.tag_slots.iter().cloned());
+    for tag in &packages.tags {
+        // whether it's rendered at all isn't known, nor what with
+        if let ComponentTarget::View(view) = components.resolve(tag) {
+            index
+                .opens
+                .push((Target::Name(view), OpenReason::RenderedByPackage));
+        }
+    }
+    index.stray_slots.sort();
+    index.stray_slots.dedup();
     index.opens.extend(packages.opens.iter().cloned());
     for (name, vars) in &packages.directives {
         index
@@ -1552,6 +2367,35 @@ pub struct ViewCall {
     names: Vec<String>,
     open: Option<OpenReason>,
     vars: BTreeMap<SmolStr, ViewVar>,
+    /// Those of `vars` that `@props` takes away, as they're in `$attributes`.
+    in_attributes: Vec<SmolStr>,
+    /// What this makes of what it renders.
+    component: CallComponent,
+    /// See [`ViewData::spread`].
+    spread: bool,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+enum CallComponent {
+    #[default]
+    None,
+    /// By a tag or `@component`, with nothing of a class.
+    Anonymous,
+    /// The view of this class, which is a component.
+    Class(String),
+}
+
+impl ViewCall {
+    fn of(names: Vec<String>) -> ViewCall {
+        ViewCall {
+            names,
+            open: None,
+            vars: BTreeMap::new(),
+            in_attributes: Vec::new(),
+            component: CallComponent::None,
+            spread: false,
+        }
+    }
 }
 
 /// What's given to a template, in the form it can be used in, as the type goes: it's on its own
@@ -1668,6 +2512,69 @@ fn mail_variables(ctx: &Ctx<'_>, class: &str, vars: &mut BTreeMap<SmolStr, ViewV
     Some(())
 }
 
+pub(crate) const COMPONENT: &str = "Illuminate\\View\\Component";
+
+fn slot_type(ctx: &Ctx<'_>) -> Ty {
+    if ctx.class("illuminate\\view\\componentslot").is_some() {
+        Ty::class("Illuminate\\View\\ComponentSlot", Vec::new())
+    } else {
+        Ty::untyped()
+    }
+}
+
+/// What a component's class has for its template, as `Component::data()` gets it: its public
+/// properties and methods, those of its own. A method's is a callable variable that's also the
+/// value of calling it, for which there's no type. `None` if this isn't a component that does
+/// that as usual.
+fn component_variables(
+    ctx: &Ctx<'_>,
+    class: &str,
+    vars: &mut BTreeMap<SmolStr, ViewVar>,
+) -> Option<()> {
+    if !ctx.is_subclass(class, COMPONENT) {
+        return None;
+    }
+    const IGNORED: &[&str] = &[
+        "data",
+        "render",
+        "resolve",
+        "resolveview",
+        "shouldrender",
+        "view",
+        "withname",
+        "withattributes",
+        "flushcache",
+        "forgetfactory",
+        "forgetcomponentsresolver",
+        "resolvecomponentsusing",
+    ];
+    let ty = Ty::class(class, Vec::new());
+    let component = COMPONENT.to_ascii_lowercase();
+    for member in model_api::members(ctx, &ty) {
+        let own = member.class.as_str() != component;
+        let lower = member.name.to_ascii_lowercase();
+        // another way of giving it anything, or another kind of template
+        if own && matches!(lower.as_str(), "data" | "resolveview") {
+            return None;
+        }
+        if !own
+            || member.is_static
+            || member.visibility != stir_hir::Visibility::Public
+            || member.name.starts_with("__")
+        {
+            continue;
+        }
+        match member.ty {
+            MemberTy::Property { ty, .. } => give(vars, &member.name, &ty, false),
+            MemberTy::Method(_) if !IGNORED.contains(&lower.as_str()) => {
+                give(vars, &member.name, &Ty::untyped(), false);
+            }
+            _ => {}
+        }
+    }
+    Some(())
+}
+
 fn message_variable(ctx: &Ctx<'_>, vars: &mut BTreeMap<SmolStr, ViewVar>) {
     let ty = if ctx.class("illuminate\\mail\\message").is_some() {
         Ty::class("Illuminate\\Mail\\Message", Vec::new())
@@ -1686,10 +2593,11 @@ pub fn view_calls(db: &dyn Db, ws: Workspace, file: SourceFile) -> Vec<ViewCall>
     }
     let index = view_index(db, ws);
     let known = view_names(db, ws);
+    let components = component_index(db, ws);
     let wanted: Vec<&Site> = sites
         .sites
         .iter()
-        .filter(|s| s.names.iter().any(|n| known.contains(n)))
+        .filter(|s| site_names(s, components).iter().any(|n| known.contains(n)))
         .collect();
     if wanted.is_empty() {
         return Vec::new();
@@ -1701,16 +2609,12 @@ pub fn view_calls(db: &dyn Db, ws: Workspace, file: SourceFile) -> Vec<ViewCall>
     let ctx = Ctx::new(db, ws);
     let mut out: Vec<ViewCall> = Vec::new();
     for site in wanted {
-        let mut call = ViewCall {
-            names: site
-                .names
-                .iter()
-                .filter(|n| known.contains(*n))
-                .cloned()
+        let mut call = ViewCall::of(
+            site_names(site, components)
+                .into_iter()
+                .filter(|n| known.contains(n))
                 .collect(),
-            open: None,
-            vars: BTreeMap::new(),
-        };
+        );
         // a template with a cycle in it has no need of this
         if call.names.iter().all(|n| index.recursive.contains(n)) {
             call.open = Some(OpenReason::Recursive);
@@ -1729,6 +2633,29 @@ pub fn view_calls(db: &dyn Db, ws: Workspace, file: SourceFile) -> Vec<ViewCall>
                 }
             }
             SiteKind::Include { inherits: false } => {}
+            SiteKind::Component { .. } => call.component = CallComponent::Anonymous,
+            SiteKind::ComponentView { class, render } => {
+                let is = |ancestor| class.as_ref().is_some_and(|c| ctx.is_subclass(c, ancestor));
+                if is(COMPONENT) {
+                    let read = class
+                        .as_ref()
+                        .and_then(|c| component_variables(&ctx, c, &mut call.vars));
+                    match (read, class) {
+                        (Some(()), Some(class)) => {
+                            call.component = CallComponent::Class(class.clone());
+                        }
+                        _ => call.open = Some(OpenReason::Component),
+                    }
+                } else if *render || is("Livewire\\Component") {
+                    // Livewire's, or anything else with its own idea of what a template is given
+                    call.open = Some(OpenReason::Component);
+                }
+                if call.open.is_some() {
+                    call.vars.clear();
+                    push_call(&mut out, call);
+                    continue;
+                }
+            }
             SiteKind::Include { inherits: true } => {
                 let Some(own) = own else { continue };
                 // Laravel gives an error page what it gives it, whatever's reading it
@@ -1823,6 +2750,29 @@ pub fn view_calls(db: &dyn Db, ws: Workspace, file: SourceFile) -> Vec<ViewCall>
                     }
                 }
                 DataPart::NotUnderstood => call.open = Some(OpenReason::SourceNotUnderstood),
+                DataPart::Attribute {
+                    name,
+                    value,
+                    kept_by_props,
+                } => {
+                    let ty = match value {
+                        AttributeValue::Php(at) => {
+                            typed.types.get(at).cloned().unwrap_or_else(Ty::untyped)
+                        }
+                        AttributeValue::Text => Ty::string(),
+                        AttributeValue::True => Ty::bool(),
+                    };
+                    give(&mut call.vars, name, &ty, false);
+                    if !kept_by_props {
+                        call.in_attributes.push(name.clone());
+                    }
+                }
+                DataPart::Slot(name) => {
+                    let ty = slot_type(&ctx);
+                    give(&mut call.vars, name, &ty, false);
+                    call.in_attributes.retain(|n| n != name);
+                }
+                DataPart::AttributeBag => call.spread = true,
             }
         }
         if call.open.is_some() {
@@ -1866,9 +2816,6 @@ pub fn view_data(db: &dyn Db, ws: Workspace, file: SourceFile) -> ViewData {
     if name.starts_with("vendor.") {
         return ViewData::opened(OpenReason::PublishedByPackage);
     }
-    if name.starts_with("components.") || name.contains(".components.") || sites.component {
-        return ViewData::opened(OpenReason::Component);
-    }
     if name.starts_with("errors.") || name.contains(".errors.") {
         return ViewData::opened(OpenReason::ErrorPage);
     }
@@ -1898,6 +2845,10 @@ pub fn view_data(db: &dyn Db, ws: Workspace, file: SourceFile) -> ViewData {
     let by_packages = packages.calls.get(&name).map_or(&[][..], |c| c.as_slice());
     let mut merged: BTreeMap<SmolStr, (Vec<Ty>, usize, bool)> = BTreeMap::new();
     let mut calls = 0usize;
+    let mut in_attributes: BTreeMap<SmolStr, usize> = BTreeMap::new();
+    let (mut component, mut spread) = (false, false);
+    let ctx = Ctx::new(db, ws);
+    let slot_ty = slot_type(&ctx);
     let from_project = sources
         .iter()
         .flat_map(|&source| view_calls(db, ws, source));
@@ -1909,6 +2860,30 @@ pub fn view_data(db: &dyn Db, ws: Workspace, file: SourceFile) -> ViewData {
             return ViewData::opened(why);
         }
         calls += 1;
+        spread |= call.spread;
+        for var in &call.in_attributes {
+            *in_attributes.entry(var.clone()).or_default() += 1;
+        }
+        match &call.component {
+            CallComponent::None => {}
+            CallComponent::Anonymous => component = true,
+            CallComponent::Class(class) => {
+                component = true;
+                let slots = index.class_slots.get(&class.to_ascii_lowercase());
+                if slots.is_some_and(|(_, worked_out)| *worked_out) {
+                    return ViewData::opened(OpenReason::SourceNotUnderstood);
+                }
+                for slot in slots.iter().flat_map(|(names, _)| names) {
+                    let entry = merged
+                        .entry(slot.clone())
+                        .or_insert_with(|| (Vec::new(), 0, true));
+                    if !entry.0.contains(&slot_ty) {
+                        entry.0.push(slot_ty.clone());
+                    }
+                    entry.2 = true;
+                }
+            }
+        }
         for (var, given) in &call.vars {
             let entry = merged
                 .entry(var.clone())
@@ -1922,6 +2897,33 @@ pub fn view_data(db: &dyn Db, ws: Workspace, file: SourceFile) -> ViewData {
     }
     if calls == 0 {
         return ViewData::opened(OpenReason::NoSource);
+    }
+    if component && index.dynamic_components {
+        return ViewData::opened(OpenReason::DynamicView);
+    }
+    // what's in `$attributes` is no variable once `@props` has been, and without it it's all there
+    match (&sites.props, spread) {
+        (None, true) => return ViewData::opened(OpenReason::SourceNotUnderstood),
+        (None, false) => {}
+        (Some(props), _) => {
+            for (var, count) in &in_attributes {
+                let given = merged.get(var).map_or(0, |entry| entry.1);
+                if *count == given && !props.contains(var) {
+                    merged.remove(var);
+                }
+            }
+        }
+    }
+    if component {
+        for slot in &index.stray_slots {
+            let entry = merged
+                .entry(slot.clone())
+                .or_insert_with(|| (Vec::new(), 0, true));
+            if !entry.0.contains(&Ty::untyped()) {
+                entry.0.push(Ty::untyped());
+            }
+            entry.2 = true;
+        }
     }
     let shared = packages
         .shared
@@ -1941,11 +2943,17 @@ pub fn view_data(db: &dyn Db, ws: Workspace, file: SourceFile) -> ViewData {
                     ty
                 }
             };
-            let optional = optional || count < calls;
+            // a component's made to be used in more ways than it is now
+            let optional = optional || count < calls || component;
             (var, ViewVar { ty, optional })
         })
         .collect();
-    ViewData { open: None, vars }
+    ViewData {
+        open: None,
+        vars,
+        component,
+        spread,
+    }
 }
 
 #[cfg(test)]

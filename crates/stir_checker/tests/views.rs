@@ -153,6 +153,92 @@ fn app() -> Project {
     ])
 }
 
+const CLASS_COMPONENT: &str = "<?php
+namespace App\\View\\Components;
+class Alert extends \\Illuminate\\View\\Component
+{
+    public function __construct(public string $type = '') {}
+    public function shout() { return 'a'; }
+    public function render() { return view('components.alert'); }
+}
+";
+
+const COMPONENT_BASE: &str = "<?php
+namespace Illuminate\\View;
+abstract class Component
+{
+    public static function resolve($data) { return new static; }
+    abstract public function render();
+}
+";
+
+fn with_components() -> Project {
+    Project::new(&[
+        ("app/Post.php", POST),
+        ("app/Base.php", COMPONENT_BASE),
+        ("app/View/Components/Alert.php", CLASS_COMPONENT),
+        (
+            "app/Http/Page.php",
+            "<?php\nnamespace App\\Http;\nclass Page { public function a(\\App\\Post $post) { return view('page', ['post' => $post]); } }\n",
+        ),
+        (
+            "resources/views/page.blade.php",
+            "<x-card :post=\"$post\" /><x-alert>{{ $post->title }}</x-alert>\n",
+        ),
+        (
+            "resources/views/components/card.blade.php",
+            "@props(['post'])\n{{ $post->title }}\n",
+        ),
+        (
+            "resources/views/components/alert.blade.php",
+            "{{ $type }}\n",
+        ),
+    ])
+}
+
+const ALERT_AT: usize = 2;
+const PAGE_AT: usize = 4;
+const CARD_AT: usize = 5;
+const ALERT_VIEW_AT: usize = 6;
+
+#[test]
+fn what_a_tag_gives_is_what_its_component_is_checked_with() {
+    let mut p = with_components();
+    p.check_all();
+    assert_eq!(p.codes(CARD_AT), Vec::<String>::new());
+    assert!(view_data(&p.db, p.ws, p.files[CARD_AT]).is_closed());
+    p.edit(
+        PAGE_AT,
+        "<x-card :post=\"1\" /><x-alert>{{ $post->title }}</x-alert>\n",
+    );
+    assert_eq!(p.codes(CARD_AT), ["property.nonObject"]);
+}
+
+#[test]
+fn an_edit_of_a_components_class_that_changes_nothing_given_rechecks_no_template() {
+    let mut p = with_components();
+    p.check_all();
+    let edited = CLASS_COMPONENT.replace("return 'a';", "return 'b';");
+    let log = p.edit(ALERT_AT, &edited);
+    assert_eq!(ran(&log, "typed_file"), 1, "{log:?}");
+    assert_eq!(ran(&log, "view_data"), 0, "{log:?}");
+}
+
+#[test]
+fn a_new_public_property_of_a_component_is_there_for_its_template() {
+    let mut p = with_components();
+    p.check_all();
+    let reads = "{{ $type }} {{ $added }}\n";
+    p.edit(ALERT_VIEW_AT, reads);
+    assert_eq!(p.codes(ALERT_VIEW_AT), ["variable.undefined"]);
+    let edited = CLASS_COMPONENT.replace(
+        "public function shout()",
+        "public string $added = '';\n    public function shout()",
+    );
+    p.edit(ALERT_AT, &edited);
+    assert_eq!(p.codes(ALERT_VIEW_AT), Vec::<String>::new());
+}
+
 const TWO_VIEWS_AT: usize = 1;
 const OTHER_AT: usize = 2;
 
