@@ -10,7 +10,8 @@ function builtins(string $url, array $ints): void
     $parts = parse_url($url);
     if ($parts !== false) {
         wants_string($parts['host'] ?? '');
-        $parts['nope']; // error: offsetAccess.notFound
+        wants_int($parts['port'] ?? 1);
+        $merged = array_replace(['path' => '/'], $parts);
     }
     wants_string(parse_url($url, PHP_URL_PATH) ?? ''); // error: argument.type
     wants_int(parse_url($url, PHP_URL_PATH) ?? 1); // error: argument.type

@@ -69,9 +69,11 @@ function array_merge(array ...$arrays): array {}
 /**
  * @template K of array-key
  * @template V
+ * @template K2 of array-key
+ * @template V2
  * @param array<K, V> $array
- * @param array<K, V> ...$replacements
- * @return array<K, V>
+ * @param array<K2, V2> ...$replacements
+ * @return array<K|K2, V|V2>
  */
 function array_replace(array $array, array ...$replacements): array {}
 
@@ -538,7 +540,7 @@ class Generator
 /**
  * @param int $component
  * @return ($component is -1
- *     ? array{scheme?: string, host?: string, port?: int, user?: string, pass?: string, path?: string, query?: string, fragment?: string}|false
+ *     ? array{scheme?: string, host?: string, port?: int, user?: string, pass?: string, path?: string, query?: string, fragment?: string, ...}|false
  *     : ($component is 2 ? int|false|null : string|false|null))
  */
 function parse_url(string $url, int $component = -1): array|string|int|false|null {}

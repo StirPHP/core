@@ -145,6 +145,12 @@ impl Inference {
                             .collect::<Vec<_>>(),
                     ),
                 );
+                // `array{a: int, ...}` has others, that can be anything
+                let (keys, values) = if s.sealed {
+                    (keys, values)
+                } else {
+                    (Ty::union([keys, Ty::int(), Ty::string()]), Ty::mixed())
+                };
                 if !s.fields.is_empty() {
                     self.unify_depth(env, pk, &keys, depth + 1);
                     self.unify_depth(env, pv, &values, depth + 1);
