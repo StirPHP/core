@@ -443,10 +443,47 @@ pub fn inferred_returns(cx: &Cx<'_>, function: &SyntaxNode) -> Option<Returns> {
     if bare || !list_leaves(&block) {
         return None;
     }
-    Some(Returns::Value(Ty::union(
-        values.iter().map(stir_checker::widen_literals),
-    )))
+    // literals are kept: what's written from this widens them where it has to
+    Some(Returns::Value(Ty::union(values)))
 }
+
+/// `'paid'|'pending'` for a function that only ever returns those, to say beside a native
+/// `string`. Not for a closure, nor a method something could override, which a literal would tie
+/// down.
+fn literal_doc(cx: &Cx<'_>, function: &SyntaxNode, ty: &Ty) -> Option<String> {
+    use stir_types::LitValue;
+    let members = ty.members();
+    if members.len() > LITERAL_DOC_LIMIT {
+        return None;
+    }
+    // a set of values like an enum's: all strings or all ints, at least two of them
+    let (mut strings, mut ints) = (0, 0);
+    for m in members.iter() {
+        match m.kind() {
+            TyKind::Literal(LitValue::String(_)) => strings += 1,
+            TyKind::Literal(LitValue::Int(_)) => ints += 1,
+            TyKind::Literal(LitValue::Bool(_)) | TyKind::Null => {}
+            _ => return None,
+        }
+    }
+    if !matches!((strings, ints), (2.., 0) | (0, 2..)) {
+        return None;
+    }
+    if function.kind() != FUNCTION_DECL {
+        let (class, method) = method_of(cx, function)?;
+        let sealed = method.mods.visibility == stir_hir::Visibility::Private
+            || method.mods.is_final
+            || class.mods.is_final
+            || class.kind == stir_hir::ClassKind::Enum;
+        if function.kind() != METHOD_DECL || !sealed {
+            return None;
+        }
+    }
+    Some(ty.to_string())
+}
+
+/// More literals than this are better said as their type.
+const LITERAL_DOC_LIMIT: usize = 8;
 
 /// What a function's PHPDoc says it returns, if it says.
 fn documented_return(cx: &Cx<'_>, function: &SyntaxNode) -> Option<Ty> {
@@ -565,7 +602,13 @@ fn return_type_offers<'c>(
                             _ => return,
                         }
                     }
-                    (Some(w.native), w.doc)
+                    let doc = w.doc.or_else(|| {
+                        documented
+                            .is_none()
+                            .then(|| literal_doc(cx, function, &ty))
+                            .flatten()
+                    });
+                    (Some(w.native), doc)
                 }
                 None => (None, doc_type(&mut namer, &ty)),
             },

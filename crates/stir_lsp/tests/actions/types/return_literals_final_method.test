@@ -1,0 +1,18 @@
+=== action: Add return type `int`
+=== input
+<?php
+final class C {
+    public function code‸(bool $ok) {
+        return $ok ? 200 : 500;
+    }
+}
+=== output
+<?php
+final class C {
+    /**
+     * @return 200|500
+     */
+    public function code(bool $ok): int {
+        return $ok ? 200 : 500;
+    }
+}

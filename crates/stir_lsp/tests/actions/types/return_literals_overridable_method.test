@@ -1,0 +1,15 @@
+=== action: Add return type `string`
+=== input
+<?php
+class C {
+    public function name‸() {
+        return 'users';
+    }
+}
+=== output
+<?php
+class C {
+    public function name(): string {
+        return 'users';
+    }
+}

@@ -1,0 +1,11 @@
+=== action: Add return type `string`
+=== input
+<?php
+$f = func‸tion (bool $b) {
+    return $b ? 'yes' : 'no';
+};
+=== output
+<?php
+$f = function (bool $b): string {
+    return $b ? 'yes' : 'no';
+};
