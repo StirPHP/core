@@ -536,6 +536,11 @@ fn magic_method(type, name, is_static) {
     if class_name == "Illuminate\\Database\\Query\\Builder" && is_dynamic_where(name) {
         return "$this";
     }
+    // `withErrors($e)` on a view, and `withMessage($m)` on a redirect: `with('errors', $e)`
+    if name.len() > 4 && name.starts_with("with")
+        && (c.is_subtype_of("Illuminate\\View\\View") || c.is_subtype_of("Illuminate\\Http\\RedirectResponse")) {
+        return "$this";
+    }
     // a macro the project or a package adds, `Collection::macro('toUpper', ..)`: what it is isn't
     // followed
     if c.is_subtype_of("Illuminate\\Support\\Traits\\Macroable") {

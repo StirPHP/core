@@ -21,6 +21,7 @@ pub mod levels;
 mod model;
 pub mod model_api;
 pub mod php_version;
+mod returns;
 pub mod script;
 mod typed;
 pub mod views;

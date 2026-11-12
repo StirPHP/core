@@ -88,14 +88,20 @@ fn info(ctx: &Ctx<'_>, sig: &FnSig) -> SigInfo {
 
 /// The signature of a function.
 pub fn function_info(ctx: &Ctx<'_>, loc: ItemLoc) -> SigInfo {
-    info(ctx, &ctx.function_sig(loc))
+    info(
+        ctx,
+        &ctx.function_body_return((*ctx.function_sig(loc)).clone(), loc),
+    )
 }
 
 /// The signature of method `name` declared by the class with key `class`.
 pub fn method_info(ctx: &Ctx<'_>, class: &str, name: &str) -> Option<SigInfo> {
     let c = ctx.class(class)?;
     let m = ctx.own_method(&c, name)?;
-    Some(info(ctx, &ctx.method_sig(&c, m)))
+    Some(info(
+        ctx,
+        &ctx.method_body_return(ctx.method_sig(&c, m), &c, m),
+    ))
 }
 
 /// The constructor of class `class`: `__construct` (possibly inherited).

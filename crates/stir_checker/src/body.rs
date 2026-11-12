@@ -162,6 +162,10 @@ pub struct Checker<'a, 'db> {
     pub script_failures: Vec<crate::ScriptFailure>,
     /// Hooks that failed on this file, which it doesn't call again.
     pub(crate) scripts_off: rustc_hash::FxHashSet<(stir_db::ScriptFile, &'static str)>,
+    /// The function or method whose body's returns are wanted: see [`crate::returns`].
+    pub(crate) wanted_return: Option<TextRange>,
+    /// What that body returns, once it's been checked.
+    pub(crate) body_return: Option<Ty>,
 }
 
 fn is_stmt_kind(k: SyntaxKind) -> bool {
@@ -303,6 +307,8 @@ impl<'a, 'db> Checker<'a, 'db> {
             template: None,
             script_failures: Vec::new(),
             scripts_off: rustc_hash::FxHashSet::default(),
+            wanted_return: None,
+            body_return: None,
         }
     }
 
@@ -1702,8 +1708,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                     Some(fcx.ret.clone())
                 };
                 let t = self.expr(&v, expected.as_ref());
+                // what a body that declares nothing returns is wanted by its callers
+                self.fns.last_mut().unwrap().returns.push(t.clone());
                 if fcx.infer_ret {
-                    self.fns.last_mut().unwrap().returns.push(t);
+                    // nothing to check it against
                 } else if matches!(fcx.ret.kind(), TyKind::Void) {
                     if !t.is_null() {
                         self.error(
@@ -1722,17 +1730,13 @@ impl<'a, 'db> Checker<'a, 'db> {
                     );
                 }
             }
-            None => {
-                if fcx.infer_ret {
-                    self.fns.last_mut().unwrap().returns.push(Ty::void());
-                }
-            }
+            None => self.fns.last_mut().unwrap().returns.push(Ty::void()),
         }
     }
 
     // ------------------------------------------------------------ functions
 
-    fn function_decl(&mut self, node: &SyntaxNode) {
+    pub(crate) fn function_decl(&mut self, node: &SyntaxNode) {
         let ptr = stir_hir::NodePtr::new(node);
         let items = self.items;
         let Some(idx) = items.functions.iter().position(|f| f.ptr == ptr) else {
@@ -1818,11 +1822,20 @@ impl<'a, 'db> Checker<'a, 'db> {
             .map(|f| f.ret.clone())
             .unwrap_or_else(Ty::error);
         self.check_missing_return(node, what, &ret, sig.ret_declared);
+        if self.wanted_return == Some(node.text_range())
+            && let Some(f) = self.fns.last()
+        {
+            self.body_return = Some(crate::returns::summary(node, &f.returns, !self.dead));
+        }
         self.dynamic_vars_fn = saved_dynamic_vars;
         self.dead = saved_dead;
         self.loops = saved_loops;
         self.fns.pop();
         self.frames = saved_frames;
+    }
+
+    pub(crate) fn set_lower_cx(&mut self, cx: LowerCx) {
+        self.lower_cx = cx;
     }
 
     fn class_decl(&mut self, node: &SyntaxNode) {
@@ -1932,7 +1945,7 @@ impl<'a, 'db> Checker<'a, 'db> {
         }
     }
 
-    fn method_decl(
+    pub(crate) fn method_decl(
         &mut self,
         node: &SyntaxNode,
         model: &Rc<ClassModel<'db>>,
@@ -4828,7 +4841,9 @@ impl<'a, 'db> Checker<'a, 'db> {
                     return self.function_hook(node, fqn.as_str(), t);
                 }
             }
-            let sig = self.ctx.function_sig(loc);
+            let sig = self
+                .ctx
+                .function_body_return((*self.ctx.function_sig(loc)).clone(), loc);
             let function = self.ctx.function_def(loc).name.as_str();
             if function.eq_ignore_ascii_case("extract") {
                 self.dynamic_vars_fn = Some(self.fns.len());
@@ -5530,7 +5545,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                 &format!("method `{name}`"),
                 [codes::METHOD_PRIVATE, codes::METHOD_PROTECTED],
             );
-            let sig = sig_for_receiver(self.ctx.method_sig(&owner, m), recv);
+            let sig = self
+                .ctx
+                .method_body_return(self.ctx.method_sig(&owner, m), &owner, m);
+            let sig = sig_for_receiver(sig, recv);
             // `static` return types resolve to the receiver
             let ret = self.check_args(node, &sig, &map, expected, &[]);
             let ret = self.method_hook(node, &cls, name, ret, false);
@@ -5856,7 +5874,10 @@ impl<'a, 'db> Checker<'a, 'db> {
                     }
                     _ => cls.clone(),
                 };
-                let sig = sig_for_receiver(self.ctx.method_sig(&owner, m), &recv);
+                let sig = self
+                    .ctx
+                    .method_body_return(self.ctx.method_sig(&owner, m), &owner, m);
+                let sig = sig_for_receiver(sig, &recv);
                 // static generic classes: class params are inferred like function params
                 let extra: Vec<_> = if m.mods.is_static {
                     owner.params.iter().map(|p| p.id).collect()
@@ -6603,7 +6624,7 @@ fn unquoted_literal(node: &SyntaxNode) -> Option<String> {
 
 /// A function with `yield` in its own body: its declared type describes the generator,
 /// and `return` gives the generator's final value.
-fn is_generator(function: &SyntaxNode) -> bool {
+pub(crate) fn is_generator(function: &SyntaxNode) -> bool {
     fn has_yield(node: &SyntaxNode) -> bool {
         node.children().any(|c| {
             matches!(c.kind(), YIELD_EXPR | YIELD_FROM_EXPR)
